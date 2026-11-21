@@ -53,3 +53,22 @@ ONEEARTH_PORT=5304 ONEEARTH_DISCOVERY_PORT=5305 ONEEARTH_SPATIAL_PORT=5306 ONEEA
 ```
 
 样例包包含任务、事件、引用和一个完整森林图层，留在 `.local`。目标需要先构建并准备基础网格。备份实测和 ECS 待验证项见 [验收记录](evidence/ACCEPTANCE.md)。
+
+## 复现对照实验
+
+从同级原型复制已部署产物和运行源码，清空浏览器上下文并使用只属于隔离副本的状态目录。
+
+```sh
+mkdir -p .local/baseline
+rsync -a ../oneearth-app/src ../oneearth-app/server ../oneearth-app/public ../oneearth-app/dist ../oneearth-app/package.json .local/baseline/
+ONEEARTH_USE_EXISTING_ACCESS=1 ONEEARTH_PORT=5294 ONEEARTH_STATE_DIR=.local/baseline-state ONEEARTH_DIST_DIR=.local/baseline/dist node scripts/launch.mjs baseline
+```
+
+在新版与基线均健康后运行 `npm run test:performance`。对照脚本记录本机浏览器帧间隔、慢帧、请求数和首次检索状态。`ONEEARTH_EXTENDED_MAP=1` 会在新系统的真实后台任务期间切换降水年份、返回数据分布、选格和飞行。
+
+故障注入使用全新的状态目录。
+
+```sh
+ONEEARTH_USE_EXISTING_ACCESS=1 ONEEARTH_TEST_FAIL_CHANNEL=web ONEEARTH_PORT=5284 ONEEARTH_DISCOVERY_PORT=5285 ONEEARTH_SPATIAL_PORT=5286 ONEEARTH_STATE_DIR=.local/fault-state npm start
+npm run test:fault
+```
