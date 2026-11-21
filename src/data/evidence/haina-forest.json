@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "datasetId": "haina:1846764",
+  "name": "OneEarth/大兴安岭森林时空嵌入数据集",
+  "description": "以 303×370 网格、0.03° 分辨率组织的 64 维森林时空嵌入。",
+  "grid": {
+    "width": 370,
+    "height": 303,
+    "resolution": 0.03,
+    "bounds": [
+      117.95,
+      44.96,
+      129.05,
+      54.05
+    ]
+  },
+  "embedding": {
+    "dimensions": 64,
+    "method": "PCA",
+    "components": [
+      "R",
+      "G",
+      "B"
+    ],
+    "variance": [
+      0.3153,
+      0.2122,
+      0.1162
+    ],
+    "stretch": [
+      0.02,
+      0.98
+    ],
+    "note": "三个通道分别为前三个主成分，按 12 个日期的全局 2%–98% 分位拉伸。颜色表示嵌入向量的相对位置，不是物理量。"
+  },
+  "frames": [
+    {
+      "date": "2023-01-15",
+      "partition": "date=20230115",
+      "image": "/visualizations/haina/1846764/20230115.webp",
+      "validPixels": 30419,
+      "sourceSha256": "cac7d46033852c7340be37fe90d7263f09b58d65df8fb1f713c7ebb791af6bba"
+    },
+    {
+      "date": "2023-02-15",
+      "partition": "date=20230215",
+      "image": "/visualizations/haina/1846764/20230215.webp",
+      "validPixels": 30419,
+      "sourceSha256": "a575e83775d4d47f20131ff30a19cd7fc582d982a80f632547baff0c9761d77a"
+    },
+    {
+      "date": "2023-03-15",
+      "partition": "date=20230315",
+      "image": "/visualizations/haina/1846764/20230315.webp",
+      "validPixels": 30419,
+      "sourceSha256": "4914dfbb15cb96451b6c6c02578a6aa042ad4bd0b3975e35f60b27ab919a8a68"
+    },
+    {
+      "date": "2023-04-15",
+      "partition": "date=20230415",
+      "image": "/visualizations/haina/1846764/20230415.webp",
+      "validPixels": 30419,
+      "sourceSha256": "b48678d08bede4020a1da26b91af4f6a25467689be20f84c39b438395cc96b06"
+    },
+    {
+      "date": "2023-05-15",
+      "partition": "date=20230515",
+      "image": "/visualizations/haina/1846764/20230515.webp",
+      "validPixels": 30419,
+      "sourceSha256": "79f53c1269bbeca99cb1350639991869affcacd2e7c01e97cfc8990b9d9ccc5f"
+    },
+    {
+      "date": "2023-06-15",
+      "partition": "date=20230615",
+      "image": "/visualizations/haina/1846764/20230615.webp",
+      "validPixels": 30419,
+      "sourceSha256": "4933745c703c5774362f6e1e12f854f2e1f5881b0d375e6e4d6e3dbd1477c89e"
+    },
+    {
+      "date": "2023-07-15",
+      "partition": "date=20230715",
+      "image": "/visualizations/haina/1846764/20230715.webp",
+      "validPixels": 30419,
+      "sourceSha256": "07004a023c05f9385d1ccc215a52e265a2f8f47f1fccefeb1bf1447bc771ad32"
+    },
+    {
+      "date": "2023-08-15",
+      "partition": "date=20230815",
+      "image": "/visualizations/haina/1846764/20230815.webp",
+      "validPixels": 30419,
+      "sourceSha256": "b5a5cc2ea33e5995fc4b3c5584c51c760b3f66bb4058f406074a8f9455c3e632"
+    },
+    {
+      "date": "2023-09-15",
+      "partition": "date=20230915",
+      "image": "/visualizations/haina/1846764/20230915.webp",
+      "validPixels": 30419,
+      "sourceSha256": "9401d1656ad41275c15af4572be5f66ded02d0ea5386689b6668909195d5bd58"
+    },
+    {
+      "date": "2023-10-15",
+      "partition": "date=20231015",
+      "image": "/visualizations/haina/1846764/20231015.webp",
+      "validPixels": 30419,
+      "sourceSha256": "806aa26304977628576b66acb56386dd978cb55d538725d142660472af0f6e61"
+    },
+    {
+      "date": "2023-11-15",
+      "partition": "date=20231115",
+      "image": "/visualizations/haina/1846764/20231115.webp",
+      "validPixels": 30419,
+      "sourceSha256": "42991b44e0d7952d5d59e8aa266fa390a9533a142d817e513ccdf05f1d5f2244"
+    },
+    {
+      "date": "2023-12-15",
+      "partition": "date=20231215",
+      "image": "/visualizations/haina/1846764/20231215.webp",
+      "validPixels": 30419,
+      "sourceSha256": "6d16cec2a3fdcdcbf3a24d14a6054a8045405d86999c1607afc896322ab26fba"
+    }
+  ],
+  "source": {
+    "datasetId": "1846764",
+    "url": "https://cn.zero2x.org/data-hub/portal/dataset?id=1846764",
+    "license": "CC-BY-4.0",
+    "licenseUrl": "https://choosealicense.com/licenses/cc-by-4.0/",
+    "provider": "地学数据组 · 之江实验室",
+    "files": [
+      "date=20230115/data.parquet",
+      "date=20230215/data.parquet",
+      "date=20230315/data.parquet",
+      "date=20230415/data.parquet",
+      "date=20230515/data.parquet",
+      "date=20230615/data.parquet",
+      "date=20230715/data.parquet",
+      "date=20230815/data.parquet",
+      "date=20230915/data.parquet",
+      "date=20231015/data.parquet",
+      "date=20231115/data.parquet",
+      "date=20231215/data.parquet"
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+.answer-prose .answer-citation[data-reference-type] {display:inline-block;max-width:100%;white-space:nowrap;vertical-align:baseline;}
+.answer-prose .answer-citation-icon {display:inline-block;width:1em;height:1em;margin-right:4px;vertical-align:-.12em;}
+.answer-prose .answer-citation-label {display:inline-block;max-width:min(30ch,calc(100vw - 180px));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;}
+.answer-prose .answer-citation-number {display:inline-block;white-space:nowrap;vertical-align:bottom;}
+.oe-citation-tooltip {position:fixed;z-index:2200;box-sizing:border-box;width:340px;max-width:calc(100vw - 24px);max-height:min(400px,calc(100dvh - 24px));overflow:auto;padding:14px 16px;background:#fbfdf9;border:1px solid #d5e1d7;border-radius:9px;box-shadow:0 5px 22px #24413216;color:#2b4436;font-size:13px;line-height:1.65;text-align:left;overflow-wrap:anywhere;}
+.oe-citation-tooltip-heading {display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:11px;color:#6c8071;margin-bottom:7px;}
+.oe-citation-tooltip > strong {display:block;font-size:13px;font-weight:550;line-height:1.6;margin-bottom:10px;}
+.oe-citation-tooltip dl {display:grid;grid-template-columns:60px minmax(0,1fr);gap:5px 10px;margin:0;font-size:12px;}
+.oe-citation-tooltip dt {color:#6c8071;}
+.oe-citation-tooltip dd {margin:0;}
+.oe-citation-tooltip dd > svg {vertical-align:-.15em;margin-right:5px;color:#286449;}
+.citation-inline-group {display:inline-flex;max-width:100%;align-items:baseline;vertical-align:baseline;gap:2px;}
+.answer-prose .citation-inline-group .answer-citation {display:inline-flex;align-items:baseline;min-width:0;max-width:calc(100% - 22px);}
+.answer-prose .citation-inline-group .answer-citation-icon,.answer-prose .citation-inline-group .answer-citation-number {flex-shrink:0;}
+.answer-prose .citation-inline-group .answer-citation-label {min-width:0;}
+.citation-followup {display:inline-flex;align-self:center;align-items:center;justify-content:center;flex-shrink:0;width:20px;height:20px;padding:2px;border:0;border-radius:4px;background:#edf4ee;color:#286449;cursor:pointer;visibility:hidden;}
+.citation-inline-group:hover .citation-followup,.citation-inline-group:focus-within .citation-followup {visibility:visible;}
+.citation-followup:hover {background:#dceadf;}
+.citation-followup:focus-visible {outline:2px solid #488b65;outline-offset:1px;}
+@media(hover:none) {.citation-followup {visibility:visible;}}

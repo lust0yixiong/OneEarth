@@ -1,0 +1,30 @@
+.rain-panel{width:min(390px,100%);padding:13px 15px;border:1px solid #d3dfd9;border-radius:12px;background:#fffffff5;color:#28463d;display:grid;gap:8px;font-size:12px}
+.rain-panel h2{font:inherit;font-size:17px;font-weight:650;margin:2px 0}
+.rain-panel small,.rain-panel summary{font-size:11px;color:#5b7066}
+.rain-head,.rain-band-title,.rain-location{display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap}
+.rain-head button{display:flex;align-items:center;gap:5px;border-radius:6px;background:#e9f1ec;padding:6px 8px}
+.rain-chart{display:flex;gap:5px}
+.rain-lat{width:29px;display:flex;flex-direction:column;justify-content:space-between;padding-bottom:16px;text-align:right;font-size:10px;color:#64766b}
+.rain-months,.rain-series{flex:1;display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:1px}
+.rain-months button,.rain-series button{padding:0;border:0;min-width:0;text-align:center}
+.rain-column{display:grid;grid-template-rows:repeat(18,4px)}
+.rain-months [aria-pressed=true] .rain-column{outline:2px solid #294f49;outline-offset:-2px}
+.rain-months [aria-pressed=true] small{color:#234e45;font-weight:bold}
+.rain-legend,.rain-legend span{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.rain-legend{gap:8px;font-size:10px}
+.rain-legend i{width:9px;height:9px;border-radius:2px}
+.rain-location{border-top:1px solid #dce5df;padding-top:6px}
+.rain-series{flex-basis:100%;align-items:end;height:27px}
+.rain-series button i{display:block;margin:0 2px;border-bottom:1px solid #578576}
+.rain-series [aria-pressed=true]{outline:1px solid #507266}
+.rain-panel details p{margin:5px 0;line-height:1.55}
+.rain-panel summary{cursor:pointer}
+.map-footer:has(.rain-panel){align-items:flex-end;pointer-events:none}
+.map-footer:has(.rain-panel)>*,.map-footer:has(.rain-panel) .grid-toolbar{pointer-events:auto}
+@media(max-width:680px){.rain-panel{padding:8px 10px;gap:4px}.rain-column{grid-template-rows:repeat(18,2.5px)}}
+.rain-status{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.rain-status button{color:#925b32;text-decoration:underline}
+.rain-year{display:flex;align-items:center;gap:6px;color:#5b7066;font-size:11px}
+.rain-year select{padding:3px 7px;border:1px solid #d3dfd9;border-radius:5px;background:#f6f9f6;color:#28463d;font:inherit;font-size:12px}
+.rain-months button:disabled,.rain-series button:disabled{cursor:default;opacity:.45}
+.rain-period{line-height:1.45}

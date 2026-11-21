@@ -1,0 +1,325 @@
+{
+  "Q01": {
+    "title": "酒庄与气候",
+    "question": "想研究气候变化对酒庄/农业旅游区的影响，需要地表温度、降水和水分平衡数据，有哪些易获取的开放数据？",
+    "paper": "AGRO-TOURISM IMPACT ANALYSIS OF CLIMATE CHANGE USING GOOGLE EARTH ENGINE IN THE RAHOVEC WINE REGION OF KOSOVO",
+    "needs": [
+      "地表温度",
+      "降水",
+      "水分平衡"
+    ],
+    "gap": "把蒸散和降水统一到相同时间步长。",
+    "clues": [
+      "MODIS LST",
+      "CHIRPS",
+      "ERA5-Land",
+      "GEE"
+    ]
+  },
+  "Q02": {
+    "title": "遥感冰川物质平衡",
+    "question": "想用遥感方法估算冰川物质平衡，需要高分辨率DEM、冰川边界和逐时气象数据，分别从哪里获取？",
+    "paper": "A remote sensing based model framework to quantify glacier mass balance",
+    "needs": [],
+    "gap": "",
+    "clues": [
+      "SRTM/ASTER DEM",
+      "RGI冰川编目",
+      "ERA5-Land",
+      "ITS_LIVE"
+    ]
+  },
+  "Q03": {
+    "title": "草原小型哺乳动物",
+    "question": "研究热带稀树草原小型哺乳动物多样性，需要植被覆盖度、NDVI和土地利用数据，哪里可以获取到公开的全球数据？",
+    "paper": "Tropical savanna ecosystems and small mammals: contributions and conservation",
+    "needs": [
+      "植被覆盖度",
+      "植被指数",
+      "土地利用"
+    ],
+    "gap": "栖息地变量需要与独立的动物样地相配。",
+    "clues": [
+      "MODIS NDVI/VCF",
+      "ESA CCI Land Cover",
+      "MCD64A1火烧"
+    ]
+  },
+  "Q04": {
+    "title": "季风与臭氧",
+    "question": "研究东亚夏季风影响下对流层臭氧的垂直分布和季节变化，需要地面臭氧观测、臭氧探空、卫星和化学再分析数据，都去哪里获取？",
+    "paper": "Temporal variability of tropospheric ozone and ozone profiles in the Korean Peninsula during the East Asian summer monsoon",
+    "needs": [
+      "地面臭氧",
+      "臭氧探空",
+      "卫星廓线",
+      "化学再分析"
+    ],
+    "gap": "核对高度基准、单位和过境时间。",
+    "clues": [
+      "地面臭氧",
+      "臭氧探空SHADOZ",
+      "OMI",
+      "CAMS再分析"
+    ]
+  },
+  "Q05": {
+    "title": "珊瑚礁幼体密度",
+    "question": "想要获取加勒比/太平洋珊瑚礁幼体珊瑚密度及其环境预测因子数据，有哪些公开数据集？",
+    "paper": "Juvenile coral density patterns and predictors across NOAA National Coral Reef Monitoring Program",
+    "needs": [
+      "幼体调查",
+      "海表温度",
+      "热应激",
+      "叶绿素"
+    ],
+    "gap": "调查样点、深度与遥感像元分别取证。",
+    "clues": [
+      "NCRMP",
+      "MODIS SST",
+      "OISST",
+      "CHL-a"
+    ]
+  },
+  "Q06": {
+    "title": "格陵兰粒雪储水",
+    "question": "研究格陵兰冰盖雪/粒雪层（firn）储水能力对温度变化的非对称响应，需要什么数据做模拟与验证？",
+    "paper": "Greenland's firn responds more to warming than to cooling",
+    "needs": [
+      "气象驱动",
+      "密度与温度剖面",
+      "独立验证"
+    ],
+    "gap": "核对钻孔深度、采样时期及模型所需变量。",
+    "clues": [
+      "MAR/CARRA",
+      "粒雪钻孔观测",
+      "MODIS反照率",
+      "SNOWPACK"
+    ]
+  },
+  "Q07": {
+    "title": "青藏高原西部积雪",
+    "question": "研究青藏高原西部积雪覆盖率和雪深的时空变化及气候影响，需要长时间序列积雪数据，在哪里获取？",
+    "paper": "Spatiotemporal Characteristics of Snow Cover and Its Climate Impacts in the Western Tibetan Plateau Region",
+    "needs": [],
+    "gap": "",
+    "clues": [
+      "MODIS雪盖",
+      "NOAA IMS",
+      "被动微波雪深",
+      "ERA5-Land"
+    ]
+  },
+  "Q08": {
+    "title": "海冰与 PDO",
+    "question": "研究北极海冰范围年际-年代际变化与太平洋年代际振荡（PDO）的联系，需要哪些海冰与气候指数数据？",
+    "paper": "The Arctic sea ice extent change connected to Pacific decadal variability",
+    "needs": [
+      "海冰范围",
+      "PDO 指数"
+    ],
+    "gap": "气候指数按月份关联，保留其非空间属性。",
+    "clues": [
+      "NSIDC Sea Ice Index",
+      "PDO指数",
+      "ERSST",
+      "20CR"
+    ]
+  },
+  "Q09": {
+    "title": "叶面积与通量",
+    "question": "分析植被叶面积（LAI）与陆地-大气水、能量、碳通量的关系，需要通量塔与遥感植被数据，在哪里获取？",
+    "paper": "Examining the link between vegetation leaf area and land-atmosphere exchange of water, energy, and carbon fluxes",
+    "needs": [
+      "通量塔记录",
+      "遥感 LAI",
+      "气象与土壤"
+    ],
+    "gap": "比较站点时间窗、像元代表性与通量质量标识。",
+    "clues": [
+      "FLUXNET2015",
+      "MODIS LAI",
+      "GLASS LAI",
+      "GPP/ET"
+    ]
+  },
+  "Q10": {
+    "title": "近全球季节模拟",
+    "question": "开展近全球尺度对流尺度（CP）季节模拟，需要WPS地形、陆面和气象强迫数据，如何准备？",
+    "paper": "Near-global-scale high-resolution seasonal simulations with WRF-Noah-MP v3.8.1",
+    "needs": [
+      "静态地理场",
+      "气象强迫",
+      "初始和侧边界"
+    ],
+    "gap": "核验变量、层次、模式网格和时间步长。",
+    "clues": [
+      "WRF-Noah-MP",
+      "ERA5强迫",
+      "geogrid静态数据",
+      "HPC计算"
+    ]
+  },
+  "Q11": {
+    "title": "绿地与幸福感",
+    "question": "研究绿色空间暴露与主观幸福感的关系，需要绿地暴露指标与幸福感调查数据，如何构建？",
+    "paper": "Nature and happiness: the link between green space and subjective well-being",
+    "needs": [
+      "绿地暴露",
+      "幸福感调查",
+      "协变量"
+    ],
+    "gap": "核对调查时间和空间汇总权限。",
+    "clues": [
+      "MODIS/Sentinel-2绿地",
+      "幸福感调查",
+      "WorldPop",
+      "多水平模型"
+    ]
+  },
+  "Q12": {
+    "title": "东亚沙尘暴",
+    "question": "模拟东亚沙尘暴过程，需要WRF-Chem的排放、气象边界与起沙方案数据，怎么配置？",
+    "paper": "WRF-Chem v3.9 simulations of the East Asian dust storm in May 2017: modeling sensitivities to dust emission and dry deposition schemes",
+    "needs": [
+      "气象边界",
+      "排放清单",
+      "起沙参数",
+      "观测验证"
+    ],
+    "gap": "事件时段及排放类别、单位、网格必须对齐。",
+    "clues": [
+      "WRF-Chem",
+      "ERA5驱动",
+      "MEIC排放",
+      "AERONET验证"
+    ]
+  },
+  "Q13": {
+    "title": "融池与微波亮温",
+    "question": "研究夏季融池对微波亮温与海冰密集度反演的影响，需要哪些观测与对照数据？",
+    "paper": "The impact of melt ponds on summertime microwave brightness temperatures and sea-ice concentrations",
+    "needs": [
+      "微波亮温",
+      "融池识别影像",
+      "海冰密集度"
+    ],
+    "gap": "配对时相、频段和独立对照算法。",
+    "clues": [
+      "AMSR2亮温",
+      "MODIS融池识别",
+      "海冰密集度算法",
+      "NSIDC"
+    ]
+  },
+  "Q14": {
+    "title": "巴尔滕省自然度",
+    "question": "评估土耳其巴尔滕省陆地生态系统的“自然度”等级，需要土地利用、人口、道路和植被数据，在哪里获取？",
+    "paper": "The Naturalness Level of Terrestrial Areas in Bartin Province (Northern Türkiye)",
+    "needs": [],
+    "gap": "",
+    "clues": [
+      "Copernicus LULC",
+      "WorldPop",
+      "OSM道路",
+      "MODIS NDVI"
+    ]
+  },
+  "Q15": {
+    "title": "欧洲搬迁暴露",
+    "question": "做欧洲人群搬迁前后环境暴露变化的全暴露组研究，需要污染物、绿地和噪音的空间数据，在哪里获取？",
+    "paper": "Effect of residential relocation on environmental exposures in European cohorts: an exposome-wide approach",
+    "needs": [
+      "污染物",
+      "绿地",
+      "噪声",
+      "队列地址历史"
+    ],
+    "gap": "区分搬迁前后时段；受限个人地址仅标记访问条件。",
+    "clues": [
+      "EEA空气污染",
+      "MODIS NDVI绿地",
+      "欧洲噪音图",
+      "队列地址数据"
+    ]
+  },
+  "Q16": {
+    "title": "非洲流域水文模拟",
+    "question": "为撒哈拉以南非洲流域构建国家尺度水文模型，需要全球水文模型与当地利益相关方数据，如何获取？",
+    "paper": "Stakeholder-informed approach improves national modelling of water resources for a Sub-Saharan African basin",
+    "needs": [
+      "气象驱动",
+      "径流校验",
+      "当地用水",
+      "地下水"
+    ],
+    "gap": "区分流域和国家边界，并保留线下资料缺口。",
+    "clues": [
+      "CWatM/MODFLOW",
+      "ERA5-Land",
+      "GRDC径流",
+      "MOD16/ESA CCI"
+    ]
+  },
+  "Q17": {
+    "title": "南非农村粮食安全",
+    "question": "构建南非农村粮食安全的贝叶斯信念网络（BBN）模型，需要哪些家庭与气候数据？",
+    "paper": "A Bayesian belief network model of food security in rural South Africa",
+    "needs": [
+      "家庭随访",
+      "降水",
+      "植被指数"
+    ],
+    "gap": "调查授权和可用地理尺度决定连接方式。",
+    "clues": [
+      "Agincourt HDSS",
+      "CHIRPS降水",
+      "MODIS NDVI",
+      "GeNIe"
+    ]
+  },
+  "Q18": {
+    "title": "内蒙古草原返青日",
+    "question": "提取内蒙古草原返青日期（green-up onset）需要MODIS NDVI时间序列，如何处理以得到稳定物候？",
+    "paper": "Retrieval of Green-up Onset Date From MODIS-Derived NDVI in Grasslands of Inner Mongolia",
+    "needs": [
+      "NDVI 时序",
+      "质量掩膜",
+      "返青日期验证"
+    ],
+    "gap": "先核对云雪与缺测，再比较平滑及返青阈值。",
+    "clues": [
+      "MODIS NDVI",
+      "TIMESAT",
+      "双逻辑拟合",
+      "返青期提取"
+    ]
+  },
+  "Q19": {
+    "title": "79 North 冰量变化",
+    "question": "研究格陵兰79 North冰川（Nioghalvfjerdsfjorden）的大冰量损失变率，需要哪些观测数据？",
+    "paper": "Large ice loss variability at Nioghalvfjerdsfjorden (79 North Glacier), Greenland",
+    "needs": [],
+    "gap": "",
+    "clues": [
+      "MEaSUREs流速",
+      "Landsat前缘",
+      "BedMachine",
+      "OMG海洋"
+    ]
+  },
+  "Q20": {
+    "title": "湖终止型冰川后退",
+    "question": "研究阿拉斯加及加拿大西北部湖终止型冰川的崩解后退，需要冰川边界、湖泊和水深数据，有什么数据源？",
+    "paper": "Frontal ablation and retreat of 55 lake-terminating glaciers in Alaska and northwest Canada",
+    "needs": [],
+    "gap": "",
+    "clues": [
+      "RGI/GLIMS",
+      "ITS_LIVE",
+      "Landsat/Sentinel-2",
+      "BedMachine"
+    ]
+  }
+}

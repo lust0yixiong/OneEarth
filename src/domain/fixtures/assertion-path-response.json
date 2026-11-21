@@ -1,0 +1,315 @@
+{
+  "recipe-detail": {
+    "tool": "search_recipes",
+    "input": {
+      "paper_id": "d7f607af-4592-45f3-8c86-5567dd98c67b",
+      "rq_id": "RQ8"
+    },
+    "status": "ok",
+    "recipe": {
+      "paper_id": "d7f607af-4592-45f3-8c86-5567dd98c67b",
+      "rq_id": "RQ8",
+      "paper_title": "Indicators of Global Climate Change 2023: annual update of key indicators of the state of the climate system and human influence",
+      "task": "What is the updated global land average annual maximum temperature (TXx) anomaly relative to pre-industrial, and how do the datasets compare?",
+      "n_members": 3,
+      "n_steps": 2,
+      "members": [
+        {
+          "ds_key": "doi:10.5285/115d5e4ebf7148ec941423ec86fa9f26",
+          "dataset_id": "D18",
+          "identity_kind": "doi",
+          "display_name": "HadEX3: Global land-surface climate extremes indices v3.0.4 (1901-2018)",
+          "n_steps": 2,
+          "enters_steps": [
+            "RQ8_S1",
+            "RQ8_S2"
+          ]
+        },
+        {
+          "ds_key": "name:d7f607af-4592-45f3-8c86-5567dd98c67b:D16:015",
+          "dataset_id": "D16",
+          "identity_kind": "name",
+          "display_name": "ERA5 atmospheric reanalysis",
+          "n_steps": 2,
+          "enters_steps": [
+            "RQ8_S1",
+            "RQ8_S2"
+          ]
+        },
+        {
+          "ds_key": "name:d7f607af-4592-45f3-8c86-5567dd98c67b:D17:016",
+          "dataset_id": "D17",
+          "identity_kind": "name",
+          "display_name": "Berkeley Earth Surface Temperature dataset",
+          "n_steps": 2,
+          "enters_steps": [
+            "RQ8_S1",
+            "RQ8_S2"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "step_id": "RQ8_S1",
+          "order": 1,
+          "type": "variable_derivation",
+          "name": "Derive global land average TXx anomalies",
+          "purpose": "To provide an updated global indicator of temperature extremes consistent with AR6 WGI Fig. 11.2.",
+          "method": "Calculate annual maximum temperature for each land grid point excluding Antarctica, average over all available land grid points, express as anomalies relative to 1961-1990, then add a 0.52 degreeC offset to reference 1850-1900."
+        },
+        {
+          "step_id": "RQ8_S2",
+          "order": 2,
+          "type": "analysis_or_modeling",
+          "name": "Compare TXx datasets and assess record 2023",
+          "purpose": "To identify dataset agreement and quantify the exceptional 2023 TXx warmth.",
+          "method": "Plot all three TXx series; compare decadal means and 2023 values; note Berkeley Earth has slightly smaller trends than ERA5."
+        }
+      ]
+    },
+    "note": "配方详情：成员与步骤全量零裁剪（构建期上限以内）；enters_steps 按步骤顺序排列；成员用法细节请调 search_dataset_usage（行三元组 paper_id+dataset_id）；论文原文引文与任务说明的原文依据请调 get_evidence（rq 声明）。"
+  },
+  "evidence-detail": {
+    "tool": "get_evidence",
+    "input": {
+      "paper_id": "d7f607af-4592-45f3-8c86-5567dd98c67b",
+      "dataset_id": "D18",
+      "ds_key": "doi:10.5285/115d5e4ebf7148ec941423ec86fa9f26",
+      "offset": 0
+    },
+    "status": "ok",
+    "row": {
+      "paper_id": "d7f607af-4592-45f3-8c86-5567dd98c67b",
+      "dataset_id": "D18",
+      "ds_key": "doi:10.5285/115d5e4ebf7148ec941423ec86fa9f26",
+      "identity_kind": "doi",
+      "display_name": "HadEX3: Global land-surface climate extremes indices v3.0.4 (1901-2018)",
+      "paper_title": "Indicators of Global Climate Change 2023: annual update of key indicators of the state of the climate system and human i…",
+      "n_segments": 3,
+      "n_evidence": 14
+    },
+    "claims": [
+      {
+        "kind": "role",
+        "ref": "0",
+        "n_evidence": 2,
+        "evidence_blocks": [
+          "B0528",
+          "B0529"
+        ]
+      },
+      {
+        "kind": "step",
+        "ref": "1",
+        "n_evidence": 2,
+        "evidence_blocks": [
+          "B0528",
+          "B0532"
+        ]
+      },
+      {
+        "kind": "step",
+        "ref": "2",
+        "n_evidence": 2,
+        "evidence_blocks": [
+          "B0538",
+          "B0543"
+        ]
+      },
+      {
+        "kind": "spatial_extent",
+        "ref": "",
+        "n_evidence": 2,
+        "evidence_blocks": [
+          "B0521",
+          "B0532"
+        ]
+      },
+      {
+        "kind": "temporal_extent",
+        "ref": "",
+        "n_evidence": 1,
+        "evidence_blocks": [
+          "B0538"
+        ]
+      },
+      {
+        "kind": "derivation",
+        "ref": "DV29",
+        "n_evidence": 2,
+        "evidence_blocks": [
+          "B0528",
+          "B0532"
+        ]
+      },
+      {
+        "kind": "rq",
+        "ref": "RQ8",
+        "n_evidence": 4,
+        "evidence_blocks": [
+          "B0521",
+          "B0528",
+          "B0543",
+          "B0544"
+        ]
+      },
+      {
+        "kind": "entity",
+        "ref": "",
+        "n_evidence": 10,
+        "evidence_blocks": [
+          "B0528",
+          "B0529",
+          "B0538",
+          "B0562",
+          "B0564",
+          "B0642",
+          "B0643",
+          "B0644",
+          "B0646",
+          "B0647"
+        ]
+      }
+    ],
+    "evidence": [
+      {
+        "block_id": "B0528",
+        "section": "9 Climate and weather extremes",
+        "quote": "As last year, three datasets are analysed: HadEX3 (Dunn et al., 2020), Berkeley Earth Surface Temperature (building off Rohde et al., 2013) and the fifth-generation ECMWF atmospheric reanalysis of the global climate (ERA5; Hersbach et al., 2020).",
+        "supports": [
+          {
+            "kind": "role",
+            "ref": "0"
+          },
+          {
+            "kind": "step",
+            "ref": "1"
+          },
+          {
+            "kind": "derivation",
+            "ref": "DV29"
+          },
+          {
+            "kind": "rq",
+            "ref": "RQ8"
+          },
+          {
+            "kind": "entity",
+            "ref": ""
+          }
+        ]
+      },
+      {
+        "block_id": "B0529",
+        "section": "9 Climate and weather extremes",
+        "quote": "HadEX3 is currently static and is not being updated.",
+        "supports": [
+          {
+            "kind": "role",
+            "ref": "0"
+          },
+          {
+            "kind": "entity",
+            "ref": ""
+          }
+        ]
+      },
+      {
+        "block_id": "B0532",
+        "section": "9 Climate and weather extremes",
+        "quote": "TXx is calculated by averaging the annual maximum temperature over all available land grid points (excluding Antarctica) and then converted to anomalies with respect to a base period of 1961–1990.",
+        "supports": [
+          {
+            "kind": "step",
+            "ref": "1"
+          },
+          {
+            "kind": "spatial_extent",
+            "ref": ""
+          },
+          {
+            "kind": "derivation",
+            "ref": "DV29"
+          }
+        ]
+      },
+      {
+        "block_id": "B0538",
+        "section": "9 Climate and weather extremes",
+        "quote": "Figure 9. Time series of observed temperature anomalies for land average annual maximum temperature (TXx) for ERA5 (1950–2023), Berkeley Earth (1955–2022) and HadEX3 (1961–2018), with respect to 1850–1900. Note that the datasets have different spatial coverage and are not coverage-matched. All anomalies are calculated relative to 1961–1990, and an offset of \\(0.52^{\\circ}\\)C is added to obtain TXx values relative to 1850–1900. Note that while the HadEX3 numbers are the same as shown in Fig. 11.2 of Seneviratne et al. (2021), these numbers were not specifically assessed.",
+        "supports": [
+          {
+            "kind": "step",
+            "ref": "2"
+          },
+          {
+            "kind": "temporal_extent",
+            "ref": ""
+          },
+          {
+            "kind": "entity",
+            "ref": ""
+          }
+        ]
+      },
+      {
+        "block_id": "B0543",
+        "section": "9 Climate and weather extremes",
+        "quote": "1850–1900 for 2023 is at 2.3 \\(\\degree\\)C, which is an increase of more than 0.5 \\(\\degree\\)C compared to 2022 and which shatters the previous record by more than 0.3 \\(\\degree\\)C.",
+        "supports": [
+          {
+            "kind": "step",
+            "ref": "2"
+          },
+          {
+            "kind": "rq",
+            "ref": "RQ8"
+          }
+        ]
+      },
+      {
+        "block_id": "B0521",
+        "section": "9 Climate and weather extremes",
+        "quote": "The climate indicator of changes in temperature extremes consists of land average annual maximum temperatures (TXx) (excluding Antarctica).",
+        "supports": [
+          {
+            "kind": "spatial_extent",
+            "ref": ""
+          },
+          {
+            "kind": "rq",
+            "ref": "RQ8"
+          }
+        ]
+      },
+      {
+        "block_id": "B0544",
+        "section": "9 Climate and weather extremes",
+        "quote": "On longer timescales, land average annual maximum temperatures have warmed by more than 0.6 \\(\\degree\\)C in the past 10 years (1.81 \\(\\degree\\)C with respect to pre-industrial conditions) compared to the first decade of the millennium (1.21 \\(\\degree\\)C; Table 9).",
+        "supports": [
+          {
+            "kind": "rq",
+            "ref": "RQ8"
+          }
+        ]
+      },
+      {
+        "block_id": "B0562",
+        "section": "10 Code and data availability",
+        "quote": "HadEX3 [3.0.4] data were obtained from https://catalogue.ceda.ac.uk/uuid/115d5e4ebf7148ec941423ec86fa9f26",
+        "supports": [
+          {
+            "kind": "entity",
+            "ref": ""
+          }
+        ]
+      }
+    ],
+    "pagination": {
+      "total_hits": 14,
+      "offset": 0,
+      "has_more": true
+    },
+    "note": "行 3 段用法 / 14 块原文证据，本页返回 8 块；role/step 段证据排前，entity 殿后"
+  }
+}

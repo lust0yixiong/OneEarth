@@ -1,0 +1,19 @@
+.research-region-layer {pointer-events:auto;position:relative;display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin-top:9px;padding:7px 10px;max-width:100%;width:fit-content;box-sizing:border-box;border:1px solid #c2d8d8;border-radius:9px;background:#fbfefcec;color:#416661;font-size:11px;box-shadow:0 2px 9px #244b3d08}
+.research-region-layer>svg {color:#007d91;flex:none}
+.research-region-layer strong {font-weight:550;overflow-wrap:anywhere;max-width:240px}
+.research-region-layer .region-precision {color:#7b8c7e;font-size:10px}
+.research-region-layer button {border:0;background:transparent;color:#197280;padding:3px;display:inline-flex;align-items:center;cursor:pointer;border-radius:4px}
+.research-region-layer button:focus-visible,.region-info>summary:focus-visible {outline:2px solid #007d91;outline-offset:2px}
+.research-region-layer button:disabled {opacity:.45;cursor:default}
+.research-region-layer .region-visibility {width:25px;height:15px;border-radius:12px;background:#aec4c0;padding:2px;flex:none}
+.region-visibility i {height:11px;width:11px;border-radius:50%;background:white;transition:transform .15s}
+.research-region-layer .region-visibility[aria-checked=true] {background:#007d91}
+.region-visibility[aria-checked=true] i {transform:translateX(10px)}
+.region-info {margin-left:auto}
+.region-info summary {display:flex;list-style:none;cursor:pointer;color:#738c84}
+.region-info summary::-webkit-details-marker {display:none}
+.region-info>div {position:absolute;left:0;top:calc(100% + 7px);z-index:31;width:290px;max-width:calc(100vw - 80px);padding:12px 14px;border:1px solid #c6dad5;border-radius:9px;background:#fcfefd;box-shadow:0 4px 18px #284c3820;font-size:11px;line-height:1.65}
+.region-info p {margin:0 0 7px}.region-info small {display:block;color:#819285}.region-info a {display:block;margin-top:6px;color:#197280}
+.message .question-region-link {font:inherit;color:#397b7b;display:inline-flex;align-items:center;gap:4px;border:0;background:transparent;cursor:pointer;padding:0 2px;max-width:100%;text-align:left;vertical-align:middle}
+.question-region-link span {overflow-wrap:anywhere}.question-region-link svg {flex:none}.question-region-link:disabled {color:#819285;cursor:default}
+@media(max-width:600px){.research-region-layer {gap:5px;padding:6px 8px;font-size:10px}.research-region-layer strong {max-width:145px}.research-region-layer .region-precision {font-size:9px}}

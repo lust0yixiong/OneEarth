@@ -1,0 +1,163 @@
+{
+  "version": 1,
+  "datasetId": "haina:1846639",
+  "name": "C40 landuse 嵌入数据集",
+  "snapshot": "2026-10-13",
+  "defaultCity": "shanghai-chn",
+  "embedding": {
+    "dimensions": 1024,
+    "method": "PCA",
+    "components": [
+      "R",
+      "G",
+      "B"
+    ],
+    "variance": [
+      0.0161,
+      0.0065,
+      0.0048
+    ],
+    "stretch": [
+      0.02,
+      0.98
+    ],
+    "note": "三个城市共 379,717 个多边形中心；每个点是一个多边形的投影中心，1024 维向量逐行 L2 归一化后取前三个主成分映射 R/G/B。点不表示完整多边形轮廓，颜色表示嵌入相对位置，不是土地利用类别。"
+  },
+  "cities": [
+    {
+      "id": "shanghai-chn",
+      "name": "上海",
+      "bounds": [
+        121.03420448142965,
+        30.89124323057981,
+        121.82036240493447,
+        31.50062823045384
+      ],
+      "center": [
+        121.42728344318206,
+        31.195935730516826
+      ],
+      "projection": {
+        "type": "Azimuthal Equidistant",
+        "lat0": 31.195935730516826,
+        "lon0": 121.42728344318206,
+        "radius": 6371000
+      },
+      "zoom": 110,
+      "image": "/visualizations/haina/1846639/shanghai.webp",
+      "width": 1600,
+      "height": 1240,
+      "samples": 162604,
+      "shards": 10,
+      "layers": {
+        "building_polygon": 131818,
+        "landuse_polygon": 19125,
+        "natural_polygon": 7,
+        "poi_polygon": 10532,
+        "water_polygon": 1118,
+        "wetland_polygon": 4
+      }
+    },
+    {
+      "id": "beijing-chn",
+      "name": "北京",
+      "bounds": [
+        116.04256437109225,
+        39.67464457741898,
+        116.7104335343123,
+        40.20231070471998
+      ],
+      "center": [
+        116.37649895270228,
+        39.93847764106948
+      ],
+      "projection": {
+        "type": "Azimuthal Equidistant",
+        "lat0": 39.93847764106948,
+        "lon0": 116.37649895270228,
+        "radius": 6371000
+      },
+      "zoom": 130,
+      "image": "/visualizations/haina/1846639/beijing.webp",
+      "width": 1600,
+      "height": 1264,
+      "samples": 121404,
+      "shards": 8,
+      "layers": {
+        "building_polygon": 93768,
+        "landuse_polygon": 14742,
+        "natural_polygon": 8,
+        "poi_polygon": 12188,
+        "water_polygon": 698
+      }
+    },
+    {
+      "id": "guangzhou-chn",
+      "name": "广州",
+      "bounds": [
+        112.88442874917307,
+        22.479279145720177,
+        114.38945750111748,
+        23.380634772080626
+      ],
+      "center": [
+        113.63694312514528,
+        22.9299569589004
+      ],
+      "projection": {
+        "type": "Azimuthal Equidistant",
+        "lat0": 22.9299569589004,
+        "lon0": 113.63694312514528,
+        "radius": 6371000
+      },
+      "zoom": 70,
+      "image": "/visualizations/haina/1846639/guangzhou.webp",
+      "width": 1600,
+      "height": 958,
+      "samples": 95709,
+      "shards": 6,
+      "layers": {
+        "building_polygon": 66693,
+        "landuse_polygon": 15004,
+        "natural_polygon": 52,
+        "poi_polygon": 11515,
+        "water_polygon": 2418,
+        "wetland_polygon": 27
+      }
+    }
+  ],
+  "source": {
+    "datasetId": "1846639",
+    "url": "https://cn.zero2x.org/data-hub/portal/dataset?id=1846639",
+    "license": "ODbL-1.0",
+    "licenseUrl": "https://opendatacommons.org/licenses/odbl/1-0/",
+    "provider": "地学数据组 · 之江实验室",
+    "source": "之江实验室-胡斌",
+    "files": [
+      "shanghai/shards/geom2ind_polygon_shanghai-chn_polygon_triangles_normalized_part_0001_rank054_part0001/{indices,meta,gids}.npy",
+      "shanghai/shards/geom2ind_polygon_shanghai-chn_polygon_triangles_normalized_part_0001_rank054_part0002/{indices,meta,gids}.npy",
+      "shanghai/shards/geom2ind_polygon_shanghai-chn_polygon_triangles_normalized_part_0001_rank054_part0003/{indices,meta,gids}.npy",
+      "shanghai/shards/geom2ind_polygon_shanghai-chn_polygon_triangles_normalized_part_0001_rank054_part0004/{indices,meta,gids}.npy",
+      "shanghai/shards/geom2ind_polygon_shanghai-chn_polygon_triangles_normalized_part_0001_rank054_part0005/{indices,meta,gids}.npy",
+      "shanghai/shards/geom2ind_polygon_shanghai-chn_polygon_triangles_normalized_part_0001_rank054_part0006/{indices,meta,gids}.npy",
+      "shanghai/shards/geom2ind_polygon_shanghai-chn_polygon_triangles_normalized_part_0001_rank054_part0007/{indices,meta,gids}.npy",
+      "shanghai/shards/geom2ind_polygon_shanghai-chn_polygon_triangles_normalized_part_0001_rank054_part0008/{indices,meta,gids}.npy",
+      "shanghai/shards/geom2ind_polygon_shanghai-chn_polygon_triangles_normalized_part_0001_rank054_part0009/{indices,meta,gids}.npy",
+      "shanghai/shards/geom2ind_polygon_shanghai-chn_polygon_triangles_normalized_part_0001_rank054_part0010/{indices,meta,gids}.npy",
+      "beijing/shards/geom2ind_polygon_beijing-chn_polygon_triangles_normalized_part_0001_rank003_part0001/{indices,meta,gids}.npy",
+      "beijing/shards/geom2ind_polygon_beijing-chn_polygon_triangles_normalized_part_0001_rank003_part0002/{indices,meta,gids}.npy",
+      "beijing/shards/geom2ind_polygon_beijing-chn_polygon_triangles_normalized_part_0001_rank003_part0003/{indices,meta,gids}.npy",
+      "beijing/shards/geom2ind_polygon_beijing-chn_polygon_triangles_normalized_part_0001_rank003_part0004/{indices,meta,gids}.npy",
+      "beijing/shards/geom2ind_polygon_beijing-chn_polygon_triangles_normalized_part_0001_rank003_part0005/{indices,meta,gids}.npy",
+      "beijing/shards/geom2ind_polygon_beijing-chn_polygon_triangles_normalized_part_0001_rank003_part0006/{indices,meta,gids}.npy",
+      "beijing/shards/geom2ind_polygon_beijing-chn_polygon_triangles_normalized_part_0001_rank003_part0007/{indices,meta,gids}.npy",
+      "beijing/shards/geom2ind_polygon_beijing-chn_polygon_triangles_normalized_part_0001_rank003_part0008/{indices,meta,gids}.npy",
+      "guangzhou/shards/geom2ind_polygon_guangzhou-chn_polygon_triangles_normalized_part_0001_rank016_part0001/{indices,meta,gids}.npy",
+      "guangzhou/shards/geom2ind_polygon_guangzhou-chn_polygon_triangles_normalized_part_0001_rank016_part0002/{indices,meta,gids}.npy",
+      "guangzhou/shards/geom2ind_polygon_guangzhou-chn_polygon_triangles_normalized_part_0001_rank016_part0003/{indices,meta,gids}.npy",
+      "guangzhou/shards/geom2ind_polygon_guangzhou-chn_polygon_triangles_normalized_part_0001_rank016_part0004/{indices,meta,gids}.npy",
+      "guangzhou/shards/geom2ind_polygon_guangzhou-chn_polygon_triangles_normalized_part_0001_rank016_part0005/{indices,meta,gids}.npy",
+      "guangzhou/shards/geom2ind_polygon_guangzhou-chn_polygon_triangles_normalized_part_0001_rank016_part0006/{indices,meta,gids}.npy"
+    ]
+  }
+}

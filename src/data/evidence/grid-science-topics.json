@@ -1,0 +1,501 @@
+{
+  "version": "GCMD v25.1",
+  "paths": {
+    "LAND SURFACE › SURFACE THERMAL PROPERTIES": [
+      "陆地表面",
+      "地表热特性"
+    ],
+    "ATMOSPHERE › PRECIPITATION": [
+      "大气",
+      "降水"
+    ],
+    "ATMOSPHERE › ATMOSPHERIC WATER VAPOR": [
+      "大气",
+      "大气水汽"
+    ],
+    "LAND SURFACE › TOPOGRAPHY": [
+      "陆地表面",
+      "地形"
+    ],
+    "ATMOSPHERE › ATMOSPHERIC TEMPERATURE": [
+      "大气",
+      "大气温度"
+    ],
+    "ATMOSPHERE › ATMOSPHERIC WINDS": [
+      "大气",
+      "大气风"
+    ],
+    "ATMOSPHERE › ATMOSPHERIC RADIATION": [
+      "大气",
+      "大气辐射"
+    ],
+    "CRYOSPHERE › GLACIERS/ICE SHEETS": [
+      "冰冻圈",
+      "冰川与冰盖"
+    ],
+    "BIOSPHERE › VEGETATION": [
+      "生物圈",
+      "植被"
+    ],
+    "LAND SURFACE › LAND USE/LAND COVER": [
+      "陆地表面",
+      "土地利用与覆盖"
+    ],
+    "BIOSPHERE › ECOLOGICAL DYNAMICS": [
+      "生物圈",
+      "生态动态"
+    ],
+    "ATMOSPHERE › ATMOSPHERIC CHEMISTRY": [
+      "大气",
+      "大气化学"
+    ],
+    "BIOLOGICAL CLASSIFICATION › ANIMALS/INVERTEBRATES": [
+      "生物分类",
+      "无脊椎动物"
+    ],
+    "OCEANS › OCEAN TEMPERATURE": [
+      "海洋",
+      "海洋温度"
+    ],
+    "OCEANS › OCEAN OPTICS": [
+      "海洋",
+      "海洋光学"
+    ],
+    "LAND SURFACE › SURFACE RADIATIVE PROPERTIES": [
+      "陆地表面",
+      "地表辐射特性"
+    ],
+    "CRYOSPHERE › SNOW/ICE": [
+      "冰冻圈",
+      "雪与冰"
+    ],
+    "CRYOSPHERE › SEA ICE": [
+      "冰冻圈",
+      "海冰"
+    ],
+    "CLIMATE INDICATORS › ATMOSPHERIC/OCEAN INDICATORS": [
+      "气候指标",
+      "大气与海洋指标"
+    ],
+    "ATMOSPHERE › ATMOSPHERIC PRESSURE": [
+      "大气",
+      "大气压力"
+    ],
+    "ATMOSPHERE › ATMOSPHERE/SURFACE INTERACTIONS": [
+      "大气",
+      "大气与地表相互作用"
+    ],
+    "CLIMATE INDICATORS › CARBON FLUX": [
+      "气候指标",
+      "碳通量"
+    ],
+    "LAND SURFACE › SOILS": [
+      "陆地表面",
+      "土壤"
+    ],
+    "ATMOSPHERE › ALTITUDE": [
+      "大气",
+      "高度"
+    ],
+    "HUMAN DIMENSIONS › SOCIAL BEHAVIOR": [
+      "人类因素",
+      "社会行为"
+    ],
+    "HUMAN DIMENSIONS › POPULATION": [
+      "人类因素",
+      "人口"
+    ],
+    "ATMOSPHERE › AIR QUALITY": [
+      "大气",
+      "空气质量"
+    ],
+    "ATMOSPHERE › AEROSOLS": [
+      "大气",
+      "气溶胶"
+    ],
+    "SPECTRAL/ENGINEERING › MICROWAVE": [
+      "光谱与工程",
+      "微波"
+    ],
+    "SPECTRAL/ENGINEERING › MULTISPECTRAL IMAGERY": [
+      "光谱与工程",
+      "多光谱影像"
+    ],
+    "HUMAN DIMENSIONS › BOUNDARIES": [
+      "人类因素",
+      "边界"
+    ],
+    "HUMAN DIMENSIONS › HUMAN SETTLEMENTS": [
+      "人类因素",
+      "人类聚落"
+    ],
+    "HUMAN DIMENSIONS › INFRASTRUCTURE": [
+      "人类因素",
+      "基础设施"
+    ],
+    "HUMAN DIMENSIONS › ENVIRONMENTAL IMPACTS": [
+      "人类因素",
+      "环境影响"
+    ],
+    "TERRESTRIAL HYDROSPHERE › SURFACE WATER": [
+      "陆地水圈",
+      "地表水"
+    ],
+    "TERRESTRIAL HYDROSPHERE › WATER BUDGET": [
+      "陆地水圈",
+      "水量平衡"
+    ],
+    "HUMAN DIMENSIONS › ENVIRONMENTAL GOVERNANCE/MANAGEMENT": [
+      "人类因素",
+      "环境治理与管理"
+    ],
+    "HUMAN DIMENSIONS › PUBLIC HEALTH": [
+      "人类因素",
+      "公共卫生"
+    ],
+    "HUMAN DIMENSIONS › SOCIOECONOMICS": [
+      "人类因素",
+      "社会经济"
+    ],
+    "OCEANS › HYDROGRAPHY": [
+      "海洋",
+      "海洋水文"
+    ],
+    "OCEANS › SALINITY/DENSITY": [
+      "海洋",
+      "盐度与密度"
+    ]
+  },
+  "assets": {
+    "Q01-0": [
+      "LAND SURFACE › SURFACE THERMAL PROPERTIES"
+    ],
+    "Q01-1": [
+      "ATMOSPHERE › PRECIPITATION"
+    ],
+    "Q01-2": [
+      "ATMOSPHERE › ATMOSPHERIC WATER VAPOR"
+    ],
+    "Q02-0": [
+      "LAND SURFACE › TOPOGRAPHY"
+    ],
+    "Q02-1": [
+      "ATMOSPHERE › ATMOSPHERIC TEMPERATURE",
+      "ATMOSPHERE › PRECIPITATION",
+      "ATMOSPHERE › ATMOSPHERIC WINDS",
+      "ATMOSPHERE › ATMOSPHERIC RADIATION"
+    ],
+    "Q02-2": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "Q03-0": [
+      "BIOSPHERE › VEGETATION"
+    ],
+    "Q03-1": [
+      "BIOSPHERE › VEGETATION"
+    ],
+    "Q03-2": [
+      "LAND SURFACE › LAND USE/LAND COVER"
+    ],
+    "Q03-3": [
+      "BIOSPHERE › ECOLOGICAL DYNAMICS"
+    ],
+    "Q04-0": [
+      "ATMOSPHERE › ATMOSPHERIC CHEMISTRY"
+    ],
+    "Q04-1": [
+      "ATMOSPHERE › ATMOSPHERIC CHEMISTRY"
+    ],
+    "Q04-2": [
+      "ATMOSPHERE › ATMOSPHERIC CHEMISTRY"
+    ],
+    "Q04-3": [
+      "ATMOSPHERE › ATMOSPHERIC CHEMISTRY"
+    ],
+    "Q05-0": [
+      "BIOLOGICAL CLASSIFICATION › ANIMALS/INVERTEBRATES"
+    ],
+    "Q05-1": [
+      "OCEANS › OCEAN TEMPERATURE"
+    ],
+    "Q05-2": [
+      "OCEANS › OCEAN TEMPERATURE"
+    ],
+    "Q05-3": [
+      "OCEANS › OCEAN OPTICS"
+    ],
+    "Q05-5": [
+      "BIOLOGICAL CLASSIFICATION › ANIMALS/INVERTEBRATES"
+    ],
+    "Q06-0": [
+      "ATMOSPHERE › ATMOSPHERIC TEMPERATURE",
+      "ATMOSPHERE › PRECIPITATION",
+      "ATMOSPHERE › ATMOSPHERIC RADIATION"
+    ],
+    "Q06-1": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "Q06-2": [
+      "LAND SURFACE › SURFACE RADIATIVE PROPERTIES"
+    ],
+    "Q06-3": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "Q07-0": [
+      "CRYOSPHERE › SNOW/ICE"
+    ],
+    "Q07-1": [
+      "CRYOSPHERE › SNOW/ICE"
+    ],
+    "Q07-3": [
+      "ATMOSPHERE › ATMOSPHERIC TEMPERATURE",
+      "ATMOSPHERE › PRECIPITATION"
+    ],
+    "Q08-0": [
+      "CRYOSPHERE › SEA ICE"
+    ],
+    "Q08-1": [
+      "CLIMATE INDICATORS › ATMOSPHERIC/OCEAN INDICATORS"
+    ],
+    "Q08-2": [
+      "OCEANS › OCEAN TEMPERATURE"
+    ],
+    "Q08-3": [
+      "ATMOSPHERE › ATMOSPHERIC PRESSURE"
+    ],
+    "Q09-0": [
+      "ATMOSPHERE › ATMOSPHERE/SURFACE INTERACTIONS",
+      "CLIMATE INDICATORS › CARBON FLUX"
+    ],
+    "Q09-1": [
+      "BIOSPHERE › VEGETATION"
+    ],
+    "Q09-2": [
+      "ATMOSPHERE › ATMOSPHERIC TEMPERATURE",
+      "ATMOSPHERE › ATMOSPHERIC RADIATION",
+      "LAND SURFACE › SOILS"
+    ],
+    "Q10-0": [
+      "LAND SURFACE › TOPOGRAPHY",
+      "LAND SURFACE › LAND USE/LAND COVER",
+      "LAND SURFACE › SOILS"
+    ],
+    "Q10-1": [
+      "ATMOSPHERE › ATMOSPHERIC WINDS",
+      "ATMOSPHERE › ATMOSPHERIC TEMPERATURE",
+      "ATMOSPHERE › ATMOSPHERIC WATER VAPOR",
+      "ATMOSPHERE › ALTITUDE"
+    ],
+    "Q10-3": [
+      "ATMOSPHERE › ATMOSPHERIC PRESSURE",
+      "OCEANS › OCEAN TEMPERATURE",
+      "LAND SURFACE › SOILS"
+    ],
+    "Q10-5": [
+      "OCEANS › OCEAN TEMPERATURE",
+      "CRYOSPHERE › SEA ICE"
+    ],
+    "Q11-0": [
+      "LAND SURFACE › SURFACE RADIATIVE PROPERTIES"
+    ],
+    "Q11-1": [
+      "HUMAN DIMENSIONS › SOCIAL BEHAVIOR"
+    ],
+    "Q11-2": [
+      "HUMAN DIMENSIONS › POPULATION"
+    ],
+    "Q12-0": [
+      "ATMOSPHERE › ATMOSPHERIC TEMPERATURE",
+      "ATMOSPHERE › ATMOSPHERIC WINDS",
+      "ATMOSPHERE › ATMOSPHERIC WATER VAPOR"
+    ],
+    "Q12-1": [
+      "ATMOSPHERE › AIR QUALITY"
+    ],
+    "Q12-3": [
+      "ATMOSPHERE › AEROSOLS"
+    ],
+    "Q12-4": [
+      "ATMOSPHERE › ATMOSPHERIC CHEMISTRY",
+      "ATMOSPHERE › AEROSOLS"
+    ],
+    "Q13-0": [
+      "SPECTRAL/ENGINEERING › MICROWAVE"
+    ],
+    "Q13-1": [
+      "SPECTRAL/ENGINEERING › MULTISPECTRAL IMAGERY"
+    ],
+    "Q13-2": [
+      "CRYOSPHERE › SEA ICE"
+    ],
+    "Q13-3": [
+      "CRYOSPHERE › SEA ICE"
+    ],
+    "Q14-0": [
+      "HUMAN DIMENSIONS › BOUNDARIES"
+    ],
+    "Q14-1": [
+      "HUMAN DIMENSIONS › HUMAN SETTLEMENTS"
+    ],
+    "Q14-2": [
+      "HUMAN DIMENSIONS › POPULATION"
+    ],
+    "Q14-3": [
+      "HUMAN DIMENSIONS › INFRASTRUCTURE"
+    ],
+    "Q14-4": [
+      "LAND SURFACE › LAND USE/LAND COVER"
+    ],
+    "Q14-5": [
+      "SPECTRAL/ENGINEERING › MULTISPECTRAL IMAGERY"
+    ],
+    "Q14-6": [
+      "LAND SURFACE › TOPOGRAPHY"
+    ],
+    "Q15-0": [
+      "ATMOSPHERE › AEROSOLS"
+    ],
+    "Q15-1": [
+      "LAND SURFACE › SURFACE RADIATIVE PROPERTIES"
+    ],
+    "Q15-2": [
+      "HUMAN DIMENSIONS › ENVIRONMENTAL IMPACTS"
+    ],
+    "Q15-3": [
+      "HUMAN DIMENSIONS › POPULATION"
+    ],
+    "Q15-4": [
+      "ATMOSPHERE › ATMOSPHERIC CHEMISTRY"
+    ],
+    "Q15-5": [
+      "BIOSPHERE › VEGETATION"
+    ],
+    "Q16-0": [
+      "ATMOSPHERE › PRECIPITATION",
+      "ATMOSPHERE › ATMOSPHERIC TEMPERATURE",
+      "ATMOSPHERE › ATMOSPHERIC WINDS",
+      "ATMOSPHERE › ATMOSPHERIC RADIATION"
+    ],
+    "Q16-1": [
+      "TERRESTRIAL HYDROSPHERE › SURFACE WATER"
+    ],
+    "Q16-2": [
+      "TERRESTRIAL HYDROSPHERE › WATER BUDGET",
+      "HUMAN DIMENSIONS › ENVIRONMENTAL GOVERNANCE/MANAGEMENT"
+    ],
+    "Q16-5": [
+      "ATMOSPHERE › ATMOSPHERIC WATER VAPOR"
+    ],
+    "Q16-6": [
+      "LAND SURFACE › SOILS"
+    ],
+    "Q17-0": [
+      "HUMAN DIMENSIONS › PUBLIC HEALTH",
+      "HUMAN DIMENSIONS › SOCIOECONOMICS"
+    ],
+    "Q17-1": [
+      "ATMOSPHERE › PRECIPITATION"
+    ],
+    "Q17-2": [
+      "BIOSPHERE › VEGETATION"
+    ],
+    "Q18-0": [
+      "BIOSPHERE › VEGETATION"
+    ],
+    "Q18-2": [
+      "BIOSPHERE › VEGETATION"
+    ],
+    "Q19-0": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "Q19-2/pangaea:891368": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "Q19-2/pangaea:890982": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "Q19-2/bedmachine-greenland-v3": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "Q19-3/ATM": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "Q19-3/TanDEM-X": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "Q19-4": [
+      "OCEANS › HYDROGRAPHY",
+      "OCEANS › SALINITY/DENSITY",
+      "OCEANS › OCEAN TEMPERATURE"
+    ],
+    "Q20-0": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "Q20-1": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "Q20-2": [
+      "TERRESTRIAL HYDROSPHERE › SURFACE WATER"
+    ],
+    "Q20-3": [
+      "TERRESTRIAL HYDROSPHERE › SURFACE WATER"
+    ],
+    "Q20-4": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "wind-0": [
+      "ATMOSPHERE › ATMOSPHERIC WINDS"
+    ],
+    "glacier-0": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "glacier-1": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "glacier-2": [
+      "CRYOSPHERE › SNOW/ICE"
+    ],
+    "dongting-0": [
+      "TERRESTRIAL HYDROSPHERE › SURFACE WATER"
+    ],
+    "manaus-0": [
+      "TERRESTRIAL HYDROSPHERE › SURFACE WATER"
+    ],
+    "earth-search:landsat-c2-l2": [
+      "SPECTRAL/ENGINEERING › MULTISPECTRAL IMAGERY"
+    ],
+    "earth-search:sentinel-2-l2a": [
+      "LAND SURFACE › SURFACE RADIATIVE PROPERTIES"
+    ],
+    "earth-search:landsat-c2-l2:yangtze-1998": [
+      "SPECTRAL/ENGINEERING › MULTISPECTRAL IMAGERY"
+    ],
+    "glacier-3": [
+      "CRYOSPHERE › GLACIERS/ICE SHEETS"
+    ],
+    "haina:1824119": [
+      "ATMOSPHERE › ATMOSPHERIC TEMPERATURE",
+      "ATMOSPHERE › PRECIPITATION",
+      "ATMOSPHERE › ATMOSPHERIC WINDS",
+      "ATMOSPHERE › ATMOSPHERIC RADIATION"
+    ],
+    "haina:1845660": [
+      "ATMOSPHERE › ATMOSPHERIC WINDS",
+      "ATMOSPHERE › ATMOSPHERIC TEMPERATURE"
+    ]
+  },
+  "materials": [
+    "Q05-4",
+    "Q06-4",
+    "Q07-2",
+    "Q10-2",
+    "Q10-4",
+    "Q12-2",
+    "Q14-7",
+    "Q16-3",
+    "Q16-4",
+    "Q17-3",
+    "Q18-1",
+    "Q18-3"
+  ]
+}

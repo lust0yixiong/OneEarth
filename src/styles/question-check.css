@@ -1,0 +1,12 @@
+.question-check { margin: 12px 0 6px; font-size: 13px; line-height: 1.7; }
+.question-check blockquote { margin: 10px 0; padding: 10px 14px; border-left: 2px solid #8fb8a5; background: #f3f7f4; border-radius: 0 8px 8px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.question-check details { color: var(--muted); margin-bottom: 14px; font-size: 12px; }
+.question-check summary { cursor: pointer; width: fit-content; }
+.question-check details p { margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.question-check label { display: grid; gap: 7px; color: var(--muted); }
+.question-check textarea { width: 100%; min-width: 0; resize: vertical; border: 1px solid #c9d9d0; border-radius: 8px; background: #fff; padding: 10px; color: var(--forest); line-height: 1.7; }
+.question-check textarea:focus-visible { outline: 2px solid #8fb8a5; outline-offset: 2px; }
+.question-check-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.question-check-actions button { min-height: 36px; border: 1px solid #d4e1d9; border-radius: 7px; padding: 6px 12px; }
+.question-check-actions .question-check-primary { background: #edf5ef; color: #246242; border-color: #bbd4c5; }
+.question-check-original { display: block; padding: 8px 0 2px; color: #526e5c; font-size: 12px; }

@@ -1,0 +1,40 @@
+.answer-map-context { margin:16px 0 12px;padding:10px 12px;border:1px solid #dce5de;border-radius:9px;background:#f8faf7;color:#586e60;font-size:12px; }
+.answer-map-context.active { border-color:#bbd2c4;background:#f0f7f1; }
+.answer-map-context > div { display:flex;align-items:center;gap:7px;flex-wrap:wrap; }
+.answer-map-context button { display:inline-flex;align-items:center;gap:3px;color:#346747;font-size:11px;padding:3px 5px;border-radius:4px; }
+.answer-map-context button:hover { background:#dfece0; }
+.answer-map-context small { display:block;margin-top:5px;font-size:11px;line-height:1.6; }
+.answer-map-context .answer-cell-relation { margin:7px 0 0;font-size:11px;line-height:1.6; }
+.answer-citation.in-cell { background:#d8ebda;box-shadow:inset 0 -2px #5e926d; }
+.answer-citation.map-focused { background:#fff0ce;color:#915015;outline:1px solid #d6a458; }
+.answer-references li.in-cell { border-left:3px solid #63916e;padding-left:9px; }
+.answer-references li.map-focused { background:#fff8e9;border-radius:5px; }
+.answer-references .answer-cell-badge { display:inline-block;color:#36704a; }
+.globe-answer-context { display:flex;align-items:center;gap:6px;max-width:min(350px,65vw);padding:7px 9px;margin-bottom:10px;background:#f7faf5ed;border:1px solid #c8d9cc;border-radius:7px;font-size:11px; }
+.globe-answer-context span { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.globe-answer-context > svg,.globe-answer-context > button { flex-shrink:0; }
+.globe-answer-context > button { margin-left:auto;display:flex; }
+.fly-to-grid { display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#336b50;padding:4px 0 6px; }
+.entity-visualization { display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#52735d;padding:4px 0; }
+.entity-visualization small { margin:0 0 0 3px;display:inline;color:#849084;font-size:10px; }
+.entity-visualization-dialog { width:min(500px,calc(100vw - 32px));max-height:80dvh;box-sizing:border-box;overflow:auto;padding:25px;border:1px solid #cad9ce;border-radius:14px;color:#334d40;box-shadow:0 15px 75px #1d3e3b38;font-size:13px; }
+.entity-visualization-dialog::backdrop { background:#1e373f55; }
+.entity-visualization-dialog h3 { margin:0 25px 14px 0;font-size:18px; }
+.entity-visualization-dialog p { line-height:1.8; }
+.entity-visualization-dialog li { margin:12px 0;overflow-wrap:anywhere; }
+.entity-visualization-dialog li span { margin-right:8px;color:#748676;font-size:11px; }
+.entity-visualization-dialog a { color:#386e4b;text-decoration:underline; }
+.entity-visualization-dialog > button:last-child { padding:7px 12px;border-radius:5px;background:#e7f0e7; }
+.entity-visualization-dialog .dialog-close { position:absolute;right:15px;top:15px; }
+@media(max-width:600px) { .answer-map-context { padding:8px; }.globe-answer-context { max-width:calc(100vw - 90px); } }
+.answer-map-pin { position:absolute;transform:translate(-50%,-50%);z-index:2;width:23px;height:23px;display:grid;place-items:center;border-radius:50%;border:1.5px solid #fff;background:#326c55;color:white;font-size:10px;font-weight:650;box-shadow:0 1px 5px #234a4440; }
+.answer-map-pin:hover,.answer-map-pin.focused { background:#b2681a;outline:2px solid #f4ca80; }
+.globe-answer-context { display:block; }
+.globe-answer-summary { display:flex;align-items:center;gap:6px; }
+.globe-answer-summary > button { margin-left:auto;flex-shrink:0;display:flex; }
+.globe-answer-reference-list { display:flex;flex-wrap:wrap;gap:4px;margin-top:6px; }
+.globe-answer-reference-list button { padding:3px 5px;border:1px solid #d7cfea;border-radius:4px;color:#66508b;background:#f8f5fc;font-size:10px; }
+.globe-answer-reference-list button:hover,.globe-answer-reference-list button.focused { background:#fff0d4;color:#945214;border-color:#d6ab6a; }
+.answer-map-pin.range { width:auto;min-width:23px;padding:0 5px;border:1px dashed #7461a0;border-radius:5px;background:#f7f2ff;color:#66518c;font-weight:500; }
+.globe-answer-reference-list button.unlocated { color:#77857d;background:#f6f8f5;border-style:dashed;border-color:#ccd7cf; }
+.answer-map-context .answer-location-note { margin:6px 0;font-size:11px;line-height:1.7;color:#6f7965; }

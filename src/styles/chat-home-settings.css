@@ -1,0 +1,22 @@
+.chat-home-settings > details > summary {display:flex;align-items:center;gap:10px;padding:8px 0;color:#315d49;font-size:14px;cursor:pointer;list-style:none}
+.chat-home-settings > details > summary::-webkit-details-marker {display:none}
+.chat-home-settings > details > summary span {margin-left:auto;color:#738579;font-size:12px}
+.chat-home-settings > details[open] > summary > svg {transform:rotate(180deg)}
+.chat-home-help {font-size:13px;line-height:1.7;color:#61766a;margin:10px 0 16px}
+.chat-home-settings fieldset {margin:0;padding:0;min-width:0;border:0}
+.chat-home-settings ol {list-style:none;margin:0;padding:0;display:grid;gap:16px}
+.chat-home-question-tools {display:flex;align-items:center;justify-content:space-between;gap:12px}
+.chat-home-question-tools > div {display:flex;gap:2px}
+.chat-home-settings .chat-home-question-tools label {font-size:12px;color:#61766a;padding:4px 0}
+.chat-home-settings .chat-home-question-tools button {padding:6px}
+.chat-home-settings textarea {display:block;box-sizing:border-box;width:100%;min-height:80px;resize:vertical;padding:10px 12px;border:1px solid #ccdacf;border-radius:8px;background:#fbfcfa;color:inherit;font:inherit;font-size:14px;line-height:1.65}
+.chat-home-settings textarea:focus {outline:2px solid #9ebcab;outline-offset:1px}
+.chat-home-settings ol + button {margin-top:14px}
+.chat-home-settings button:disabled {opacity:.4;cursor:default}
+.chat-home-settings button:disabled:hover {background:transparent}
+.chat-home-settings .settings-save:disabled:hover {background:#17674c}
+.chat-home-actions {display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:20px}
+.chat-home-actions span {color:#256449;font-size:13px}
+.chat-home-settings [role=alert] {font-size:13px;line-height:1.7;color:#9c3f2f}
+.suggested-queries-status {font-size:13px;color:#6b7f72;padding:12px 0}
+.suggested-queries-status button {color:#276348;margin-left:8px;text-decoration:underline}

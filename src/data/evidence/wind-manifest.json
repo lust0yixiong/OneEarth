@@ -1,0 +1,288 @@
+{
+  "id": "gfs-wind",
+  "model": "NCEP GFS",
+  "source": "NOAA / NCEP NOMADS",
+  "sourceUrl": "https://nomads.ncep.noaa.gov/gribfilter.php?ds=gfs_1p00",
+  "referenceTime": "2026-11-06T00:00:00Z",
+  "width": 360,
+  "height": 181,
+  "lonStart": 0,
+  "latStart": 90,
+  "dx": 1,
+  "dy": 1,
+  "scale": 0.01,
+  "units": "m/s",
+  "encoding": "interleaved-int16-le",
+  "binaryUrl": "/visualizations/gfs/wind.bin",
+  "binaryBytes": 1563840,
+  "sha256": "20511a50917ad0ab6749f1717694c3e66a44d6d2fd7ae7990d19f38a732edee0",
+  "levels": [
+    {
+      "id": "10m",
+      "label": "近地面 10 m"
+    },
+    {
+      "id": "250hPa",
+      "label": "250 hPa"
+    }
+  ],
+  "originals": [
+    {
+      "file": "/visualizations/gfs/f000.grib2",
+      "url": "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_1p00.pl?file=gfs.t00z.pgrb2.1p00.f000&lev_10_m_above_ground=on&lev_250_mb=on&var_UGRD=on&var_VGRD=on&dir=%2Fgfs.20261106%2F00%2Fatmos",
+      "sha256": "d5ff8b0232f74b3ebe6b4e6ef76b8af8e4b668bbb6d9d77f1565974b84dbb95c"
+    },
+    {
+      "file": "/visualizations/gfs/f006.grib2",
+      "url": "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_1p00.pl?file=gfs.t00z.pgrb2.1p00.f006&lev_10_m_above_ground=on&lev_250_mb=on&var_UGRD=on&var_VGRD=on&dir=%2Fgfs.20261106%2F00%2Fatmos",
+      "sha256": "492474c2f0d78a816ec75fabd34b3fbfb6933f5f92d0e232f19d726f3966f579"
+    },
+    {
+      "file": "/visualizations/gfs/f012.grib2",
+      "url": "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_1p00.pl?file=gfs.t00z.pgrb2.1p00.f012&lev_10_m_above_ground=on&lev_250_mb=on&var_UGRD=on&var_VGRD=on&dir=%2Fgfs.20261106%2F00%2Fatmos",
+      "sha256": "55e399706aa4451e7ca30627f9cda5b52bd32b1894b0192367d34afe425b3285"
+    }
+  ],
+  "frames": [
+    {
+      "id": "10m-f000",
+      "level": "10m",
+      "forecastHour": 0,
+      "validTime": "2026-11-06T00:00:00Z",
+      "byteOffset": 0,
+      "valueCount": 130320,
+      "minSpeed": 0.02,
+      "maxSpeed": 33.36,
+      "samples": [
+        [
+          0,
+          0,
+          -0.48,
+          5.49,
+          5.51
+        ],
+        [
+          105,
+          30,
+          -1.18,
+          0.03,
+          1.18
+        ],
+        [
+          180,
+          45,
+          13.27,
+          -7.63,
+          15.31
+        ],
+        [
+          -60,
+          -30,
+          -2.45,
+          -1.25,
+          2.75
+        ]
+      ]
+    },
+    {
+      "id": "250hPa-f000",
+      "level": "250hPa",
+      "forecastHour": 0,
+      "validTime": "2026-11-06T00:00:00Z",
+      "byteOffset": 260640,
+      "valueCount": 130320,
+      "minSpeed": 0.04,
+      "maxSpeed": 104.7,
+      "samples": [
+        [
+          0,
+          0,
+          -6.09,
+          12.76,
+          14.14
+        ],
+        [
+          105,
+          30,
+          45.51,
+          8.96,
+          46.38
+        ],
+        [
+          180,
+          45,
+          78.81,
+          -64.04,
+          101.55
+        ],
+        [
+          -60,
+          -30,
+          54.91,
+          5.16,
+          55.15
+        ]
+      ]
+    },
+    {
+      "id": "10m-f006",
+      "level": "10m",
+      "forecastHour": 6,
+      "validTime": "2026-11-06T06:00:00Z",
+      "byteOffset": 521280,
+      "valueCount": 130320,
+      "minSpeed": 0.04,
+      "maxSpeed": 30.54,
+      "samples": [
+        [
+          0,
+          0,
+          0.24,
+          4.08,
+          4.09
+        ],
+        [
+          105,
+          30,
+          -0.99,
+          1.18,
+          1.54
+        ],
+        [
+          180,
+          45,
+          13.33,
+          -7.35,
+          15.22
+        ],
+        [
+          -60,
+          -30,
+          -1.75,
+          -2.58,
+          3.12
+        ]
+      ]
+    },
+    {
+      "id": "250hPa-f006",
+      "level": "250hPa",
+      "forecastHour": 6,
+      "validTime": "2026-11-06T06:00:00Z",
+      "byteOffset": 781920,
+      "valueCount": 130320,
+      "minSpeed": 0.07,
+      "maxSpeed": 109.13,
+      "samples": [
+        [
+          0,
+          0,
+          -4.03,
+          11.87,
+          12.54
+        ],
+        [
+          105,
+          30,
+          43.57,
+          10.67,
+          44.86
+        ],
+        [
+          180,
+          45,
+          71.27,
+          -52.93,
+          88.77
+        ],
+        [
+          -60,
+          -30,
+          52.57,
+          2.37,
+          52.62
+        ]
+      ]
+    },
+    {
+      "id": "10m-f012",
+      "level": "10m",
+      "forecastHour": 12,
+      "validTime": "2026-11-06T12:00:00Z",
+      "byteOffset": 1042560,
+      "valueCount": 130320,
+      "minSpeed": 0.02,
+      "maxSpeed": 29.38,
+      "samples": [
+        [
+          0,
+          0,
+          0.05,
+          3.95,
+          3.95
+        ],
+        [
+          105,
+          30,
+          -0.66,
+          1.95,
+          2.06
+        ],
+        [
+          180,
+          45,
+          11.22,
+          -5.67,
+          12.57
+        ],
+        [
+          -60,
+          -30,
+          -4.53,
+          -2.89,
+          5.37
+        ]
+      ]
+    },
+    {
+      "id": "250hPa-f012",
+      "level": "250hPa",
+      "forecastHour": 12,
+      "validTime": "2026-11-06T12:00:00Z",
+      "byteOffset": 1303200,
+      "valueCount": 130320,
+      "minSpeed": 0.07,
+      "maxSpeed": 105.71,
+      "samples": [
+        [
+          0,
+          0,
+          -5.44,
+          11.34,
+          12.58
+        ],
+        [
+          105,
+          30,
+          41.36,
+          14.44,
+          43.81
+        ],
+        [
+          180,
+          45,
+          60.56,
+          -34.16,
+          69.53
+        ],
+        [
+          -60,
+          -30,
+          50.66,
+          2.84,
+          50.74
+        ]
+      ]
+    }
+  ]
+}

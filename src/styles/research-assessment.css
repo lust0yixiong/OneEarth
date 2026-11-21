@@ -1,0 +1,113 @@
+.research-assessment {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #cfdedc;
+  border-radius: 8px;
+  background: #f8fbfa;
+  color: #23413a;
+}
+.research-assessment header,
+.assessment-row > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.research-assessment header {
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+.research-assessment header h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.research-assessment header strong {
+  font-size: 12px;
+  color: #235e4d;
+}
+.research-assessment .assessment-summary {
+  margin: 6px 0 9px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.research-assessment summary {
+  cursor: pointer;
+}
+.research-assessment .assessment-row {
+  border-top: 1px solid #dce6e2;
+}
+.assessment-row > summary {
+  list-style: none;
+  padding: 6px 0;
+  font-size: 12px;
+  font-weight: 550;
+}
+.assessment-row > summary::-webkit-details-marker {
+  display: none;
+}
+.assessment-row > summary > span {
+  flex: 1;
+}
+.assessment-row > summary small,
+.assessment-roles > summary span {
+  color: #526c62;
+  font-size: 11px;
+}
+.assessment-row[open] > summary svg {
+  transform: rotate(90deg);
+}
+.assessment-row p {
+  margin: 2px 0 7px;
+  white-space: pre-line;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.assessment-sources {
+  display: grid;
+  justify-items: start;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+.assessment-sources button {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  text-align: left;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: #175b6c;
+  font-size: 11px;
+  cursor: pointer;
+}
+.assessment-sources button:hover {
+  text-decoration: underline;
+}
+.assessment-sources svg {
+  flex-shrink: 0;
+  align-self: center;
+}
+.assessment-roles > summary {
+  border-top: 1px solid #cbdcd5;
+  padding: 8px 0 0;
+  font-size: 12px;
+}
+.assessment-roles > .assessment-row {
+  margin-left: 9px;
+}
+.assessment-source {
+  min-width: 0;
+}
+.assessment-source-detail {
+  padding: 6px 9px;
+  border-left: 2px solid #b9cfc5;
+}
+.assessment-source-detail strong {
+  font-size: 11px;
+}
+.assessment-source-detail a,
+.assessment-source-detail button {
+  display: block;
+  font-size: 11px;
+  margin: 4px 0;
+  color: #175b6c;
+}

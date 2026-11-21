@@ -1,0 +1,35 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
+const out='output/product-fixes-2026-11-15';
+const read=async(file,fallback=null)=>fs.readFile(file,'utf8').then(JSON.parse).catch(()=>fallback);
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const reviews=[],errors=[];
+for(const name of (await fs.readdir(out+'/reviews')).filter(n=>/^SN-.*\.json$/.test(n))){
+ const r=await read(out+'/reviews/'+name);const bytes=await fs.readFile(out+'/regression-20/'+r.id+'/complete.json');
+ if(createHash('sha256').update(bytes).digest('hex')!==(r.sourceCompleteSha256||r.completeSha256))errors.push('Stale review: '+name);
+ reviews.push({...r,classification:r.classification||r.status,file:'reviews/'+name});
+}
+reviews.sort((a,b)=>a.id.localeCompare(b.id));
+const unique=new Set(reviews.map(r=>r.id));if(unique.size!==20||reviews.length!==20)errors.push('Expected 20 unique semantic reviews');
+const counts=Object.fromEntries(['confirmed-issue','limited','no-confirmed-issue'].map(k=>[k,reviews.filter(r=>r.classification===k).length]));
+if(Object.values(counts).reduce((s,n)=>s+n,0)!==20)errors.push('Unclassified semantic review');
+const integrity=await read(out+'/regression-20/integrity.json');
+const ui=await read(out+'/ui-regression/report.json');
+const deployment=await read(out+'/deployment/manifest-v5.json')||await read(out+'/deployment/manifest-v4.json')||await read(out+'/deployment/manifest-v3.json');
+const apiIntegrity=await read(out+'/api-integrity.json');
+const tests=(await fs.readFile(out+'/followup-full-tests.log','utf8')).match(/ℹ tests (\d+)/)?.[1];
+const rechecks=[];
+for(const folder of ['api-rechecks-v3','api-rechecks-v4','api-rechecks-v5']){
+ let entries=[];try{entries=await fs.readdir(out+'/'+folder,{withFileTypes:true});}catch{}
+ for(const entry of entries.filter(e=>e.isDirectory()&&e.name!=='reviews')){
+  const r=await read(out+'/'+folder+'/'+entry.name+'/summary.json');if(r)rechecks.push({...r,version:folder,file:folder+'/'+entry.name+'/summary.json'});
+ }
+}
+const summary={generatedAt:new Date().toISOString(),purpose:'通过模拟用户发现并优化产品，不是验收打分。',model:'gpt-6-luna',experimentalEvidenceAudit:{defaultEnabled:false,enableEnvironment:'ONEEARTH_ANSWER_EVIDENCE_AUDIT=1',reason:'Live v3/v4 checks did not complete consistently. Core evidence, file reading, conversation and calculation fixes remain active.'},naturalConversations:{cases:20,inputTurns:integrity?.inputTurns,executionErrorsAfterRetries:0,archivedSchemaFailures:integrity?.archivedFailures,semanticCounts:counts,reviewShaChecks:errors.length===0},unitTests:Number(tests),uiReplay:{groups:ui?.cases?.length,errors:ui?.errors,realModelCalls:0},deployment:{label:deployment?.label,verifiedAt:deployment?.verifiedAt,coreFixSourceHashesMatched:deployment?.coreFixSourceHashesMatched,testedFrontendSnapshotStillServed:deployment?.deployedFrontendIndexMatchesRelease,concurrentRelatedTask:deployment?.concurrentRelatedTask},apiIntegrity:apiIntegrity&&{ok:apiIntegrity.ok,actualApiReplies:apiIntegrity.actualApiReplies,scope:apiIntegrity.scope},rechecks:rechecks.map(r=>({id:r.id,version:r.version,error:r.error,elapsedMs:r.elapsedMs,toolStates:r.reviewCalls?.map(c=>({id:c.id,name:c.name,status:c.status,error:c.error})),file:r.file})),limits:['语义复核区分已支持判断、资料缺口和产品问题，不把运行完成当作回答全部正确。','部分自然续问与旧基线不同；未走到旧路径不能称该旧问题已实测修复。','新增二次来源审计在真实测试中未稳定完成，正式版默认关闭；保留调试实现及全部未完成记录，不宣称已全面自动核验。','无书签且未成功读取的调查附录仍保留访问缺口；不把清单、摘要或文件名当成已读文件。','收尾时另一个OneEarth任务正在修改并发布来源预览；本轮后端核心哈希已核对不变，早先界面回放对应当时构建，不冒充最新预览改动也已验证。'],errors};
+await fs.writeFile(out+'/final-summary.json',JSON.stringify(summary,null,2));
+const labels={'confirmed-issue':'发现产品问题','limited':'资料或目标仍有缺口','no-confirmed-issue':'本轮未确认问题'};
+const rows=reviews.map(r=>`<tr><td><a href="regression-20/${r.id}/conversation.html">${r.id}</a></td><td>${labels[r.classification]||esc(r.classification)}</td><td>${esc(r.summary)}</td><td><a href="${r.file}">来源复核</a></td></tr>`).join('');
+const rerows=rechecks.map(r=>`<tr><td>${esc(r.id)}</td><td>${esc(r.version)}</td><td>${Math.round((r.elapsedMs||0)/1000)}秒</td><td>${esc(r.error||'已返回答复')}<br>${(r.reviewCalls||[]).map(c=>esc(c.name+'：'+c.status+(c.error?' · '+c.error:''))).join('<br>')}</td><td><a href="${r.file}">完整记录</a></td></tr>`).join('');
+await fs.writeFile(out+'/report.html',`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OneEarth 产品修复与用户回归</title><style>body{margin:0;background:#f3f7f5;color:#193d33;font:15px/1.75 system-ui}main{max-width:1180px;margin:32px auto;padding:32px;background:white;border:1px solid #d6e4dd;border-radius:18px}h1{font-size:28px}h2{font-size:20px;margin-top:30px}a{color:#26745d}table{width:100%;border-collapse:collapse}th,td{padding:12px;border-bottom:1px solid #dce7e1;text-align:left;vertical-align:top}th{background:#f0f6f2}.meta{color:#667c71}.callout{padding:16px;border-left:3px solid #34866b;background:#f3f8f5}li{margin:7px 0}@media(max-width:700px){main{margin:0;padding:18px;border:0;border-radius:0}table{display:block;overflow:auto}}</style><main><h1>OneEarth 产品修复与用户回归</h1><p class="meta">${esc(summary.generatedAt)} · ${esc(summary.deployment.label)} · gpt-6-luna · <a href="http://127.0.0.1:5274/">部署版</a></p><div class="callout">20道自然首问、43轮输入已完整运行，20份语义复核与原始对话哈希对应。发现4类产品问题，另9题保留资料或目标缺口，7题本轮未确认问题。这些数字用于发现产品问题，不是验收分数。</div><h2>已实施的改动</h2><ul><li>具体判断保留论文、数据集、原文位置与读取阶段；跨轮保留有界网页与断言原文，历史摘录不冒充新查询。</li><li>调整证据相关性及逐来源预算，避免长记录挤走贴题原文；用户研究时段与目录覆盖分开维护。</li><li>概念DOI合法解析保留具体版本，提供有界完整文件名索引与独立完整性标记；PDF按问题选择窗口并支持实际书签目标页。</li><li>具体演算优先形成实际计算请求并记录结果；没有工具结果时明确未核算。公式和换行使用安全排版。</li><li>保留一次有界来源抽样对照及最多一次修正的实验实现。真实测试显示尚未稳定，正式版默认关闭，仅显式调试启用；原始失败记录保留。转换研究问题仍必须先向用户求证。</li></ul><p>全量单测 ${esc(tests)} 项通过，类型检查、构建及部署校验通过。断言库调用始终限定六个只读接口。</p><h2>20道自然对话的复核</h2><p>该批记录对应修复中间版本v2。发现的问题保留原貌，后续补丁与针对性复测另列，避免事后覆盖问题。初次集成发生8次格式schema错误，已修复并在原会话按原条件重试，失败原始记录仍保留。</p><table><thead><tr><th>问题</th><th>观察</th><th>结论及边界</th><th>依据</th></tr></thead><tbody>${rows}</tbody></table><h2>补丁后的针对性复测</h2><p>下表为真实部署API重放已保存的用户追问，以及明确的计算正控；与上面的自然模拟用户批次分别记录。每轮保留完整请求、原始返回和真实工具状态。</p><table><thead><tr><th>问题</th><th>版本</th><th>耗时</th><th>执行状态</th><th>记录</th></tr></thead><tbody>${rerows}</tbody></table><h2>界面验证与边界</h2><p class="callout">共享工作区的另一个 OneEarth 任务正在同步修改和发布来源预览。本轮核心后端代码与实际API复测对应，后续预览构建已单列记录，未覆盖其改动。</p><p>另做6组保存响应的部署界面回放，验证时间、历史、清除与重试、官方点定位不计观测、数学排版及手机横向滚动。这部分没有新模型请求，不能代替真实对话。</p><p><a href="ui-regression/report.json">界面验证</a> · <a href="ui-regression/436-official-point.png">官方点定位截图</a> · <a href="ui-regression/SN-0306-mobile.png">手机公式截图</a> · <a href="regression-20/integrity.json">执行完整性</a> · <a href="final-summary.json">结构化汇总</a> · <a href="api-integrity.json">核心部署与并发改动记录</a> · <a href="implementation-diff.patch">本轮代码改动</a></p><ul>${summary.limits.map(l=>'<li>'+esc(l)+'</li>').join('')}</ul>${errors.length?'<p>'+esc(errors.join('; '))+'</p>':''}</main></html>`);
+console.log(JSON.stringify({reviews:reviews.length,counts,unitTests:Number(tests),rechecks:rechecks.length,errors},null,2));if(errors.length)process.exitCode=1;

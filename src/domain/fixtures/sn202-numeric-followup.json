@@ -1,0 +1,156 @@
+{
+  "provenance": "Saved real SN-0202 turn-2 response, research-intent-8a0652a4; public assertion source only",
+  "sourceRecord": "/Users/yxmac_mini/Library/CloudStorage/SynologyDrive-YXMacmini/工作文件/之江实验室/2026/个人/AI/Projects/TestProjects/oneearth-app/output/scinet-phase2-201-400/shard-0/SN-0202/turn-2/response.json.gz",
+  "question": "我还没定具体数据或指标。你说的约4%那个例子，比较的到底是什么？能顺着来源追到输入数据和计算步骤吗？",
+  "conversationContext": "用户原先关注同一批气候数据在不同缺测处理或聚合方法下结论会变化多少，以及从原始资料到最终指标可追溯的流程。本轮明确尚未选定具体数据或指标，要求核查助手此前提到的约4%例子：究竟比较什么，能否沿来源追到输入数据与计算步骤。此前助手将该说法归于《Indicators of Global Climate Change 2022》，称原始序列改为7年滑动平均后响应系数点估计约增加4%；该表述及来源对应关系均需核验，不能视为已证实事实。来源索引含该论文的断言库标识 earthnano:017261f24bf22487821bf24a2260634ef71347edf3540128b3124f280d1b60d4。另有IGCC 2023代码版本 https://github.com/ClimateIndicator/data/tree/v2024.05.29b 和归档 DOI 10.5281/zenodo.11388387，但不能直接当作2022示例的输入或复现版本，需核对关联。用户未限定研究区域、年份或月份，也未将推荐资料确认为研究数据。",
+  "record": {
+    "dsKey": "doi:10.5281/zenodo.8000192",
+    "need": {
+      "name": "论文研究数据",
+      "product": "Indicators of Global Climate Change 2022",
+      "type": "论文研究数据",
+      "detail": "库内关联 2 篇论文。本页用法示例来自《Indicators of Global Climate Change 2022: annual update of large-scale indicators of the state of the climate system and…》。Serves as the open-data release containing all updated climate indicator values, code links and metadata for the IGCC dashboard and public traceability.",
+      "status": "有论文用法记录",
+      "source": "EarthNano 论文断言库",
+      "datasetId": "doi:10.5281/zenodo.8000192",
+      "url": "https://doi.org/10.5281/zenodo.8000192",
+      "tabs": [
+        {
+          "kind": "table",
+          "label": "论文用法（本页）",
+          "columns": [
+            "论文",
+            "角色与用途",
+            "变量",
+            "研究背景",
+            "论文 ID",
+            "文内数据集 ID",
+            "论文 DOI"
+          ],
+          "rows": [
+            [
+              "Indicators of Global Climate Change 2022: annual update of large-scale indicators of the state of the climate system and…",
+              "other · Serves as the open-data release containing all updated climate indicator values, code links and metadata for the IGCC dashboard and public traceability.",
+              "",
+              "Global ; Updated indicator time series through 2022 ; Pre-industrial baselines (1750 and 1850-1900) through 2022; emissions records 1970-2022 (with 2022 project…",
+              "1b509dd2-17ce-4ee1-bfbd-53d0197a35ae",
+              "D27",
+              ""
+            ],
+            [
+              "Carbon permit allocation, carbon neutrality time and climate debt for one country under equal environmental human rights",
+              "primary_observation_source · One of four observed GMT anomaly series used to construct the multi-dataset mean GMT series, quantify TCRE, and validate the CCM.\nvalue_input · IGCC anomaly series enters the multi-dataset GMT mean.\ntarget_or_response · Multi-dataset mean GMT increase is the dependent variable for the TCRE regression.\ntarget_or_response · The mean GMT series is smoothed and re-regressed to test robustness.",
+              "IGCC annual GMT anomaly, degC ; Multi-dataset mean GMT increase series (four datasets), degC ; Transient climate response to cumulative CO2 emissions (GMT incre…",
+              "Global ; 1850-2023 ; Global; country- and territory-level analyses with case emphasis on the USA, Canada, Russia, the UK, Germany, Australia (C6), China, India,…",
+              "aa99ed86-62de-4cf5-a118-60472287628e",
+              "D6",
+              ""
+            ]
+          ]
+        },
+        {
+          "kind": "text",
+          "label": "原文 · Indicators of Global Climate Change 2022: annual update of large-scale indicators of the state of the climate system and…",
+          "before": "Indicators of Global Climate Change 2022: annual update of large-scale indicators of the state of the climate system and…",
+          "after": "论文 1b509dd2-17ce-4ee1-bfbd-53d0197a35ae · D27 · doi:10.5281/zenodo.8000192",
+          "quote": "B0062 · Indicators of Global Climate Change 2022: annual update of large-scale indicators of the state of the climate system and human influence\nThe purpose of this effort, grounded in an open data, open science approach, is to make annually updated reliable global climate indicators available in the public domain (https://doi.org/10.5281/zenodo.8000192, Smith et al., 2023a).\n\nB0102 · 1 Introduction\nAn important purpose of the exercise is to make these indicators widely available and understood. Plans for a web dashboard are discussed in Sect. 10 and code and data availability in Sect. 11, and conclusions are presented in Sect. 12. Data are available at https://doi.org/10.5281/zenodo.8000192 (Smith et al., 2023a).\n\nB0530 · 11 Code and data availability\nThe carbon budget calculation is available from https://github.com/Rlamboll/AR6CarbonBudgetCalc (Lamboll and Rogelj, 2023). The code and data used to produce other indicators are available in repositories under https://github.com/ClimateIndicator (Smith et al., 2023b). All data are available from https://doi.org/10.5281/zenodo.8000192 (Smith et al., 2023a). Data are provided under the CC-BY 4.0 Licence.\n\nB0813 · References\nSmith, C., Walsh, T., Forster, P. M., Gillett, N., Hauser, M., Lamb, W., Lamboll, R., Palmer, M., Ribes, A., Schumacher, D., Seneviratne, S., Trewin, B., and von Schuckmann, K.: Indicators of Global Climate Change 2022 (v2023.06.02), Zenodo [data set], https://doi.org/10.5281/zenodo.8000192, 2023a."
+        },
+        {
+          "kind": "text",
+          "label": "原文 · Carbon permit allocation, carbon neutrality time and climate debt for one country under equal environmental human rights",
+          "before": "Carbon permit allocation, carbon neutrality time and climate debt for one country under equal environmental human rights",
+          "after": "论文 aa99ed86-62de-4cf5-a118-60472287628e · D6 · doi:10.5281/zenodo.8000192",
+          "quote": "B0098 · 2.1 Datasets\n2021), Berkeley Annual Global Average Temperature (Rohde and Hausfather 2020), and IGCC (Indicators of Global Climate Change) (Forster et al.\n\nB0107 · 2.1 Datasets\nThe IGCC GMT is an average of four sources: Had CRUT5, NOAAGlobalTemp, Berkeley Earth and Kadow et al.\n\nB0267 · 4 Relationship between anthropogenic emissions and global warming\nLower and Upper here are 95\\(\\%\\) confidence lower and upper limits. The GMT increase is the mean of the four temperature datasets. The 7-point smoothing is the result of 7-yr running mean time series\n\nB0252 · 4 Relationship between anthropogenic emissions and global warming\nEach 1000 Gt C of cumulative \\(CO_{2}\\) emissions is assessed to likely cause a 0.49 \\(\\degree\\)C increase in GMT with a range [0.25–0.74]\\(\\degree\\)C for the raw time series or a 0.51 \\(\\degree\\)C with a range [0.34–0.68]\\(\\degree\\)C for the 7-yr running mean time series (Table 1), slightly higher than a 0.45 \\(\\degree\\)C with a range [0.27–0.63]\\(\\degree\\)C of the IPCC AR6 (IPCC 2021).\n\nB0255 · 4 Relationship between anthropogenic emissions and global warming\nFor instance, each 1000 Gt C of cumulative \\(CO_{2}\\) emissions is assessed to likely cause 0.51 \\(\\degree\\)C and 0.51 \\(\\degree\\)C increases in GMT with ranges [0.33–0.69]\\(\\degree\\)C and [0.35–0.67]\\(\\degree\\)C for the 5-yr and 9-yr running mean time series, respectively.\n\nB0298 · 5 The CCM and theoretical foundation for the CPA of one country under equal EHRs\nThe simulated GMT of the CCM well demonstrates the historical growth changes of the observed GMT (Fig. 4b), also reflecting that the long-term warming changes in the GMT are the result of cumulative human emissions. In 2021–2023, the observed GMTs relative to 1850–1900 were \\([1.03–1.22]^{\\circ}C\\) , \\([1.06–1.26]^{\\circ}C\\) , and \\([1.35–1.55]^{\\circ}C\\) , respectively, with the simulated values corresponding to \\(1.19^{\\circ}C\\) , \\(1.21^{\\circ}C\\) , and \\(1.23^{\\circ}C\\), respectively. The significant interannual variability of the 2023 El Niño event contributes significantly to the observed increase in the GMT in 2023 (Raghuraman et al. 2024).\n\nB0328 · 6.1 Basic metrics\nThe EPC clearly eliminates intergenerational and regional differences. In theory, it does not change with time and region. This is the objective basis for CPA within one country or region (national CPA for short) under equal EHRs. According to the results mentioned above, if set \\(T = 2^{\\circ}C\\) , the corresponding global cumulative \\(CO_{2}\\) emissions \\(C_{TW}\\)will be 4000 Gt C, respectively (Table 1). Below, we will calculate and discuss based on this standard.\n\nB0333 · 6.1 Basic metrics\n\\[ R_{\\mathbb{T}}(t)=\\mathbb{C}_{\\mathbb{T}}-C(t),\\]"
+        },
+        {
+          "kind": "table",
+          "label": "论文中的数据组合",
+          "columns": [
+            "共同使用的数据集",
+            "论文数",
+            "组合数",
+            "数据集标识"
+          ],
+          "rows": [
+            [
+              "The Global Carbon Project's fossil CO2 emissions dataset",
+              1,
+              5,
+              "doi:10.5281/zenodo.13981696"
+            ],
+            [
+              "Trends in globally-averaged CO2 determined from NOAA Global Monitoring Laborator…",
+              1,
+              2,
+              "doi:10.15138/9n0h-zh07"
+            ]
+          ]
+        },
+        {
+          "kind": "table",
+          "label": "官方元数据",
+          "columns": [
+            "字段",
+            "原始值",
+            "元数据来源"
+          ],
+          "rows": [
+            [
+              "title",
+              "Indicators of Global Climate Change 2022",
+              "datacite"
+            ],
+            [
+              "publisher",
+              "{'name': 'Zenodo'}",
+              "datacite"
+            ],
+            [
+              "year",
+              "2023",
+              "datacite"
+            ],
+            [
+              "version",
+              "v2023.06.02",
+              "datacite"
+            ],
+            [
+              "resource_type",
+              "Software",
+              "datacite"
+            ],
+            [
+              "description",
+              "This dataset contains standardised data for figures and results used in the Indicators of Global Climate Change paper: Forster, P. M., Smith, C. J., Walsh, T., Lamb, W. F., Lamboll, R., Hauser, M., Ribes, A., Rosen, D., Gillett, N., Palmer, M. D., Rogelj, J., von Schuckmann, K., Seneviratne, S. I., Trewin, B., Zhang, X., Allen, M., Andrew, R., Birt, A., Borger, A., Boyer, T., Broersma, J. A., Cheng, L., Dentener, F., Friedlingstein, P., Gutiérrez, J. M., Gütschow, J., Hall, B., Ishii, M., Jenkins, S., Lan, X., Lee, J.-Y., Morice, C., Kadow, C., Kennedy, J., Killick, R., Minx, J. C., Naik, V., Peters, G. P., Pirani, A., Pongratz, J., Schleussner, C.-F., Szopa, S., Thorne, P., Rohde, R., Rojas Corradi, M., Schumacher, D., Vose, R., Zickfeld, K., Masson-Delmotte, V., and Zhai, P.: Indicators of Global Climate Change 2022: annual update of large-scale indicators of the state of the climate system and human influence, Earth Syst. Sci. Data, 15, 2295–2327, https://doi.org/10.5194/essd-15-2295-2023, 2023 The below table details the author(s) of each dataset contained within the repository, and their homepages. Dataset Author(s) Original code repository Attribution of historical warming 18…",
+              "datacite"
+            ],
+            [
+              "temporal",
+              "{\"date_type\":\"Issued\",\"begin\":\"2023-06-02\",\"end\":null}",
+              "datacite"
+            ],
+            [
+              "rights",
+              "Open Access",
+              "datacite"
+            ]
+          ]
+        }
+      ],
+      "profile": {
+        "role": "data",
+        "spatial": "coverage",
+        "coverage": "官方元数据未提供可定位范围",
+        "areaBasis": "bounding-box",
+        "access": "通过数据集 DOI 查看发布方记录",
+        "limitation": "论文研究区和研究时段见对应的用法记录。"
+      }
+    },
+    "papers": 2,
+    "points": [],
+    "paperTitle": "Indicators of Global Climate Change 2022: annual update of large-scale indicators of the state of the climate system and…",
+    "studyContext": "Global ; Updated indicator time series through 2022 ; Pre-industrial baselines (1750 and 1850-1900) through 2022; emissions records 1970-2022 (with 2022 project…",
+    "id": "earthnano:017261f24bf22487821bf24a2260634ef71347edf3540128b3124f280d1b60d4"
+  }
+}

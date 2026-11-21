@@ -1,0 +1,297 @@
+{
+  "provenance": "Saved actual SN0379 v2 turn1 official API response, no new source request",
+  "record": 12779975,
+  "doi": "10.5281/zenodo.12779975",
+  "files": [
+    {
+      "key": "CLCD_v01_2022_albert.tif",
+      "size": 803510579
+    },
+    {
+      "key": "CLCD_v01_2023_albert.tif",
+      "size": 790333470
+    },
+    {
+      "key": "CLCD_v01_2021_albert_province.zip",
+      "size": 834981074
+    },
+    {
+      "key": "CLCD_v01_2022_albert_province.zip",
+      "size": 826180317
+    },
+    {
+      "key": "CLCD_v01_2023_albert_province.zip",
+      "size": 813021774
+    },
+    {
+      "key": "CLCD_v01_2007_albert_province.zip",
+      "size": 816136494
+    },
+    {
+      "key": "CLCD_v01_2019_albert_province.zip",
+      "size": 834350524
+    },
+    {
+      "key": "CLCD_v01_2020_albert_province.zip",
+      "size": 833415508
+    },
+    {
+      "key": "CLCD_v01_2018_albert_province.zip",
+      "size": 834461835
+    },
+    {
+      "key": "CLCD_v01_2006_albert_province.zip",
+      "size": 814976524
+    },
+    {
+      "key": "CLCD_v01_2001_albert_province.zip",
+      "size": 819507257
+    },
+    {
+      "key": "CLCD_v01_1990_albert_province.zip",
+      "size": 868633524
+    },
+    {
+      "key": "CLCD_v01_1991_albert_province.zip",
+      "size": 855589030
+    },
+    {
+      "key": "CLCD_v01_1995_albert_province.zip",
+      "size": 826567348
+    },
+    {
+      "key": "CLCD_v01_2013_albert_province.zip",
+      "size": 826794924
+    },
+    {
+      "key": "CLCD_v01_2000_albert_province.zip",
+      "size": 820718406
+    },
+    {
+      "key": "CLCD_v01_1996_albert_province.zip",
+      "size": 822119750
+    },
+    {
+      "key": "CLCD_v01_1985_albert_province.zip",
+      "size": 903344195
+    },
+    {
+      "key": "CLCD_v01_1997_albert_province.zip",
+      "size": 820594760
+    },
+    {
+      "key": "CLCD_v01_1992_albert_province.zip",
+      "size": 844952635
+    },
+    {
+      "key": "CLCD_v01_1993_albert_province.zip",
+      "size": 835703060
+    },
+    {
+      "key": "CLCD_v01_1999_albert_province.zip",
+      "size": 821086198
+    },
+    {
+      "key": "CLCD_v01_1994_albert_province.zip",
+      "size": 830297405
+    },
+    {
+      "key": "CLCD_v01_1998_albert_province.zip",
+      "size": 819572740
+    },
+    {
+      "key": "CLCD_v01_2008_albert_province.zip",
+      "size": 817077274
+    },
+    {
+      "key": "CLCD_v01_2009_albert_province.zip",
+      "size": 818474212
+    },
+    {
+      "key": "CLCD_v01_2003_albert_province.zip",
+      "size": 816673374
+    },
+    {
+      "key": "CLCD_v01_2005_albert_province.zip",
+      "size": 814989285
+    },
+    {
+      "key": "CLCD_v01_2017_albert_province.zip",
+      "size": 836618878
+    },
+    {
+      "key": "CLCD_v01_2004_albert_province.zip",
+      "size": 814527374
+    },
+    {
+      "key": "CLCD_v01_2016_albert_province.zip",
+      "size": 834072377
+    },
+    {
+      "key": "CLCD_v01_2015_albert_province.zip",
+      "size": 833157330
+    },
+    {
+      "key": "CLCD_v01_2012_albert_province.zip",
+      "size": 820292721
+    },
+    {
+      "key": "CLCD_v01_2011_albert_province.zip",
+      "size": 818634067
+    },
+    {
+      "key": "CLCD_v01_2010_albert_province.zip",
+      "size": 818711165
+    },
+    {
+      "key": "CLCD_classificationsystem.xlsx",
+      "size": 9440
+    },
+    {
+      "key": "CLCD_v01_1995_albert.tif",
+      "size": 803840441
+    },
+    {
+      "key": "CLCD_v01_2006_albert.tif",
+      "size": 792304599
+    },
+    {
+      "key": "CLCD_v01_2014_albert_province.zip",
+      "size": 829907130
+    },
+    {
+      "key": "CLCD_v01_2001_albert.tif",
+      "size": 796811705
+    },
+    {
+      "key": "CLCD_v01_2002_albert_province.zip",
+      "size": 818328996
+    },
+    {
+      "key": "CLCD_v01_1990_albert.tif",
+      "size": 845850070
+    },
+    {
+      "key": "CLCD_v01_2018_albert.tif",
+      "size": 811773293
+    },
+    {
+      "key": "CLCD_v01_2019_albert.tif",
+      "size": 811657603
+    },
+    {
+      "key": "CLCD_v01_2020_albert.tif",
+      "size": 810739687
+    },
+    {
+      "key": "CLCD_v01_1994_albert.tif",
+      "size": 807549804
+    },
+    {
+      "key": "CLCD_v01_2013_albert.tif",
+      "size": 804093118
+    },
+    {
+      "key": "CLCD_v01_1996_albert.tif",
+      "size": 799371693
+    },
+    {
+      "key": "CLCD_v01_1985_albert.tif",
+      "size": 880502883
+    },
+    {
+      "key": "CLCD_v01_2000_albert.tif",
+      "size": 798013972
+    },
+    {
+      "key": "CLCD_v01_1991_albert.tif",
+      "size": 832817337
+    },
+    {
+      "key": "CLCD_v01_1992_albert.tif",
+      "size": 822208829
+    },
+    {
+      "key": "CLCD_v01_1993_albert.tif",
+      "size": 812986407
+    },
+    {
+      "key": "CLCD_v01_1999_albert.tif",
+      "size": 798335475
+    },
+    {
+      "key": "CLCD_v01_1998_albert.tif",
+      "size": 796839780
+    },
+    {
+      "key": "CLCD_v01_1997_albert.tif",
+      "size": 797875216
+    },
+    {
+      "key": "CLCD_v01_2007_albert.tif",
+      "size": 793478688
+    },
+    {
+      "key": "CLCD_v01_2008_albert.tif",
+      "size": 794401990
+    },
+    {
+      "key": "CLCD_v01_2005_albert.tif",
+      "size": 792345912
+    },
+    {
+      "key": "CLCD_v01_2017_albert.tif",
+      "size": 813926735
+    },
+    {
+      "key": "CLCD_v01_2004_albert.tif",
+      "size": 791887020
+    },
+    {
+      "key": "CLCD_v01_2016_albert.tif",
+      "size": 811384193
+    },
+    {
+      "key": "CLCD_v01_2012_albert.tif",
+      "size": 797611389
+    },
+    {
+      "key": "CLCD_v01_2015_albert.tif",
+      "size": 810512709
+    },
+    {
+      "key": "CLCD_v01_2011_albert.tif",
+      "size": 795940408
+    },
+    {
+      "key": "CLCD_v01_2003_albert.tif",
+      "size": 794009006
+    },
+    {
+      "key": "CLCD_v01_2010_albert.tif",
+      "size": 796024563
+    },
+    {
+      "key": "CLCD.jpg",
+      "size": 1031238
+    },
+    {
+      "key": "CLCD_v01_2002_albert.tif",
+      "size": 795636242
+    },
+    {
+      "key": "CLCD_v01_2009_albert.tif",
+      "size": 795813150
+    },
+    {
+      "key": "CLCD_v01_2014_albert.tif",
+      "size": 807235619
+    },
+    {
+      "key": "CLCD_v01_2021_albert.tif",
+      "size": 812300278
+    }
+  ],
+  "sourceResponse": "output/product-fixes-2026-11-15/regression-20/SN-0379/turn-1/response.json.gz",
+  "sourceSha256": "c42ed521658bb7e9ef8d46c966380872391e2d650417adec5d958fc047b6b4e6"
+}

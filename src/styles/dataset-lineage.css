@@ -1,0 +1,137 @@
+.dataset-lineage,
+.batch-spatial-summary {
+  min-width: 0;
+  color: var(--ink, #203d36);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.dataset-lineage h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+.dataset-lineage > p {
+  margin: 0 0 8px;
+}
+.dataset-lineage details {
+  border-top: 1px solid #d8e4df;
+  padding: 8px 0;
+}
+.dataset-lineage summary,
+.batch-spatial-summary summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.dataset-lineage dl {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr);
+  gap: 5px 8px;
+  margin: 8px 0 0;
+}
+.dataset-lineage dt {
+  color: #526b62;
+}
+.dataset-lineage dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.dataset-lineage a {
+  color: #14664f;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.batch-spatial-summary {
+  margin: 8px 0;
+}
+.batch-spatial-summary summary strong {
+  margin-left: 0.4em;
+}
+.batch-spatial-summary ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  list-style: none;
+  gap: 3px 12px;
+  padding: 0;
+  margin: 5px 0;
+}
+.batch-spatial-summary li {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+.cell-hit-row {
+  display: block;
+}
+.cell-color-basis { margin:4px 0 7px; font-size:11px; color:#3c6956; }
+.cell-related-total { margin-bottom:6px; color:#52685b; }
+.cell-count-note { font-size:10px; color:#6c7d72; }
+.earth-overview .batch-spatial-summary {
+  pointer-events: auto;
+  max-width: 270px;
+}
+.frozen-grid-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 5px 0;
+  font-size: 11px;
+}
+.frozen-grid-note button {
+  color: #14664f;
+  text-decoration: underline;
+}
+
+.map-legend:has(.distribution-ramp),
+.heatmap-legend {
+  flex-wrap: wrap;
+  padding: 4px 9px;
+  border-radius: 6px;
+  color: #425c50;
+  background: rgb(250 252 249 / 92%);
+  font-size: 11px;
+}
+.distribution-ramp {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+}
+.distribution-ramp i {
+  width: 105px;
+  height: 6px;
+  border-radius: 999px;
+}
+.contour-ramp i { background:linear-gradient(to right,#b58038,#a84d21,#88222a); }
+@media (max-width: 760px) {
+  .catalog-distribution .grid-toolbar {
+    flex-wrap: wrap;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  .earth-view.catalog-distribution:has(.globe-timeline) .earth-overview {
+    top: 56px;
+    bottom: auto;
+    left: 15px;
+    right: 15px;
+  }
+  .catalog-distribution .earth-side-controls {
+    bottom: 182px;
+  }
+}
+
+.product-cell-label {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+  white-space: nowrap;
+  padding: 3px 8px;
+  border: 1px solid #628375;
+  border-radius: 5px;
+  background: rgb(249 253 250 / 94%);
+  color: #234b3e;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cluster-legend, .paper-legend { display: inline-flex; align-items: center; gap: 4px; }
+.cluster-legend::before, .paper-legend::before { content: ""; width: 12px; height: 7px; border: 2px solid #965119; border-radius: 4px; }
+.paper-legend::before { border: 1.5px dashed #754b94; }

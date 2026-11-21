@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OneEarth 客户端体验采样</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:14px/1.6 system-ui;color:#244438;background:#f4f7f6}iframe{position:fixed;inset:0;width:100%;height:100%;border:0;background:white}button{font:inherit;cursor:pointer;border:1px solid #c8d9cf;border-radius:6px;background:#fff;padding:5px 12px;color:inherit}button:focus-visible{outline:2px solid #238565}#panel{position:fixed;z-index:2;right:10px;top:8px;max-width:calc(100vw - 20px);padding:8px 12px;background:#fffffff5;border:1px solid #d2dfd7;border-radius:9px;box-shadow:0 3px 18px #183d2420}#panel.compact .intro{display:none}#status{margin-right:10px;font-variant-numeric:tabular-nums}#result{position:fixed;z-index:3;inset:12% max(16px,calc((100vw - 780px)/2));overflow:auto;background:white;border:1px solid #c5d8cc;border-radius:12px;padding:22px;box-shadow:0 10px 60px #163d3633}#result[hidden]{display:none}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 ui-monospace,monospace;background:#f3f7f4;padding:12px;border-radius:6px}h1{font-size:18px;margin:0 0 8px}p{margin:4px 0 12px}.buttons{display:flex;flex-wrap:wrap;gap:8px}small{color:#657b6d}.intro{max-width:530px;margin-bottom:7px}
+</style>
+<iframe id="app" title="OneEarth 体验页面"></iframe>
+<section id="panel">
+  <div class="intro"><strong>OneEarth 客户端体验采样</strong><p>点击开始后，在页面中正常拖动、缩放和选择网格，也可打开 Chat 或来源预览。完成后点击结束，再把摘要复制回当前对话。</p><small>页面尺寸与正常访问保持一致；统计在本浏览器内完成，不记录问题正文、来源内容或鼠标位置。</small></div>
+  <span id="status">尚未开始</span><button id="start">开始采样</button><button id="stop" hidden>结束采样</button>
+</section>
+<section id="result" hidden>
+  <h1>客户端采样结果</h1><p>请将下面的摘要复制回对话。帧间隔包含浏览器主线程、绘制和页面加载的实际等待；HTTP 往返也包含服务端等待。</p>
+  <pre id="summary"></pre><div class="buttons"><button id="copy">复制摘要</button><button id="download">下载详细 JSON</button><button id="again">重新采样</button><button id="close">收起结果</button></div>
+</section>
+<script>
+const $=id=>document.getElementById(id),app=$('app');
+let run=null,raf=0,timer=0,detail=null,summary='';
+const rounded=n=>Number.isFinite(n)?Math.round(n*10)/10:null;
+const stat=values=>{const a=values.slice().sort((x,y)=>x-y);return {samples:a.length,p50:rounded(a[Math.floor(a.length*.5)]),p95:rounded(a[Math.floor(a.length*.95)]),max:rounded(a.at(-1)),over50:a.filter(n=>n>=50).length};};
+function resources(w){
+  try{return w.performance.getEntriesByType('resource').filter(r=>new URL(r.name).origin===location.origin).map(r=>{
+    const url=new URL(r.name),path=url.pathname.replace(/earthnano:[a-f0-9]+/g,':id').replace(/\/([a-f0-9]{8}-[a-f0-9-]{27,})(?=\/|$)/g,'/:id');
+    return {path,ms:rounded(r.duration),wire:r.encodedBodySize||0,decoded:r.decodedBodySize||0,transfer:r.transferSize||0};
+  });}catch{return [];}
+}
+async function health(record){for(let i=0;i<3;i++){const t=performance.now();try{const r=await fetch('/api/health?client-sample='+i,{cache:'no-store'});await r.arrayBuffer();if(r.ok)record.http.push(performance.now()-t);}catch{record.httpErrors++;}}}
+function hook(w,record){
+  if(record.hooked===w.document)return;
+  record.hooked=w.document;
+  for(const type of ['pointerdown','pointermove','wheel','keydown','click'])w.document.addEventListener(type,e=>{
+    if(!e.isTrusted || run!==record)return;
+    if(type==='pointermove' && !e.buttons)return;
+    record.actionAt=performance.now();record.actions[type]=(record.actions[type]||0)+1;
+  },{capture:true,passive:true});
+  try{w.performance.setResourceTimingBufferSize(3000);}catch{}
+}
+function start(){
+  cancelAnimationFrame(raf);clearTimeout(timer);$('result').hidden=true;$('panel').classList.add('compact');$('start').hidden=true;$('stop').hidden=false;
+  const t=performance.now(),record=run={started:new Date().toISOString(),t,last:t,actionAt:-Infinity,frames:[],activeFrames:[],restFrames:[],actions:{},http:[],httpErrors:0,input:null,globe:null,hooked:null,heatBackends:new Set()};
+  app.src='/?client-sample=1';void health(record);
+  function tick(now){
+    if(run!==record)return;
+    const previous=record.last,gap=now-previous;record.last=now;record.frames.push(gap);
+    (record.actionAt>=previous || now-record.actionAt<240?record.activeFrames:record.restFrames).push(gap);
+    try{
+      const w=app.contentWindow;if(w.location.origin===location.origin && w.document.querySelector('.app')){
+        hook(w,record);
+        const backend=w.document.querySelector("canvas[data-painted]")?.dataset.heatBackend;if(backend)record.heatBackends.add(backend);
+        if(record.input===null && w.document.querySelector('[aria-label="向 OneEarth 提问"]'))record.input=now-record.t;
+        if(record.globe===null && w.document.querySelector('canvas[data-painted="true"]'))record.globe=now-record.t;
+      }
+    }catch{}
+    const seconds=Math.floor((now-t)/1000);if(record.second!==seconds){record.second=seconds;$('status').textContent='采样中 · '+seconds+' 秒';}raf=requestAnimationFrame(tick);
+  }
+  raf=requestAnimationFrame(tick);timer=setTimeout(finish,120000);
+}
+function finish(){
+  if(!run)return;cancelAnimationFrame(raf);clearTimeout(timer);const record=run;run=null;
+  const w=app.contentWindow,list=resources(w),papers=list.filter(r=>r.path==='/api/paper-records'),viewport={width:innerWidth,height:innerHeight,dpr:devicePixelRatio};
+  let navigation=null;try{navigation=w.performance.getEntriesByType('navigation')[0]?.toJSON()||null;}catch{}
+  detail={schema:2,secureContext:w.isSecureContext,heatBackend:[...record.heatBackends].join(",")||w.document.querySelector("canvas[data-painted]")?.dataset.heatBackend||"unknown",started:record.started,elapsedMs:rounded(performance.now()-record.t),userAgent:navigator.userAgent,viewport,firstInputMs:rounded(record.input),firstGlobeMs:rounded(record.globe),allFrames:stat(record.frames),interactionFrames:stat(record.activeFrames),restFrames:stat(record.restFrames),actions:record.actions,httpRoundTrip:stat(record.http),httpErrors:record.httpErrors,resources:list,navigation};
+  const mib=n=>rounded(n/1048576);
+  summary=JSON.stringify({browser:navigator.userAgent,secureContext:detail.secureContext,heatBackend:detail.heatBackend,viewport,firstInputMs:detail.firstInputMs,firstGlobeMs:detail.firstGlobeMs,interactionFrames:detail.interactionFrames,restFrames:detail.restFrames,actions:detail.actions,httpRoundTripMs:detail.httpRoundTrip,paperRequests:papers.length,paperWireMiB:mib(papers.reduce((n,r)=>n+r.wire,0)),paperDecodedMiB:mib(papers.reduce((n,r)=>n+r.decoded,0)),appScripts:list.filter(r=>/^\/assets\/index-.*\.js$/.test(r.path)).map(r=>r.path)},null,2);
+  $('summary').textContent=summary+(detail.interactionFrames.samples?'':'\n未记录到交互帧，请重新采样并操作球体。');$('result').hidden=false;$('stop').hidden=true;$('start').hidden=false;$('status').textContent='采样完成';
+}
+$('start').onclick=start;$('stop').onclick=finish;$('again').onclick=start;$('close').onclick=()=>{$('result').hidden=true;};
+$('copy').onclick=async()=>{try{if(navigator.clipboard)await navigator.clipboard.writeText(summary);else{const t=document.createElement('textarea');t.value=summary;document.body.append(t);t.select();if(!document.execCommand('copy'))throw Error();t.remove();}$('copy').textContent='已复制';}catch{$('copy').textContent='请选中上方摘要复制';}};
+$('download').onclick=()=>{if(!detail)return;const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(detail,null,2)],{type:'application/json'}));a.href=url;a.download='oneearth-client-performance.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);};
+</script>
+</html>

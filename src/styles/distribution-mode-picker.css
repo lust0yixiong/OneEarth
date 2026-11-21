@@ -1,0 +1,25 @@
+.distribution-picker { position:relative; flex-shrink:0; }
+.catalog-distribution .grid-toolbar { flex-wrap:wrap; max-width:100%; box-sizing:border-box; }
+.app:not(.chat-collapsed) .earth-view.catalog-distribution:has(.globe-timeline) .earth-overview { top:56px; bottom:auto; }
+.distribution-mode-trigger { display:flex; align-items:center; gap:5px; padding:5px 7px; border:1px solid #bcd0c6; border-radius:6px; background:#f0f6f2; color:#285846; }
+.distribution-mode-trigger strong { font:inherit; font-weight:600; white-space:nowrap; }
+.distribution-mode-label { font-size:10px; color:#5c7467; }
+.distribution-mode-trigger:hover, .distribution-mode-trigger[aria-expanded="true"] { background:#e3efe7; border-color:#7fa490; }
+.distribution-mode-menu { position:absolute; bottom:calc(100% + 10px); right:0; z-index:15; width:286px; max-width:calc(100vw - 32px); max-height:min(380px,60vh); overflow:auto; box-sizing:border-box; padding:7px; border:1px solid #c3d5cb; border-radius:11px; background:#fcfefc; box-shadow:0 8px 30px #203c3226; color:#254b3b; }
+.distribution-mode-heading { padding:4px 7px 8px; font-size:11px; font-weight:600; color:#697f73; }
+.distribution-mode-option { display:flex; align-items:center; gap:10px; width:100%; padding:10px 8px; border:1px solid transparent; border-radius:7px; text-align:left; color:inherit; }
+.distribution-mode-option[aria-checked="true"] { border-color:#a9c9b7; background:#eef6f0; }
+.distribution-mode-option:hover, .distribution-mode-option:focus-visible { background:#e5f0e8; }
+.distribution-mode-option:disabled { opacity:.5; cursor:default; }
+.distribution-mode-copy { flex:1; min-width:0; }
+.distribution-mode-copy strong { display:block; margin-bottom:4px; font-size:12px; font-weight:600; }
+.distribution-mode-copy small { display:block; font-size:10px; line-height:1.6; color:#65796c; }
+.distribution-mode-preview { display:flex; align-items:center; justify-content:center; flex:0 0 38px; height:38px; border-radius:7px; }
+.distribution-mode-option.grid .distribution-mode-preview { color:#246348; background:#d4e7da; }
+.distribution-mode-option.heatmap .distribution-mode-preview { color:#af392d; background:radial-gradient(circle at 65% 35%,#f26b41,#ffcf70 55%,#fff5c8); }
+.distribution-mode-option.contours .distribution-mode-preview { color:#9c422d; background:repeating-radial-gradient(ellipse at 70% 35%,#fff3dc 0 4px,#c47f56 5px 6px,#fff3dc 7px 9px); }
+@media(max-width:760px) {
+  .catalog-distribution .grid-toolbar { position:relative; }
+  .distribution-picker { position:static; }
+  .distribution-mode-menu { right:0; width:min(286px,100%); }
+}

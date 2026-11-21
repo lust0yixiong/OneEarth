@@ -1,0 +1,54 @@
+import assert from 'node:assert/strict';
+import {chromium} from 'playwright-core';
+import {spawn} from 'node:child_process';
+import {randomBytes} from 'node:crypto';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true});
+let child,temporary;
+try{
+ const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[],paperRequests=[];
+ page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.url().includes('/api/paper-records?'))paperRequests.push(r.url());});
+ await page.goto((process.env.ONEEARTH_URL||'http://127.0.0.1:5274')+'/?view=discover&section=entities');
+ await page.locator('.catalog-card').first().waitFor();assert.equal(await page.locator('.catalog-card').count(),30);
+ assert.ok(paperRequests.every(url=>url.includes('limit=1')),'Data access loaded the entire assertion catalogue');
+ await page.getByLabel('搜索数据资料').fill('ESA WorldCover 10 m 2021 v200');
+ const cover=page.locator('.catalog-card').filter({has:page.getByRole('heading',{name:'ESA WorldCover 10 m 2021 v200',exact:true})});await cover.waitFor();
+ await cover.getByRole('button',{name:'收藏资料',exact:true}).click();await cover.getByRole('button',{name:'取消收藏',exact:true}).waitFor();
+ await cover.getByRole('button',{name:/数据速览/}).click();await page.locator('.data-inspector').waitFor();await page.getByLabel('关闭数据速览').click();
+ await page.getByRole('tab',{name:/数据线索/}).click();assert.equal(await page.getByLabel('搜索数据资料').inputValue(),'ESA WorldCover 10 m 2021 v200');
+ await page.getByLabel('搜索数据资料').fill('MOD11A2');await page.locator('.access-index-row').first().waitFor();assert.equal(await page.locator('.catalog-card').count(),0);
+ await page.locator('.access-index-row').first().getByRole('button',{name:/查看依据：/}).click();await page.locator('.access-clue-detail').waitFor();await page.locator('.access-clue-detail .oe-dataset-overview, .access-clue-detail .access-dataset-overview').first().waitFor();
+ await page.screenshot({path:'/tmp/oe-access-clues-desktop.png'});
+ await page.getByLabel('搜索数据资料').fill('');await page.getByRole('button',{name:'下一页',exact:true}).waitFor();
+ const first=await page.locator('.access-index-row h2').allTextContents();await page.getByRole('button',{name:'下一页',exact:true}).click();
+ await page.waitForFunction(()=>/2\s*\//.test(document.querySelector('.access-pagination')?.textContent||''));await page.locator('.access-index-row').first().waitFor();
+ assert.notDeepEqual(await page.locator('.access-index-row h2').allTextContents(),first);assert.equal(await page.locator('.access-index-row').count(),30);
+ await page.reload();await page.locator('.access-index-row').first().waitFor();assert.match(await page.locator('.access-pagination').innerText(),/2\s*\//);
+ await page.setViewportSize({width:390,height:844});if(await page.getByRole('button',{name:'收起 Chat',exact:true}).isVisible())await page.getByRole('button',{name:'收起 Chat',exact:true}).click();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'/tmp/oe-access-clues-mobile.png'});
+ await page.getByRole('tab',{name:/及时数据/}).click();await page.locator('.empty-state').waitFor();assert.match(await page.locator('.empty-state').innerText(),/尚未配置星座接收来源/);
+ assert.equal(await page.locator('.catalog-card').count(),0);assert.deepEqual(errors,[]);
+
+ temporary=await mkdtemp(join(tmpdir(),'oe-access-stream-'));const token=randomBytes(32).toString('hex'),base='http://127.0.0.1:5186';
+ child=spawn(process.execPath,['--import','tsx','server/index.ts'],{stdio:['ignore','pipe','pipe'],env:{...process.env,PORT:'5186',ONEEARTH_HOST:'127.0.0.1',ONEEARTH_ALLOWED_HOSTS:'127.0.0.1,localhost',ONEEARTH_STATE_DIR:temporary,
+  ONEEARTH_OBSERVATION_DB:join(temporary,'observations.sqlite'),ONEEARTH_RESULT_DB:join(temporary,'results.sqlite'),ONEEARTH_COVERAGE_DB:join(temporary,'coverage.sqlite'),ONEEARTH_PUSH_SOURCES:JSON.stringify({acceptance:{name:'隔离验收星座',token,test:false}})}});
+ let childErrors='';child.stderr.on('data',v=>{childErrors=(childErrors+v.toString()).slice(-3000);});
+ await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Isolated server startup timeout '+childErrors)),20000);child.on('exit',()=>{clearTimeout(timer);reject(Error('Isolated server stopped '+childErrors));});child.stdout.on('data',v=>{if(v.toString().includes(base)){clearTimeout(timer);resolve();}});});
+ const push=async(id,observedAt,file)=>{const response=await fetch(base+'/api/constellations/acceptance/observations',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({schemaVersion:1,id,revision:1,title:id,collection:'temperature',satellite:'验收卫星',observedAt,geometry:{type:'Point',coordinates:[110,30]},measurements:[{variable:'temperature',value:280,unit:'K'}],...(file?{file:{name:'example.csv',base64:Buffer.from('temperature\n280\n').toString('base64')}}:{})})});assert.equal(response.status,201,await response.text());};
+ await push('验收观测001','2026-11-10T00:00:00Z',false);
+ const live=await browser.newPage({viewport:{width:1440,height:1000}});live.on('pageerror',e=>{errors.push(e.message);console.error('LIVE PAGE ERROR',e.stack);});live.on('console',m=>{if(m.type()==='error')console.error('LIVE CONSOLE ERROR',m.text());});await live.goto(base+'/?view=discover&section=timely');
+ await live.locator('.access-timely-row').waitFor();assert.equal(await live.locator('.access-timely-row').count(),1);
+ await live.getByText('接收更新已连接',{exact:true}).waitFor();
+ await push('验收原文件002','2026-11-01T00:00:00Z',true);
+ await live.locator('.access-incoming').waitFor();assert.equal(await live.locator('.access-timely-row').count(),1);assert.match(await live.locator('.access-incoming').innerText(),/新接收 1 条/);
+ await live.getByRole('button',{name:'查看新增',exact:true}).click();await live.waitForFunction(()=>document.querySelectorAll('.access-timely-row').length===2);
+ assert.match(await live.locator('.access-timely-row').first().innerText(),/验收原文件002/);assert.match(await live.locator('.access-timely-row').first().innerText(),/原文件已接收/);
+ await live.screenshot({path:'/tmp/oe-access-stream-desktop.png'});
+ await live.locator('.access-timely-row').first().getByRole('button',{name:'查看记录',exact:false}).click();await live.locator('.data-inspector').waitFor();await live.getByLabel('关闭数据速览').click();
+ await live.getByRole('tab',{name:/实体数据/}).click();await live.getByLabel('搜索数据资料').fill('验收原文件002');await live.locator('.catalog-card').waitFor();assert.equal(await live.locator('.catalog-card').count(),1);
+ await live.locator('.catalog-card').getByRole('button',{name:'定位分布',exact:true}).click();await live.locator('canvas[data-painted]').waitFor({timeout:15000});
+ await live.getByRole('button',{name:'数据触达',exact:true}).click();await live.getByRole('tab',{name:/及时数据/}).click();await live.getByLabel('搜索数据资料').fill('');await live.locator('.access-timely-row').first().waitFor();
+ await live.setViewportSize({width:390,height:844});if(await live.getByRole('button',{name:'收起 Chat',exact:true}).isVisible())await live.getByRole('button',{name:'收起 Chat',exact:true}).click();assert.ok(await live.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await live.screenshot({path:'/tmp/oe-access-stream-mobile.png'});assert.deepEqual(errors,[]);
+ console.log('PASS entity cards and access controls; paged clue index, evidence expansion, shared query, reload and mobile; real isolated push, acquisition/reception clocks, stable incoming banner, local-file identity and globe action.');
+}catch(error){for(const [i,p] of browser.contexts().flatMap(c=>c.pages()).entries()){console.error('FAILED PAGE',i,p.url(),(await p.locator('body').innerText()).slice(-2200));await p.screenshot({path:'/tmp/oe-access-failure-'+i+'.png'}).catch(()=>{});}throw error;}finally{await browser.close();if(child){child.kill('SIGTERM');await new Promise(resolve=>{if(child.exitCode!==null)resolve();else child.once('exit',resolve);});}if(temporary)await rm(temporary,{recursive:true,force:true});}
