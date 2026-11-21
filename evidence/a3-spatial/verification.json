@@ -1,0 +1,25 @@
+{
+  "entry": "http://127.0.0.1:5274",
+  "gridSelected": true,
+  "flyTo": true,
+  "years": [
+    2024,
+    2023
+  ],
+  "tileCount": 67,
+  "tileService": "spatial",
+  "bboxResult": {
+    "chunks": [
+      {
+        "route": "/precip-data/2024/07-final-8dc6998983da/2/15-3.bin.gz",
+        "size": 44581,
+        "hash": "71c7d740acd3cf8159a4e21d8d5262eedcc252403c4f90991cff10a3cf78ec67"
+      },
+      {
+        "route": "/precip-data/2024/07-final-8dc6998983da/2/16-3.bin.gz",
+        "size": 42639,
+        "hash": "ede9536f680e32134a744b4539f0e70211524cfbf12113a0a0e0be521233465b"
+      }
+    ]
+  }
+}

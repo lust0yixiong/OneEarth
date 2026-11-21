@@ -1,0 +1,128 @@
+[
+  {
+    "label": "首页与 Chat",
+    "left": "../oneearth-goal-handoff/界面参考/首页与Chat.png",
+    "right": "evidence/a2-release/home.png",
+    "width": 1512,
+    "height": 859,
+    "regions": {
+      "header": {
+        "changed": 0,
+        "pixels": 98280
+      },
+      "leftNav": {
+        "changed": 0,
+        "pixels": 40494
+      },
+      "body": {
+        "changed": 112587,
+        "pixels": 1160034
+      }
+    }
+  },
+  {
+    "label": "Chat 收起",
+    "left": "../oneearth-goal-handoff/界面参考/地球工作区.png",
+    "right": "evidence/a2-release/globe.png",
+    "width": 1512,
+    "height": 859,
+    "regions": {
+      "header": {
+        "changed": 0,
+        "pixels": 98280
+      },
+      "leftNav": {
+        "changed": 0,
+        "pixels": 40494
+      },
+      "body": {
+        "changed": 112825,
+        "pixels": 1160034
+      }
+    }
+  },
+  {
+    "label": "回答",
+    "left": "evidence/visual/baseline/answer.png",
+    "right": "evidence/visual/next/answer.png",
+    "width": 1512,
+    "height": 859,
+    "regions": {
+      "header": {
+        "changed": 0,
+        "pixels": 98280
+      },
+      "leftNav": {
+        "changed": 0,
+        "pixels": 40494
+      },
+      "body": {
+        "changed": 15408,
+        "pixels": 1160034
+      }
+    }
+  },
+  {
+    "label": "网页预览",
+    "left": "evidence/visual/baseline/web-preview.png",
+    "right": "evidence/visual/next/web-preview.png",
+    "width": 1512,
+    "height": 859,
+    "regions": {
+      "header": {
+        "changed": 0,
+        "pixels": 98280
+      },
+      "leftNav": {
+        "changed": 0,
+        "pixels": 40494
+      },
+      "body": {
+        "changed": 1629,
+        "pixels": 1160034
+      }
+    }
+  },
+  {
+    "label": "PDF 预览",
+    "left": "evidence/visual/baseline/pdf-preview.png",
+    "right": "evidence/visual/next/pdf-preview.png",
+    "width": 1512,
+    "height": 859,
+    "regions": {
+      "header": {
+        "changed": 0,
+        "pixels": 98280
+      },
+      "leftNav": {
+        "changed": 0,
+        "pixels": 40494
+      },
+      "body": {
+        "changed": 1428,
+        "pixels": 1160034
+      }
+    }
+  },
+  {
+    "label": "选格",
+    "left": "evidence/visual/baseline-map/selected-grid.png",
+    "right": "evidence/a3-spatial/selected-grid.png",
+    "width": 1512,
+    "height": 859,
+    "regions": {
+      "header": {
+        "changed": 0,
+        "pixels": 98280
+      },
+      "leftNav": {
+        "changed": 0,
+        "pixels": 40494
+      },
+      "body": {
+        "changed": 3760,
+        "pixels": 1160034
+      }
+    }
+  }
+]

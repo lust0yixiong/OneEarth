@@ -1,0 +1,15 @@
+{
+  "version": "0.1.0",
+  "hashes": [
+    {
+      "label": "main",
+      "sha256": "0174cde9ec001961c28b839ded6bdd6b4029b4965d7b1b79f08159664ef7a810"
+    },
+    {
+      "label": "redeploy",
+      "sha256": "0174cde9ec001961c28b839ded6bdd6b4029b4965d7b1b79f08159664ef7a810"
+    }
+  ],
+  "prototypeEntry": "/assets/index-DpY_7JXa.js",
+  "declaredReleaseEntry": "http://127.0.0.1:5274"
+}

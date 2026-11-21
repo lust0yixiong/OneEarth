@@ -1,0 +1,8 @@
+
+> oneearth-next@0.1.0 status
+> node scripts/status.mjs
+
+{"name":"web","port":5274,"status":"ok","mode":"oneearth-next","version":"0.1.0","sources":{"constellationPush":0,"earthSearch":"collection-snapshot-and-live-item-search"},"cases":24,"verifiedCases":9,"spatialDataReady":true}
+{"name":"discovery","port":5275,"status":"ok","service":"discovery"}
+{"name":"spatial","port":5276,"status":"ok","service":"spatial","engine":"pglite","postgis":"3.6.2","objects":"local"}
+{"name":"runtime","port":5277,"status":"ok","service":"runtime","version":"0.1.0"}

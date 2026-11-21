@@ -1,0 +1,58 @@
+{
+  "entry": "http://127.0.0.1:5314",
+  "version": "0.1.0",
+  "firstId": "e1e2ec5d-89c1-4596-977f-96580d2c285a",
+  "followId": "62fc426d-f27d-418c-bda9-109c249046e6",
+  "citation": "earthnano:e0b59883c7bdd888b980f77b7c614f33bcfe2b732f8e36b31b1b3acf9f77cf5c",
+  "legacySampleOpened": true,
+  "spatialObjects": [
+    {
+      "name": "20230115.webp",
+      "status": 200
+    },
+    {
+      "name": "20230715.webp",
+      "status": 200
+    },
+    {
+      "name": "20230815.webp",
+      "status": 200
+    },
+    {
+      "name": "20230915.webp",
+      "status": 200
+    },
+    {
+      "name": "20231015.webp",
+      "status": 200
+    },
+    {
+      "name": "20231115.webp",
+      "status": 200
+    },
+    {
+      "name": "20230215.webp",
+      "status": 200
+    },
+    {
+      "name": "20231215.webp",
+      "status": 200
+    },
+    {
+      "name": "20230315.webp",
+      "status": 200
+    },
+    {
+      "name": "20230415.webp",
+      "status": 200
+    },
+    {
+      "name": "20230515.webp",
+      "status": 200
+    },
+    {
+      "name": "20230615.webp",
+      "status": 200
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "catalogStatus": 200,
+  "sourceEvidenceStatus": 200,
+  "fields": [
+    "dataset",
+    "papers"
+  ],
+  "safeRead": "assertionReader enforces transaction_read_only and default_transaction_read_only"
+}

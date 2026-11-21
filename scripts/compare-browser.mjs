@@ -90,6 +90,9 @@ try {
       const year=page.getByLabel("降水年份",{exact:true});
       await year.selectOption("2023");
       await page.waitForFunction(()=>document.querySelector("canvas[data-painted]")?.dataset.rainLoading==="false",{},{timeout:30000});
+      const measuredYear=await year.inputValue();
+      await page.getByRole("button",{name:"返回数据分布",exact:true}).click();
+      await page.waitForFunction(()=>document.querySelector("canvas[data-painted]")?.dataset.coveragePending==="false",{},{timeout:30000});
       const b=await canvas.boundingBox();
       const focus=Number(await canvas.getAttribute("data-focus-width"))||b.width;
       await page.mouse.click(b.x+focus*.43,b.y+b.height*.42);
@@ -98,7 +101,7 @@ try {
       await fly.click();
       await page.waitForFunction(()=>document.querySelector("canvas[data-painted]")?.dataset.flying==="true",{},{timeout:3500});
       await page.waitForFunction(()=>document.querySelector("canvas[data-painted]")?.dataset.flying==="false",{},{timeout:10000});
-      summary.extendedMap={activeBefore,activeAfter:await pending.isVisible(),year:await year.inputValue(),
+      summary.extendedMap={activeBefore,activeAfter:await pending.isVisible(),year:measuredYear,
         selected:await fly.isVisible(),flew:true};
       assert.ok(summary.extendedMap.activeAfter && summary.extendedMap.activeBefore,"年份和飞行必须发生在真实任务期间");
       assert.ok(transfers.some(r=>r.route.includes("/2023/") && r.fromSpatial && r.status===200));
