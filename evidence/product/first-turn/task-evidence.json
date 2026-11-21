@@ -1,0 +1,1190 @@
+{
+  "entry": "http://127.0.0.1:5474",
+  "browser": "157.0.8103.79",
+  "viewport": [
+    1512,
+    859
+  ],
+  "dpr": 1,
+  "turns": [
+    {
+      "id": "6ed96dd3-e724-43ab-b8f8-5ed873960b8e",
+      "elapsedMs": 307230,
+      "status": "complete",
+      "executor": "codex",
+      "channelCalls": [
+        {
+          "name": "本轮目标与动作规划",
+          "status": "done",
+          "id": "turn-action",
+          "at": 1795281030782
+        },
+        {
+          "name": "校验本轮检索计划",
+          "status": "done",
+          "id": "data-question-initial",
+          "at": 1795281030958
+        },
+        {
+          "name": "理解数据问题",
+          "status": "done",
+          "id": "data-question",
+          "at": 1795281030958
+        },
+        {
+          "name": "海纳专区检索",
+          "status": "done",
+          "id": "source-haina",
+          "at": 1795281030962
+        },
+        {
+          "name": "find_dataset_by_task",
+          "status": "done",
+          "id": "da93c00f-d5a1-4c48-8aeb-e838b05a3a78",
+          "at": 1795281032485
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "00940f68-95ff-4e4e-bfa2-7948e222c312",
+          "at": 1795281032639
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "f998e294-5f24-4626-abb6-cb3dacad898c",
+          "at": 1795281032640
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "bc0967c6-b47c-40d9-8562-9c640959e121",
+          "at": 1795281032641
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "5eaa0bf5-f65c-463e-819d-5b5270403955",
+          "at": 1795281032643
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "75cbb3ac-8872-4050-b043-b102553add31",
+          "at": 1795281032643
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "0a6bd460-c841-419c-ab0b-15f4b2bfbf63",
+          "at": 1795281032644
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "18bcc8b7-6b7b-45a5-be2f-0d7a376ef24b",
+          "at": 1795281032646
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "fe370fd1-a45a-4120-aeac-1e38a81c5e2a",
+          "at": 1795281032792
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "e1af6da8-b842-4a54-988a-ee495ee16c52",
+          "at": 1795281032947
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "9a3b55b6-c2f9-4d0e-bde8-111b7948668f",
+          "at": 1795281032950
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "225e9060-b24a-4b2a-815b-51aa43f14c13",
+          "at": 1795281032951
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "6ab6ad9f-eb1a-43bb-9527-fce2ef896fc4",
+          "at": 1795281032951
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "dc41bac7-1efb-4a01-95f7-aa44f2750a2f",
+          "at": 1795281033098
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "8b1dc7e0-c24d-4ac3-8d37-87419bc14bc1",
+          "at": 1795281033100
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "c6228b23-2684-4843-86fe-fa0f4fb1a8d5",
+          "at": 1795281033101
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "85af526d-beb1-44fd-b269-3ba832b16729",
+          "at": 1795281033102
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "f7e9a671-2b0f-48f8-aa27-712be5f8e6fd",
+          "at": 1795281033102
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "9cb81fcb-8944-45bf-a3bf-c6882dfbf45f",
+          "at": 1795281033250
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "7a258276-4ff2-482a-a49a-36ed9dd981b9",
+          "at": 1795281033252
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "7cbae303-b865-4d58-bd36-e1d6363a6096",
+          "at": 1795281033253
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "c5d9a768-a35f-4363-bc50-00f6d03d2469",
+          "at": 1795281033254
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "72ba296d-79f1-4187-8715-cc8c13e19db9",
+          "at": 1795281033404
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "d5791007-8954-4230-956f-ffadfb5fe420",
+          "at": 1795281033405
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "9db840bb-5a88-4871-b1d5-13b8b9a54b87",
+          "at": 1795281033407
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "10ba1b98-1388-46bf-9369-5697685affb6",
+          "at": 1795281033408
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "b56f6d21-77a8-4d39-a6eb-5e25e916a2d4",
+          "at": 1795281033410
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "1d730989-5439-4e3b-a3c0-06de70dd191a",
+          "at": 1795281033557
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "bdeb322f-18fe-40a6-b013-5179e4d24be1",
+          "at": 1795281033559
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "b234fbb7-04a6-4ee9-aaae-ae8c4526f633",
+          "at": 1795281033560
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "ed8ed162-eacf-4ec7-96e0-dac65058224a",
+          "at": 1795281033718
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "3e6e80fd-08dc-4510-966a-9d82941ad216",
+          "at": 1795281033721
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "79c08220-6e42-4186-afe5-68504f7b9456",
+          "at": 1795281033722
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "02b25bcb-fc1f-4dfc-a437-b42906d11685",
+          "at": 1795281033724
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "c3eaccc4-7735-4dbb-a338-e8e9d55d7137",
+          "at": 1795281033726
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "5094c4bc-ab69-4e00-b14a-746913c08ce7",
+          "at": 1795281033727
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "4566a573-2622-436c-b1a9-0fc62ad5c4ba",
+          "at": 1795281033862
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "07f1bb54-2b06-45d3-97f1-776d71a325c5",
+          "at": 1795281033863
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "a35541c3-30d8-497d-94b2-3a64cbc94a63",
+          "at": 1795281033865
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "991792bf-adec-4fce-8dd8-353f0a8516e4",
+          "at": 1795281033866
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "3199b860-8e98-4ff1-9e99-c8844d16765b",
+          "at": 1795281033867
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "58efd3df-1e45-46c0-b6e1-2b54ea277515",
+          "at": 1795281034015
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "46df34d9-58bf-4511-ad73-7b1b3241af87",
+          "at": 1795281034016
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "c9ca6afc-b233-4c24-940c-829c584544ab",
+          "at": 1795281034018
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "9a38b8bf-e9c2-442e-924c-27c463cfaf32",
+          "at": 1795281034018
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "b206ef38-f1e9-4fcd-9ac3-8eb50ecda2e5",
+          "at": 1795281034165
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "4c2f16e0-b796-42f1-b501-871e0c0c1382",
+          "at": 1795281034166
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "98a3d4b0-3443-425a-9bfa-ad273dd18a8c",
+          "at": 1795281034167
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "c2e85469-50fd-4a1c-a662-540d83f15e91",
+          "at": 1795281034167
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "0c8e0831-1242-499e-a73b-6a55984a9d8b",
+          "at": 1795281034168
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "765fb1a4-c508-4a67-8a61-8899b9bea6e0",
+          "at": 1795281034168
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "4bca5a27-8d29-4c97-98e2-0f93faedbfd2",
+          "at": 1795281034317
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "24cfbc64-aee4-4820-ba24-d5eb7dfda8bc",
+          "at": 1795281034318
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "fa196449-8319-4e60-b613-4082ba948fa3",
+          "at": 1795281034468
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "e8ab0672-4afc-4b4b-b7c6-75272ecad451",
+          "at": 1795281034469
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "60316d48-4a16-4d46-bb79-df166ae63b23",
+          "at": 1795281034471
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "54ced8ae-30d4-446d-a8c5-340f764cf8fe",
+          "at": 1795281034472
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "384d5938-c224-4a4b-8301-1be707bfd728",
+          "at": 1795281034473
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "e6285eac-5ad2-4ea5-bbff-8283a40e1895",
+          "at": 1795281034474
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "6f8d6643-6425-49c8-abd9-a42f1139e8bb",
+          "at": 1795281034621
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "e0638e1f-e70c-4f22-8859-4748612beaae",
+          "at": 1795281034622
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "140482e1-689c-4a88-bcd2-a82d6257cfdd",
+          "at": 1795281034776
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "f2139921-7578-431d-ad5f-cf0703110e43",
+          "at": 1795281034777
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "d344b66d-6fb5-442a-9935-050340d2406d",
+          "at": 1795281034778
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "40f1b0a8-26be-46f9-a220-d2679cf1e6e1",
+          "at": 1795281034779
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "925a73ef-61a9-4802-9c9c-9e9d9b0b6b6e",
+          "at": 1795281034780
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "a22dd9f4-5c32-430a-9de9-cfcf363de180",
+          "at": 1795281034782
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "e1113788-d82d-4b23-bd03-11f3e926d1ce",
+          "at": 1795281035082
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "b9bdd4d2-9b69-48bd-a04d-724aa54cc797",
+          "at": 1795281035086
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "7e727bd8-6a0f-434e-afb0-038fadbc7720",
+          "at": 1795281035235
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "0928d272-d828-40f2-bb6a-2f993bee95cd",
+          "at": 1795281035238
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "db7bbaa8-ee90-4f8d-ac34-b72aa1e91cd2",
+          "at": 1795281035387
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "151421bc-dfdb-4da4-8aab-463bffb0e84c",
+          "at": 1795281035389
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "c1a29905-87a2-4b90-b0c4-19664375f1ff",
+          "at": 1795281035694
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "52cac2c3-0414-47fb-90e8-58ec37a15c1f",
+          "at": 1795281035700
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "012c799c-144d-4248-a444-c8d75dbbbdaf",
+          "at": 1795281035848
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "f3bea1ea-a491-490a-95a5-930eb6ea8c8f",
+          "at": 1795281035850
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "c64a8d87-8886-41eb-9ea2-e6dd3daf872c",
+          "at": 1795281035851
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "3860cf29-1021-4983-9e22-5bbf0d5168bc",
+          "at": 1795281036002
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "ec29a30d-5457-4038-bcf6-fc723e7e6d52",
+          "at": 1795281036004
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "f50fbdc2-5924-4a1c-ae2e-7b8014e9ba0d",
+          "at": 1795281036006
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "f488ffa3-cecd-4e99-9f1c-b5fe2e7ebcf1",
+          "at": 1795281036007
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "b141df2f-4112-47e4-a83b-b9fba7276e74",
+          "at": 1795281036154
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "8ecaca88-200c-4735-b86b-b585d16e0912",
+          "at": 1795281036156
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "50ed4f87-31fe-4730-95fd-3cc0cc5ab32c",
+          "at": 1795281036157
+        },
+        {
+          "name": "find_dataset_by_task",
+          "status": "done",
+          "id": "4b30b2a9-277b-4df0-b42f-c84b58ef5984",
+          "at": 1795281037687
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "7fa5cac2-f081-466c-a247-fc06cc3673a2",
+          "at": 1795281037839
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "21d2c5ff-1a72-4386-85ba-d60b41f2fbe1",
+          "at": 1795281037839
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "eb60abd5-01d0-472d-b4ea-8293eb78bcee",
+          "at": 1795281037840
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "0dadadf2-3096-43da-8b84-bbc0ddfba25b",
+          "at": 1795281037841
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "6d1391ed-63ed-4819-b125-b9dbd48d1a0f",
+          "at": 1795281037990
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "9400df23-16a0-46f1-a1e5-4247582d58a1",
+          "at": 1795281037990
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "7a9c2bcd-aaec-49d0-86fc-ff415a692e6a",
+          "at": 1795281037991
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "727d687c-283e-4f3a-9bfd-c160d9ecf855",
+          "at": 1795281037992
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "9510e708-6979-4d89-a025-3763ab1f4e4c",
+          "at": 1795281038141
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "34dd0c32-2108-46ca-a70f-d5fce73a43eb",
+          "at": 1795281038142
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "caab6019-2f1e-4ea3-84b6-f2b3cba82167",
+          "at": 1795281038143
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "a93d8721-4e7d-4127-b413-ae0948bf59e6",
+          "at": 1795281038144
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "930f52f6-1b5d-43b4-b6f1-b05cc2b26261",
+          "at": 1795281038295
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "7cf73add-99de-4754-b3bc-82df5bc99fd6",
+          "at": 1795281038296
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "0d89a293-9368-4143-8246-be2739bc5387",
+          "at": 1795281038447
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "0538c879-bb4a-4616-bfff-dfc892b090e1",
+          "at": 1795281038448
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "9d72b4d4-1aff-4962-bb5b-c0a21d80aefb",
+          "at": 1795281038449
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "a75ec330-fd81-4c07-9bda-cb3a6520ef83",
+          "at": 1795281038450
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "7a7308dd-31b5-440d-bd0a-8ff7fd494e6f",
+          "at": 1795281038451
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "41c08c24-487c-413a-bc3e-7b8e25a6a782",
+          "at": 1795281038452
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "5c105915-ab4f-47af-9650-ffa9c6531e6f",
+          "at": 1795281038602
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "bc7ee8cb-3b0b-4b36-9b6f-25e6b7052db6",
+          "at": 1795281038604
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "579eb561-0138-44fb-ada0-7d0cbaefeb10",
+          "at": 1795281038605
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "4329fe2f-56d3-4b1b-a904-418a8256c7de",
+          "at": 1795281038606
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "eb989dd8-e55f-400c-92e4-440ee1caa8c7",
+          "at": 1795281038754
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "917d19fb-8f00-44dc-be57-2e74bd618060",
+          "at": 1795281038755
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "ad18a2d5-8ab9-4f35-91fa-84e6d5e702ef",
+          "at": 1795281038757
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "ebc2a936-0acb-4e80-bfe1-5f8a98b68c42",
+          "at": 1795281038758
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "9563bb1b-ffa6-4caf-9639-2bc997bec5af",
+          "at": 1795281038907
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "1e2d58dd-1ded-42a3-bd5d-9752a403b46c",
+          "at": 1795281038909
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "3954637b-9b74-4cef-9964-40782ed1aca6",
+          "at": 1795281039060
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "bc210c42-0f81-4c7a-b5bf-875f6b184fa6",
+          "at": 1795281039060
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "a217899d-bd50-4fd9-ad7f-9baa00eb4989",
+          "at": 1795281039061
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "08a29595-52fd-4a13-b358-dcd5b1d5cc58",
+          "at": 1795281039062
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "097e218e-1861-448b-92ce-45b107a1128a",
+          "at": 1795281039214
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "ea266009-91cc-45a3-9050-534207fe7c61",
+          "at": 1795281039216
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "c932aa36-054b-4c1f-8b6e-a5ae2dbe3fca",
+          "at": 1795281039218
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "8fda4eb7-f6f7-438a-8a81-6bad88437861",
+          "at": 1795281039219
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "b63e8efd-bb1f-43d3-bd69-db15ece55d2b",
+          "at": 1795281039366
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "de9ac29b-3cc1-4855-8912-d3364bb2894f",
+          "at": 1795281039368
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "195d61d2-7f8e-4906-9016-303e3a97bb12",
+          "at": 1795281039370
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "a0a58c3c-bd16-473a-8de5-3d0c1b0c2c59",
+          "at": 1795281039371
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "43fd8beb-8c09-4a37-b7bf-d6984bcefc32",
+          "at": 1795281039372
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "d42ef0b5-ae99-478c-8eb3-7fd27461cf43",
+          "at": 1795281039520
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "96642769-b019-412f-841c-2989fc3aea35",
+          "at": 1795281039540
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "248086be-2957-4305-aa6a-cea49aa772cf",
+          "at": 1795281039671
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "f10f8a7b-1029-4c39-8b7c-100927d294fb",
+          "at": 1795281039672
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "2149767c-f30c-476f-91a2-5480666c88bd",
+          "at": 1795281039673
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "fe5553b5-0860-4287-8ab1-81d7a58f25c3",
+          "at": 1795281039674
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "a3ffe9d9-5a62-45a7-adbe-95a9f50ea31b",
+          "at": 1795281039675
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "799970a3-d9dc-4084-9f8d-ac60ddfa68a3",
+          "at": 1795281039676
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "e9e4317e-3453-4c9a-acc9-4ccc4c809362",
+          "at": 1795281039678
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "88dfba20-1070-4de2-aea7-2897328dfa43",
+          "at": 1795281039825
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "f8343224-67a8-45d0-beb8-c0c06f682ae1",
+          "at": 1795281039827
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "cc3f587a-4b8f-45d9-8550-e56970247cf5",
+          "at": 1795281039828
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "b587d78b-869b-432e-aff7-4a04c32a292e",
+          "at": 1795281039829
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "6cbf4b78-d9d2-499a-b342-28a40e535c4c",
+          "at": 1795281039979
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "5c8cc5d2-35cf-4bc3-a0bc-04f4417e0c12",
+          "at": 1795281039981
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "67ef1ce4-a099-4358-a82c-e7044bd5acaf",
+          "at": 1795281039983
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "64de9ce6-f464-475e-a43f-fec59d1f4703",
+          "at": 1795281039983
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "675e6a04-650a-4d28-a63a-b377da8bb8d9",
+          "at": 1795281040131
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "0bbd2476-30f5-4174-a2a2-88dfdf68f8d0",
+          "at": 1795281040132
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "2620bf75-14de-4eb0-85f8-7f9db7663204",
+          "at": 1795281040285
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "ef2b2a7f-062e-44de-b8d2-fdeeda89fb15",
+          "at": 1795281040286
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "07d44bd9-779b-4d27-9792-19b47c1b8fbb",
+          "at": 1795281040287
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "e71ef691-e838-47ad-8610-308d88e832f7",
+          "at": 1795281040288
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "a658105c-e277-44fb-a84d-5ee717f00d68",
+          "at": 1795281040290
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "1f6b72dd-e5bf-4390-8e0e-b95736a331ff",
+          "at": 1795281040290
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "89d6cc0e-81b4-4368-873c-7fa7bd239820",
+          "at": 1795281040440
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "7d30d380-6cda-4d8f-933b-ea64546bf0a2",
+          "at": 1795281040441
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "64ba3b69-8f11-4690-9dca-5ac2e274d857",
+          "at": 1795281040441
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "7a918099-3a29-43a1-919c-62f0ccdb4616",
+          "at": 1795281040442
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "bf644435-2494-450c-bd52-d9831a6c7097",
+          "at": 1795281040592
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "8be6e9de-d5bb-4408-9ee8-8ac9228358bb",
+          "at": 1795281040597
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "53df40ed-ab03-4d4d-9bc4-2d87f7d704d6",
+          "at": 1795281040597
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "2e187171-715a-4421-8892-960077a8dac1",
+          "at": 1795281040744
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "27d29b56-300c-4d22-bd1e-80d63b7f4fc4",
+          "at": 1795281040745
+        },
+        {
+          "name": "get_dataset_metadata",
+          "status": "done",
+          "id": "e245fced-a72e-49cd-83f4-32ade8248447",
+          "at": 1795281040747
+        },
+        {
+          "name": "search_recipes",
+          "status": "done",
+          "id": "a19ba737-9367-494f-bbc8-d294dd8ce547",
+          "at": 1795281040748
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "aa1c4f3b-e101-436f-930a-965615b3a4ba",
+          "at": 1795281040749
+        },
+        {
+          "name": "search_dataset_usage",
+          "status": "done",
+          "id": "3980a5f3-31f4-4dd7-9cb6-76fa85071082",
+          "at": 1795281040750
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "cfafc416-7121-429d-a9af-c8b8bd62b1b1",
+          "at": 1795281040751
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "8292cb68-afad-4203-963e-1fc8839cfd25",
+          "at": 1795281040897
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "989c0e6d-b0ed-41c8-9a72-b22f726861bf",
+          "at": 1795281040899
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "d1c51d49-6de6-455d-8f4b-9c6cee12898c",
+          "at": 1795281040900
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "1f69b572-ed03-4ea4-a928-eabab41c819b",
+          "at": 1795281040901
+        },
+        {
+          "name": "get_evidence",
+          "status": "done",
+          "id": "ec359f49-f5f3-4f0d-95ec-a19ee8e157ee",
+          "at": 1795281041049
+        },
+        {
+          "name": "文献资料检索",
+          "status": "done",
+          "id": "source-paper",
+          "at": 1795281041050
+        },
+        {
+          "name": "核对网页检索方向",
+          "status": "failed",
+          "id": "web-complement",
+          "at": 1795281059097
+        },
+        {
+          "name": "网络检索",
+          "status": "partial",
+          "id": "source-web",
+          "at": 1795281078626
+        },
+        {
+          "name": "独立数据发现服务",
+          "status": "done",
+          "id": "6ed96dd3-e724-43ab-b8f8-5ed873960b8e:discovery",
+          "at": 1795281078627
+        },
+        {
+          "name": "OneEarth 数据目录",
+          "status": "done",
+          "id": "catalog",
+          "at": 1795281078627
+        },
+        {
+          "name": "回答整理",
+          "status": "failed",
+          "id": "answer-generation",
+          "at": 1795281284869
+        }
+      ],
+      "firstFindingAt": 1795281030962,
+      "finishedAt": 1795281284872,
+      "createdAt": 1795280980710,
+      "startedAt": 1795280980756,
+      "referenceCount": 8,
+      "paperIds": [
+        "earthnano:6888816ea862eaeaa624debf9a41e962fde508657b27af06ab60e6bd6d5a4085",
+        "earthnano:49d5a976750952c93d8509574db7942ff0ee311a856734df155d75a6e7564430",
+        "earthnano:6a077910dd3401fbf2709b9c9f3f5eaaabe7f1945e2ed3e90fbae8dd100f1529",
+        "earthnano:4f39added4dfad3dc81ed1b2a3a3e76eade487eda754410efe343bfe371ae26e",
+        "earthnano:dc370cb2a380e913138f0d773cc19e65f17197e8a30d3e417672bea2f0b66d76",
+        "earthnano:203adbe5be6b6f61c9e6bd65da3baa308ce8987d0888fd1e93af25788fd1aa88",
+        "earthnano:dc2b82e99ed61127efd62da53e47dffee9524aaca7784516f613e508917e2b57",
+        "earthnano:cc659b9ed0d57da5fcc9db948ed6d24549c16614e523a4d7ce1566bccd1a5ae7"
+      ],
+      "timings": [
+        {
+          "kind": "model-executor",
+          "model": "gpt-6-luna",
+          "executor": "codex",
+          "elapsedMs": 50008,
+          "firstStdoutMs": 29990
+        },
+        {
+          "kind": "model-executor",
+          "model": "gpt-6-luna",
+          "executor": "codex",
+          "elapsedMs": 206230,
+          "firstStdoutMs": 205986
+        }
+      ]
+    },
+    {
+      "id": "36e93b4a-9da2-4ffa-8087-1d900a643adb",
+      "elapsedMs": 38890,
+      "status": "complete",
+      "executor": "codex",
+      "channelCalls": [
+        {
+          "name": "定位上一回答的文献",
+          "status": "done",
+          "id": "citation-ordinal",
+          "at": 1795281314223
+        },
+        {
+          "name": "采用所引资料的已存内容",
+          "status": "done",
+          "id": "referenced-material",
+          "at": 1795281314223
+        }
+      ],
+      "finishedAt": 1795281326920,
+      "createdAt": 1795281288742,
+      "startedAt": 1795281314190,
+      "referenceCount": 1,
+      "paperIds": [
+        "earthnano:49d5a976750952c93d8509574db7942ff0ee311a856734df155d75a6e7564430"
+      ],
+      "timings": [
+        {
+          "kind": "model-executor",
+          "model": "gpt-6-luna",
+          "executor": "codex",
+          "elapsedMs": 12705,
+          "firstStdoutMs": 11059
+        }
+      ]
+    }
+  ],
+  "refresh": {
+    "taskId": "6ed96dd3-e724-43ab-b8f8-5ed873960b8e",
+    "statusBefore": "running",
+    "submissions": 3,
+    "uniqueTaskIds": 1
+  }
+}

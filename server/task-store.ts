@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import type { Router } from "express";
 
 export const taskIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-type Status = "queued" | "running" | "complete" | "failed" | "cancelled";
-type Payload = Record<string, unknown>;
-type Task = {id: string; body: string; fingerprint: string; status: Status; created: number; updated: number};
+export type TaskStatus = "queued" | "running" | "complete" | "failed" | "cancelled";
+export type Payload = Record<string, unknown>;
+export type Task = {id: string; body: string; fingerprint: string; status: TaskStatus; created: number; updated: number};
 type EventRow = {seq: number; at: number; payload: string};
 
 export class TaskConflict extends Error {}
@@ -43,7 +43,7 @@ export function openTaskStore(file: string) {
       throw error;
     }
   }
-  function finish(id: string, status: Exclude<Status, "queued" | "running">, payload: Payload) {
+  function finish(id: string, status: Exclude<TaskStatus, "queued" | "running">, payload: Payload) {
     return transaction(() => {
       const now = Date.now();
       if (!db.prepare("UPDATE tasks SET status=?,updated=? WHERE id=? AND status IN ('running','queued')").run(status, now, id).changes) return false;
@@ -102,76 +102,118 @@ export function openTaskStore(file: string) {
     close: () => db.close(),
   };
 }
-export type TaskStore = ReturnType<typeof openTaskStore>;
+type LocalTaskStore = ReturnType<typeof openTaskStore>;
+export type TaskStore = {
+  [Method in keyof LocalTaskStore]: (...args: Parameters<LocalTaskStore[Method]>) =>
+    ReturnType<LocalTaskStore[Method]> | Promise<ReturnType<LocalTaskStore[Method]>>;
+};
 
-export function taskRoutes(router: Router, base: string, store: TaskStore, validate: (body: unknown) => string | undefined) {
+export function taskRoutes(router: Router, base: string, store: TaskStore, validate: (body: unknown) => string | undefined | Promise<string | undefined>, options:{researchRecords?:boolean}={}) {
   router.param("taskId", (_req, res, next, id) => {
     if (!taskIdPattern.test(id)) { res.status(400).json({error:"无效的任务编号。"}); return; }
     next();
   });
-  router.post(base, (req, res) => {
+  router.post(base, async (req, res) => {
     const {id, input} = req.body ?? {};
     if (typeof id !== "string" || !taskIdPattern.test(id)) { res.status(400).json({error:"无效的任务编号。"}); return; }
-    const issue = validate(input);
+    const issue = await validate(input);
     if (issue) { res.status(400).json({error:issue}); return; }
     try {
-      const task = store.submit(id, input);
+      const task = await store.submit(id, input);
       res.status(202).set("Cache-Control", "no-store").json({id, status:task.status, created:task.created});
     } catch (error) {
       if (!(error instanceof TaskConflict)) throw error;
       res.status(409).json({error:error.message});
     }
   });
-  router.get(base + "/:taskId", (req, res) => {
-    const task = store.get(String(req.params.taskId));
+  router.get(base + "/:taskId", async (req, res) => {
+    const task = await store.get(String(req.params.taskId));
     if (!task) { res.status(404).json({error:"任务不存在。"}); return; }
     res.set("Cache-Control", "no-store").json({id:task.id, status:task.status, created:task.created, updated:task.updated});
   });
-  router.delete(base + "/:taskId", (req, res) => {
-    if (!store.get(String(req.params.taskId))) { res.status(404).json({error:"任务不存在。"}); return; }
-    const cancelled = store.finish(String(req.params.taskId), "cancelled", {error:"任务已取消。", code:"cancelled"});
+  if(options.researchRecords)router.get(base+"/:taskId/record",async(req,res)=>{
+    const id=String(req.params.taskId);
+    const task=await store.get(id);
+    const result=(await store.terminal(id))?.result;
+    if(!task||!result){res.status(404).json({error:"没有找到已完成的研究记录。"});return;}
+    const {query,turnId,conversationId}=JSON.parse(task.body);
+    res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,result});
+  });
+  router.delete(base + "/:taskId", async (req, res) => {
+    if (!await store.get(String(req.params.taskId))) { res.status(404).json({error:"任务不存在。"}); return; }
+    const cancelled = await store.finish(String(req.params.taskId), "cancelled", {error:"任务已取消。", code:"cancelled"});
     res.sendStatus(cancelled ? 204 : 409);
   });
-  router.get(base + "/:taskId/events", (req, res) => {
+  router.get(base + "/:taskId/events", async (req, res) => {
     const id = String(req.params.taskId);
-    if (!store.get(id)) { res.status(404).json({error:"任务不存在。"}); return; }
+    if (!await store.get(id)) { res.status(404).json({error:"任务不存在。"}); return; }
     let cursor = Number(req.query.after ?? 0);
     if (!Number.isSafeInteger(cursor) || cursor < 0) { res.status(400).json({error:"无效的事件序号。"}); return; }
     res.type("application/x-ndjson").set({"Cache-Control":"no-store", "X-Accel-Buffering":"no"}).flushHeaders();
-    let heartbeat = Date.now();
-    const timer = setInterval(flush, 150);
-    res.once("close", () => clearInterval(timer));
-    function flush() {
-      if (res.destroyed || res.writableEnded || res.writableNeedDrain) return;
-      const task = store.get(id);
-      const rows = store.events(id, cursor);
-      for (const row of rows) {
-        cursor = row.seq;
-        if (!res.write(JSON.stringify(row) + "\n")) return;
-      }
-      if (task && task.status !== "queued" && task.status !== "running" && rows.length < 128) res.end();
-      else if (Date.now() - heartbeat >= 10000) { res.write("\n"); heartbeat = Date.now(); }
+    let heartbeat=Date.now();
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    res.once("close",()=>clearTimeout(timer));
+    async function flush(){
+      if(res.destroyed || res.writableEnded)return;
+      try{
+        if(!res.writableNeedDrain){
+          const task=await store.get(id);
+          const rows=await store.events(id,cursor);
+          if(res.destroyed || res.writableEnded)return;
+          let buffered=false;
+          for(const event of rows){
+            cursor=event.seq;
+            if(!res.write(JSON.stringify(event)+"\n")){buffered=true;break;}
+          }
+          if(!buffered && task && task.status!=="queued"&&task.status!=="running"&&rows.length<128){res.end();return;}
+          if(Date.now()-heartbeat>=10000){res.write("\n");heartbeat=Date.now();}
+        }
+        timer=setTimeout(()=>void flush(),150);
+      }catch{res.destroy();}
     }
-    flush();
+    await flush();
   });
 }
 
-export function workTasks(store: TaskStore, run: (task: {id:string; body:any}, signal: AbortSignal, emit: (payload:Payload) => void) => Promise<Payload>) {
-  store.recoverInterrupted();
-  let active: AbortController | undefined;
-  const clock = setInterval(() => {
-    if (active) return;
-    const task = store.claim();
-    if (!task) return;
-    const controller = new AbortController();
-    active = controller;
-    const watch = setInterval(() => {
-      if (store.get(task.id)?.status === "cancelled") controller.abort();
-    }, 150);
-    void run(task, controller.signal, payload => store.append(task.id, payload)).then(
-      payload => store.finish(task.id, payload.error ? "failed" : "complete", payload),
-      () => store.finish(task.id, "failed", {error:"后台执行未完成，请查看已取得的结果。", code:"worker_error"}),
-    ).finally(() => { clearInterval(watch); active = undefined; });
-  }, 100);
-  return () => { clearInterval(clock); active?.abort(); };
+export async function workTasks(store: TaskStore, run: (task: {id:string; body:any}, signal: AbortSignal, emit: (payload:Payload) => void) => Promise<Payload>) {
+  await store.recoverInterrupted();
+  let active:AbortController|undefined;
+  let stopped=false;
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  async function poll(){
+    if(stopped)return;
+    try{
+      const task=await store.claim();
+      if(!task)return;
+      const controller=new AbortController();
+      active=controller;
+      let checking=false;
+      const watch=setInterval(async()=>{
+        if(checking)return;
+        checking=true;
+        try{
+          if((await store.get(task.id))?.status==="cancelled")controller.abort();
+        }catch{controller.abort();}
+        finally{checking=false;}
+      },200);
+      let pending=Promise.resolve();
+      let appendFailed=false;
+      try{
+        const payload=await run(task,controller.signal,event=>{
+          pending=pending.then(async()=>{
+            if(!appendFailed)await store.append(task.id,event);
+          }).catch(()=>{appendFailed=true;controller.abort();});
+        });
+        await pending;
+        if(appendFailed)throw Error("Could not persist task events");
+        await store.finish(task.id,payload.error?"failed":"complete",payload);
+      }catch{
+        await pending;
+        await store.finish(task.id,"failed",{error:"后台执行未完成，请查看已取得的结果。",code:"worker_error"});
+      }finally{clearInterval(watch);active=undefined;}
+    }catch{console.error("OneEarth task worker could not use its task store");}
+    finally{if(!stopped)timer=setTimeout(()=>void poll(),100);}
+  }
+  void poll();
+  return ()=>{stopped=true;clearTimeout(timer);active?.abort();};
 }

@@ -1,9 +1,5 @@
-import { PGlite } from "@electric-sql/pglite";
-import { postgis } from "@electric-sql/pglite-postgis";
-import { Pool } from "pg";
+import { productDatabase } from "./product-database";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 
 const schema = `
@@ -27,18 +23,14 @@ export type Chunk = {route:string; layer_id:string; starts:string|null; ends:str
 type ObjectRow = Pick<Chunk,"hash"|"size"|"media">;
 
 export async function spatialStore() {
-  const state = path.resolve(process.env.ONEEARTH_STATE_DIR || ".local/state");
-  const pgUrl = process.env.ONEEARTH_SPATIAL_DATABASE_URL;
-  const pg = pgUrl ? new Pool({connectionString: pgUrl}) : undefined;
-  const embedded = pg ? undefined : new PGlite(process.env.ONEEARTH_POSTGIS_DIR || path.join(state,"postgis"),{extensions:{postgis}});
-  async function query<T>(sql: string, values: unknown[] = []): Promise<T[]> {
-    if (pg) return (await pg.query(sql,values)).rows as T[];
-    return (await embedded!.query<T>(sql,values)).rows;
+  const pg=productDatabase("SPATIAL");
+  async function query<T>(sql:string,values:unknown[]=[]):Promise<T[]> {
+    return (await pg.query(sql,values)).rows as T[];
   }
-  if (pg) await pg.query(schema);
-  else await embedded!.exec(schema);
+  try{await pg.query(schema);}
+  catch(error){await pg.end();throw error;}
   return {
-    engine:pg ? "postgresql" : "pglite",
+    engine:"postgresql" as const,
     async version() {return (await query<{version:string}>("SELECT PostGIS_Lib_Version() AS version"))[0].version;},
     layers:() => query<Layer>("SELECT * FROM layers ORDER BY id"),
     async writeLayer(layer:Layer) {
@@ -71,28 +63,27 @@ export async function spatialStore() {
         CASE WHEN geom IS NULL THEN NULL ELSE ARRAY[ST_XMin(geom),ST_YMin(geom),ST_XMax(geom),ST_YMax(geom)] END AS bounds,
         hash,size,media FROM layer_chunks WHERE layer_id=$1 ORDER BY route`,[layer]);
     },
-    close:() => pg ? pg.end() : embedded!.close(),
+    close:() => pg.end(),
   };
 }
 
 export function layerObjects() {
-  const dir = path.resolve(process.env.ONEEARTH_OBJECT_DIR || path.join(process.env.ONEEARTH_STATE_DIR || ".local/state","objects"));
-  const bucket = process.env.ONEEARTH_OBJECT_BUCKET;
-  const client = bucket ? new S3Client({
+  const bucket=process.env.ONEEARTH_OBJECT_BUCKET;
+  if(!bucket)throw Error("ONEEARTH_OBJECT_BUCKET 缺失，产品图层需要 S3 对象存储。");
+  const client=new S3Client({
     endpoint:process.env.ONEEARTH_OBJECT_ENDPOINT,
     region:process.env.AWS_REGION || "us-east-1",
     forcePathStyle:process.env.ONEEARTH_OBJECT_PATH_STYLE === "1",
-  }) : undefined;
+  });
   const prefix = (process.env.ONEEARTH_OBJECT_PREFIX || "oneearth/").replace(/\/?$/,"/");
   const checkedKey = (hash:string) => {
     if (!/^[a-f0-9]{64}$/.test(hash)) throw Error("无效的图层对象编号。");
     return hash.slice(0,2) + "/" + hash;
   };
   return {
-    backend: client ? "s3" : "local",
+    backend:"s3" as const,
     async read(hash:string) {
       const key = checkedKey(hash);
-      if (!client) return await readFile(path.join(dir,key));
       const object = await client.send(new GetObjectCommand({Bucket:bucket,Key:prefix+key}));
       if (!object.Body) throw Error("图层对象无内容。");
       return Buffer.from(await object.Body.transformToByteArray());
@@ -100,19 +91,10 @@ export function layerObjects() {
     async put(bytes:Buffer) {
       const hash = createHash("sha256").update(bytes).digest("hex");
       const key = checkedKey(hash);
-      if (client) {
-        try {
-          await client.send(new PutObjectCommand({Bucket:bucket,Key:prefix+key,Body:bytes,IfNoneMatch:"*"}));
-        } catch (error) {
-          if ((error as {$metadata?:{httpStatusCode?:number}}).$metadata?.httpStatusCode !== 412) throw error;
-        }
-      } else {
-        const file = path.join(dir,key);
-        const existing = await stat(file).catch(()=>undefined);
-        if (!existing) {
-          await mkdir(path.dirname(file),{recursive:true,mode:0o700});
-          await writeFile(file,bytes,{flag:"wx",mode:0o600});
-        } else if (existing.size !== bytes.length) throw Error("本地图层对象大小不一致。");
+      try {
+        await client.send(new PutObjectCommand({Bucket:bucket,Key:prefix+key,Body:bytes,IfNoneMatch:"*"}));
+      } catch (error) {
+        if ((error as {$metadata?:{httpStatusCode?:number}}).$metadata?.httpStatusCode !== 412) throw error;
       }
       return {hash,size:bytes.length};
     },

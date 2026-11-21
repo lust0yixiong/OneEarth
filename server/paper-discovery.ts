@@ -2,7 +2,7 @@ import { paperId, type PaperRecord } from "../src/domain/paper-record";
 import type { DiscoveryContext, DiscoveryResponse } from "../src/domain/types";
 import type { ChatModel } from "../src/domain/chat-model";
 import { asksResearchQuestion, asksPaperUsageOnly, onlySource, refersToBatch } from "../src/domain/research-question";
-import { runExecutor } from "./chat-executor";
+import { runExecutor } from "./executor";
 import { readPaperPlan, searchPapers } from "./earthnano";
 
 export function paperIntent(query: string, ctx: DiscoveryContext) {

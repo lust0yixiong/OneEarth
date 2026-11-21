@@ -1,82 +1,53 @@
 # OneEarth Next
 
-Mac mini 本地验收入口为 http://127.0.0.1:5274 。发布版本为 `0.1.0`。原型 5174 保留。新版运行所需的网格、图层对象、目录缓存和任务数据位于新版自己的目录。已有上游访问通过部署进程加载。
+OneEarth 用于提出研究问题、核对数据和文献来源，并在球体上查看数据的空间范围与时相。Mac mini 是首个部署环境。历史开发基线保存在 `v0.1.0`，本轮产品版本为 `v0.2.0-dev.1`。本机入口和实测证据见 [产品验收记录](evidence/product/ACCEPTANCE.md)。开发基线的截图、故障与隔离复测见 [历史验收记录](evidence/ACCEPTANCE.md)。
 
-## 构建和启动
+## Mac mini 部署
 
-本机实测为 macOS arm64、Node.js 26.0.0、npm 11.12.1。首次安装在独立工程目录执行。
+准备 Node.js 26、带 PostGIS 的 PostgreSQL 18 和实际的 S3 兼容服务。Mac mini 可以使用 [Postgres.app 的 PostgreSQL 与 PostGIS 命令行组件](https://postgresapp.com/downloads.html)和 [Garage 的本地服务](https://garagehq.deuxfleurs.fr/documentation/quick-start/)。部署不需要原型服务或启动项。使用新工程已有的独立基础网格与 IMERG 数据副本，或用 `npm run data:prepare -- <独立数据目录>` 准备新位置所需的包。海纳原始数据仍由上游保存。
+
+从原型沿用上游访问权时，在具备原始授权环境的研发工作区一次性执行 `npm run access:import`。脚本仅将已授权的上游访问配置写到当前用户独占的 `~/Library/Application Support/OneEarth Next/access.json`，并保留本机已授权的执行器登录。独立发布指定该文件或等效凭据注入，生产启动不启用 `ONEEARTH_USE_EXISTING_ACCESS=1`。
 
 ```sh
 npm ci
-npm run data:prepare
-npm run data:seed
-npm run build
-ONEEARTH_USE_EXISTING_ACCESS=1 npm start
-```
-
-`data:prepare` 一次性从指定的资料目录复制基础网格和 IMERG 2023、2024 两年。可传入资料目录，或者将独立网格副本放入 `.local/globe-data`。`data:seed` 在时空进程启动前运行，把已发布分块和海纳森林／城市切片登记入 PostGIS 和对象存储。旧版源码下载包没有纳入新版发布。
-
-```sh
-npm run status
 npm run check
 npm test
-npm run test:e2e
-npm run test:spatial
+npm run build
+ONEEARTH_PG_BIN_DIR=/path/to/Postgres.app/Contents/Versions/18/bin \
+  node scripts/macos-product-storage.mjs init primary 55432 5900
+deploy_config="$HOME/Library/Application Support/OneEarth Next/storage-primary/deployment.env"
+node --env-file="$deploy_config" scripts/launch.mjs seed
+ONEEARTH_PORT=5474 ONEEARTH_DISCOVERY_PORT=5475 ONEEARTH_SPATIAL_PORT=5476 \
+  node --env-file="$deploy_config" scripts/launch.mjs
 ```
 
-前台启动后用 Ctrl+C 停止同一组进程。`node scripts/launch.mjs web runtime worker discovery spatial` 可指定角色。默认入口与服务均绑定本机。通过 [.env.example](.env.example) 配置独立端口和写目录。
+启动前配置见 [.env.example](.env.example)。Mac mini 验收实例使用 5474–5477。也可使用 `node --env-file="$deploy_config" scripts/start-isolated-release.mjs <原型目录绝对路径>`，验证运行进程无法读取原型目录和启动项或连接 5174。应用前台用 Ctrl+C 停止。数据库与对象存储可以用 `node scripts/macos-product-storage.mjs start primary` 重新启动。
 
-## 服务边界
+## 服务与数据
 
-| 监听 | 程序 | 数据与职责 |
-| --- | --- | --- |
-| 5274 | 网页入口 | 继承原型 React、Canvas 球体和预览，同源转发任务与图层请求 |
-| 5277 | 运行时任务 API | 提交、状态、按序事件重放、取消。SQLite 仅保存在新版状态目录 |
-| 无浏览器入口 | 后台 worker | 从任务队列领取工作，通过 Codex／Claude 适配入口执行。首期实测 Codex `gpt-6-luna` |
-| 5275 | 发现服务 | 独立队列和 HTTP 协议。组织文献、海纳、Search/Fetch 和渠道结果。断言只读 |
-| 5276 | 时空服务 | 图层、分块及空间时间索引。Mac mini 使用 PGlite/PostGIS 与按内容哈希保存的对象。可配置外部 PostgreSQL 和 S3 兼容桶 |
+| 程序 | 职责 |
+| --- | --- |
+| 网页入口 | 保留 React 界面、Canvas 球体和来源预览，转发同源任务和图层请求 |
+| 运行时 API 与 worker | PostgreSQL 保存任务、按序事件、用户确认、答复引用及结果快照。worker 判断本轮动作、组织证据和答复，独立执行器模块管理模型调用。发现动作通过服务协议委托 |
+| 数据发现 | 独立任务库保存发现任务、事件、线索、渠道状态及可随产品恢复的资料记录。论文断言库始终只读 |
+| 时空服务 | PostgreSQL + PostGIS 保存图层与分块的空间及时间索引，由 S3 API 保存和读取概览与分块。已有计算缓存可由服务重建 |
 
-网页端使用 `POST /api/tasks` 提交任务和稳定会话标识，使用 `GET /api/tasks/:taskId/events?after=<seq>` 读取 NDJSON 事件。浏览器刷新会用原任务号重新订阅，期间不重复派发。研究问题确认绑定实际返回的待确认任务。进程中断时保留旧事件和证据，记录中断并要求明确重试，避免重复未知状态的外部调用。
+客户端提交 `POST /api/tasks` 并通过 `GET /api/tasks/:taskId/events?after=<seq>` 订阅。刷新继承原任务号。用户确认绑定历史提议。`?research=<taskId>` 可在浏览器重新打开已结束的同一条研究记录。图层请求走时空服务，问答期间可继续浏览球体。
 
-时空服务支持 `GET /api/spatial/layers`、`GET /api/spatial/layers/:id/chunks` 及版本化对象读取。分块按视野、尺度、时段加载。源研究区与数据集覆盖分开。原型网格交互使用的覆盖计算在时空服务中保留独立缓存。
+机构网页登录缺少外部入口或配置引用，单列验证。本机产品入口绑定回环地址。与机构登录和项目授权联调前，保持本机范围。
 
-## 凭据与还原
+## 备份和恢复
 
-现有授权由 Mac mini 启动器从原型已有环境来源读取，仅注入进程。配置模板不存放密钥。新版不会复制私人浏览器会话。Mac mini 验收预设为本机用户入口。
-
-样例导出需要指定已结束的公开验收任务。新版已运行时可以从时空服务的本地端口读取对象，并按哈希核对。
+应用停写或无活动任务时备份产品数据库与对象，备份目录内包含研究记录，应仅交付已授权数据。初始化另一个 PostgreSQL 实例、Garage 服务和空桶，并在独立配置下恢复。恢复在独立目标中完成，全部通过后再启动应用。若恢复中断，保留失败目标用于排查，使用新的空目标重跑。
 
 ```sh
-ONEEARTH_EXPORT_ORIGIN=http://127.0.0.1:5276 npm run backup:sample -- export .local/restore-sample <首问编号> <追问编号>
-ONEEARTH_STATE_DIR=.local/restore-state npm run backup:sample -- restore .local/restore-sample
-ONEEARTH_PORT=5304 ONEEARTH_DISCOVERY_PORT=5305 ONEEARTH_SPATIAL_PORT=5306 ONEEARTH_STATE_DIR=.local/restore-state npm start
+export ONEEARTH_PG_BIN_DIR=/path/to/Postgres.app/Contents/Versions/18/bin
+node --env-file="$deploy_config" scripts/product-backup.mjs export .local/product-backup
+node scripts/macos-product-storage.mjs init restored 55433 5910
+restore_config="$HOME/Library/Application Support/OneEarth Next/storage-restored/deployment.env"
+node --env-file="$restore_config" scripts/product-backup.mjs restore .local/product-backup
+ONEEARTH_PORT=5574 ONEEARTH_DISCOVERY_PORT=5575 ONEEARTH_SPATIAL_PORT=5576 \
+  node --env-file="$restore_config" scripts/launch.mjs
 ```
 
-样例包包含任务、事件、引用和一个完整森林图层，留在 `.local`。目标需要先构建并准备基础网格。备份实测和 ECS 待验证项见 [验收记录](evidence/ACCEPTANCE.md)。
-
-## 复现对照实验
-
-从同级原型复制已部署产物和运行源码，清空浏览器上下文并使用只属于隔离副本的状态目录。
-
-```sh
-mkdir -p .local/baseline
-rsync -a ../oneearth-app/src ../oneearth-app/server ../oneearth-app/public ../oneearth-app/dist ../oneearth-app/package.json .local/baseline/
-ONEEARTH_USE_EXISTING_ACCESS=1 ONEEARTH_PORT=5294 ONEEARTH_STATE_DIR=.local/baseline-state ONEEARTH_DIST_DIR=.local/baseline/dist node scripts/launch.mjs baseline
-```
-
-在新版与基线均健康后运行 `npm run test:performance`。对照脚本记录本机浏览器帧间隔、慢帧、请求数和首次检索状态。`ONEEARTH_EXTENDED_MAP=1` 会在新系统的真实后台任务期间切换降水年份、返回数据分布、选格和飞行。
-
-Mac mini 上可在实际限制 5174 的条件下复跑问答和图层验收。先按上文准备新版网格并构建，保持 5174 正常在线，再执行：
-
-```sh
-node scripts/accept-prototype-isolation.mjs
-```
-
-脚本使用 macOS 进程级网络限制阻断浏览器、运行服务和执行器到 TCP 5174 的连接，在 `.local` 新建状态目录，使用 5374–5377 进行验收。可通过 `ONEEARTH_ISOLATION_PORT` 配置其他连续端口的起点。结果写入 `evidence/prototype-isolation`，并在结束后关闭测试实例。
-
-故障注入使用全新的状态目录。
-
-```sh
-ONEEARTH_USE_EXISTING_ACCESS=1 ONEEARTH_TEST_FAIL_CHANNEL=web ONEEARTH_PORT=5284 ONEEARTH_DISCOVERY_PORT=5285 ONEEARTH_SPATIAL_PORT=5286 ONEEARTH_STATE_DIR=.local/fault-state npm start
-npm run test:fault
-```
+`scripts/accept-product-restore.mjs` 使用干净的浏览器会话比对原始实例和恢复实例中的同一任务、来源和森林图层。产品数据库和对象服务配置可替换为 ECS 的独立 PostgreSQL、PostGIS 与 S3 兼容服务。云环境的连通性、并发、生产认证与切换留待第二阶段实测。

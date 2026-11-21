@@ -1,0 +1,78 @@
+{
+  "checkedAt": "2026-11-21T17:24:05.313Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "kernel": "27.3.0",
+  "node": "v26.0.0",
+  "deployments": [
+    {
+      "health": [
+        {
+          "name": "web",
+          "port": 5474,
+          "version": "0.2.0-dev.1"
+        },
+        {
+          "name": "discovery",
+          "port": 5475
+        },
+        {
+          "name": "spatial",
+          "port": 5476,
+          "engine": "postgresql",
+          "postgis": "3.6.3",
+          "objects": "s3"
+        },
+        {
+          "name": "runtime",
+          "port": 5477,
+          "version": "0.2.0-dev.1"
+        }
+      ],
+      "storage": {
+        "postgresPort": 55432,
+        "s3Port": 5900
+      },
+      "restrictedProcessTree": true
+    },
+    {
+      "health": [
+        {
+          "name": "web",
+          "port": 5574,
+          "version": "0.2.0-dev.1"
+        },
+        {
+          "name": "discovery",
+          "port": 5575
+        },
+        {
+          "name": "spatial",
+          "port": 5576,
+          "engine": "postgresql",
+          "postgis": "3.6.3",
+          "objects": "s3"
+        },
+        {
+          "name": "runtime",
+          "port": 5577,
+          "version": "0.2.0-dev.1"
+        }
+      ],
+      "storage": {
+        "postgresPort": 55434,
+        "s3Port": 5920
+      },
+      "restrictedProcessTree": true
+    }
+  ],
+  "sourceSha256": "0d4e58f5464db0354459fa43f28dddf6956ba3ba65a8648f42d8dad9fe886177",
+  "sourceFingerprintPaths": [
+    "server",
+    "src",
+    "package-lock.json"
+  ],
+  "webBuildSha256": "cbe4fce44930728871eaead3c6fcfd83a24cfff3d7d2772a438f036ac6286455",
+  "prototypeOutsidePolicy": "ok",
+  "clientIsolationCurlExit": 7
+}

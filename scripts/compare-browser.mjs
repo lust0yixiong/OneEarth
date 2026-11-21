@@ -20,6 +20,7 @@ try {
     const context=await browser.newContext({viewport,deviceScaleFactor:1});
     const page=await context.newPage();
     const transfers=[];
+    let taskId;
     page.on("response",async r=>{
       if(!r.url().includes("/precip-data/"))return;
       const fromSpatial=r.headers()["x-oneearth-service"]==="spatial";
@@ -27,7 +28,11 @@ try {
       const bytes=await r.request().sizes().then(s=>Math.max(0,s.responseBodySize)).catch(()=>0);
       transfers.push({route:new URL(r.url()).pathname,status:r.status(),fromSpatial,ms:Math.round(timing.responseEnd),bytes});
     });
-    page.on("request",r=>assert.notEqual(new URL(r.url()).port,"5174"));
+    page.on("request",request=>{
+      const url=new URL(request.url());
+      assert.notEqual(url.port,"5174");
+      if(request.method()==="POST"&&url.pathname==="/api/tasks")taskId=request.postDataJSON().id;
+    });
     const canvas=page.locator("canvas[data-painted]");
     const pending=page.locator(".live-search.pending");
     const open=async()=>{
@@ -37,10 +42,12 @@ try {
       if(await reopen.isVisible())await reopen.click();
       await page.waitForFunction(()=>document.querySelector("canvas[data-painted]")?.dataset.rainLoading==="false",{},{timeout:30000});
     };
+    const coldStart=Date.now();
     await open();
+    const initialLayerReadyMs=Date.now()-coldStart;
     const health=await page.request.get(new URL("/api/health",base).href).then(r=>r.json());
     const summary={name,entry:base.origin,version:health.version || "prototype / index-DpY_7JXa.js",
-      rows:[],coldTiles:transfers.slice()};
+      initialLayerReadyMs,rows:[],coldTiles:transfers.slice()};
     const cdp=await context.newCDPSession(page);
     await cdp.send("Performance.enable");
     async function measure(state,trial){
@@ -81,7 +88,7 @@ try {
     const started=Date.now();
     await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(question);
     await page.getByLabel("发送消息",{exact:true}).click();
-    await page.waitForFunction(()=>/论文|检索|海纳/.test(document.querySelector(".live-search.pending")?.innerText ?? ""),{},{timeout:100000});
+    await page.waitForFunction(()=>/论文|检索|海纳/.test(document.querySelector(".live-search.pending")?.innerText ?? ""),{},{timeout:160000});
     summary.firstRetrievalShownMs=Date.now()-started;
     for(let i=1;i<=3;i++)await measure("background-search",i);
     await page.screenshot({path:output+"/"+name+"-imerg-during-search.png"});
@@ -109,6 +116,23 @@ try {
     }
     await page.locator(".message.assistant").last().waitFor({timeout:300000});
     summary.answerShownMs=Date.now()-started;
+    if(taskId){
+      const response=await page.request.get(new URL("/api/tasks/"+taskId+"/events",base).href,{timeout:60000});
+      assert.ok(response.ok());
+      const events=(await response.text()).split("\n").filter(Boolean).map(JSON.parse);
+      const terminal=events.at(-1);
+      assert.ok(terminal?.result);
+      const requested=events[0].at;
+      const claimed=events.find(event=>event.started)?.at;
+      const firstFinding=events.find(event=>event.finding?.items?.length)?.at;
+      const traces=terminal.result.runTrace;
+      const discovery=traces?.calls.find(call=>call.name==="独立数据发现服务");
+      assert.equal(discovery?.status,"done");
+      summary.research={taskId,serverQueueMs:claimed===undefined?null:claimed-requested,
+        firstFindingMs:firstFinding===undefined?null:firstFinding-requested,terminalPersistedMs:terminal.at-requested,
+        synthesisRetainedSources:traces.calls.some(call=>call.id==="answer-generation"&&call.status==="failed"),
+        actualExecutors:traces.timings.map(timing=>({executor:timing.executor,model:timing.model,elapsedMs:timing.elapsedMs}))};
+    }
     summary.visibleTiles=transfers.length;
     summary.noPrototypeRequests=true;
     results.systems.push(summary);

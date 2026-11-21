@@ -1,0 +1,27 @@
+{
+  "confirmationId": "501d6971-f256-4742-968e-141a21b256b9",
+  "discoveryId": "6075ce43-01e2-4647-a880-3ca36efb50fd",
+  "searchCallsBeforeDecision": 0,
+  "injection": null,
+  "channels": [
+    {
+      "count": 15,
+      "detail": "",
+      "source": "海纳专区检索",
+      "status": "done"
+    },
+    {
+      "count": 24,
+      "detail": "",
+      "source": "文献资料检索",
+      "status": "done"
+    },
+    {
+      "count": 11,
+      "detail": "DeepSeek Fetch DeepSeek Fetch 未取得网页正文。；原站读取 来源站点返回 HTTP 400。；DeepSeek Fetch DeepSeek fetch 请求失败（HTTP 404）。；原站读取 The operation was aborted",
+      "source": "网络检索",
+      "status": "partial"
+    }
+  ],
+  "savedFindings": 4
+}

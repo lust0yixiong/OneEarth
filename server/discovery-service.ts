@@ -2,8 +2,10 @@ import express from "express";
 import path from "node:path";
 import { mkdirSync } from "node:fs";
 import { accessGuard } from "./access";
-import { openTaskStore, taskRoutes, taskIdPattern, workTasks } from "./task-store";
-import { runExecutor, validHistory } from "./chat-executor";
+import { taskRoutes, taskIdPattern, workTasks } from "./task-store";
+import { postgresTaskStore } from "./postgres-task-store";
+import { runExecutor } from "./executor";
+import { validHistory } from "./turn-history";
 import { validChatModel } from "../src/domain/chat-model";
 import { validDeepSeekTools } from "../src/domain/deepseek-tools";
 import { validQuestionDecision } from "../src/domain/question-confirmation";
@@ -11,6 +13,8 @@ import { validContext } from "./validation";
 import { dataSearchInstructions, dataSearchSchema, requiredDataSearch } from "./data-search";
 import { paperCache, searchPapers } from "./earthnano";
 import { paperCatalog } from "./paper-catalog";
+import { productDatabase } from "./product-database";
+import { validPaperRecord } from "../src/domain/paper-record";
 import { registerPapers } from "../src/domain/datasets";
 import { hainaService } from "./haina-search";
 import { searchSources } from "./web-search";
@@ -20,8 +24,13 @@ import type { DiscoveryInput } from "./discovery-contract";
 
 const state = process.env.ONEEARTH_STATE_DIR || path.resolve(".local/state");
 mkdirSync(state, {recursive:true, mode:0o700});
-const store = openTaskStore(path.join(state, "discovery.sqlite"));
+const store = await postgresTaskStore("discovery");
 const papers = paperCache(path.join(state,"paper-evidence.sqlite"));
+const records=productDatabase("DISCOVERY");
+try{
+  const saved=await records.query("SELECT record FROM discovery_papers ORDER BY id");
+  for(const {record} of saved.rows)if(validPaperRecord(record))papers.save(record);
+}finally{await records.end();}
 registerPapers(papers.list());
 const haina = hainaService(path.join(state, "haina-catalog.json"));
 haina.start();
@@ -31,7 +40,7 @@ app.use(accessGuard());
 app.use(express.json({limit:"384kb"}));
 app.use("/api/paper-records",paperCatalog(papers));
 app.get("/api/health", (_req, res) => res.json({status:"ok", service:"discovery"}));
-taskRoutes(app, "/v1/discoveries", store, value => {
+taskRoutes(app, "/v1/discoveries", store, async value => {
   const input = value as Partial<DiscoveryInput> | null;
   if (!input || typeof input.query !== "string" || !input.query.trim() || input.query.length > 4000 ||
     !validChatModel(input.config) || !validHistory(input.history) ||
@@ -43,7 +52,7 @@ taskRoutes(app, "/v1/discoveries", store, value => {
     return "数据发现请求的模型、上下文或确认信息无效。";
   }
   if (input.decision && input.continuedFrom) {
-    const parent = taskIdPattern.test(input.continuedFrom) ? store.terminal(input.continuedFrom) : undefined;
+    const parent = taskIdPattern.test(input.continuedFrom) ? await store.terminal(input.continuedFrom) : undefined;
     const check = (parent?.result as import("./data-search").DataSearchResult | undefined)?.questionCheck;
     if (!check || check.originalQuestion !== input.query ||
       (input.decision.choice === "proposed" && check.proposedQuestion !== input.decision.dataQuestion))
@@ -51,7 +60,7 @@ taskRoutes(app, "/v1/discoveries", store, value => {
   }
 
 });
-workTasks(store, async ({body: input}: {body: DiscoveryInput}, signal, emit) => {
+await workTasks(store, async ({body: input}: {body: DiscoveryInput}, signal, emit) => {
   const {query, config, deepseekTools, decision, scope, initialPlan, conversationContext, previousResearchIntent,
     history, references, currentDatasets, conversationEvidence} = input;
   const stage = (message: string) => emit({stage:message});

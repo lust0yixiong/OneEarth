@@ -1,31 +1,27 @@
-import { spawn, execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdirSync, existsSync, readFileSync, realpathSync } from "node:fs";
 import { parseEnv } from "node:util";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { readCredentials, readPrototypeAccess, selectAccess } from "./credentials.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const source = path.resolve(root, "../oneearth-app");
 const local = existsSync(path.join(root, ".env")) ? parseEnv(readFileSync(path.join(root, ".env"), "utf8")) : {};
 const env = {...local,...process.env};
-const allowed = /^(?:PATH|DEEPSEEK_API_KEY|ONEEARTH_DEEPSEEK_(?:SEARCH|FETCH)|ONEEARTH_EARTHNANO_URL|ONEEARTH_ASSERTION_PG_(?:HOST|PORT|DATABASE|USER|PASSWORD|SSL)|HAINA_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY|DATAHUB_AK|DATAHUB_SK)|ONEEARTH_HAINA_AREA_ID)$/;
-if (env.ONEEARTH_USE_EXISTING_ACCESS === "1") {
-  const original = {};
-  for (const name of [".env", ".env.haina"]) {
-    const file = path.join(source, name);
-    if (existsSync(file)) Object.assign(original, parseEnv(readFileSync(file, "utf8")));
-  }
-  const plist = path.join(homedir(), "Library/LaunchAgents/org.oneearth.prototype.plist");
-  if (process.platform === "darwin" && existsSync(plist)) {
-    const program = "import json, plistlib, sys; print(json.dumps(plistlib.load(open(sys.argv[1], 'rb')).get('EnvironmentVariables', {})))";
-    Object.assign(original, JSON.parse(execFileSync("python3", ["-c", program, plist], {stdio:["ignore","pipe","ignore"]}).toString()));
-  }
-  for (const [key, value] of Object.entries(original)) if (allowed.test(key) && !env[key]) env[key] = value;
-  // The SDK and signed catalogue use different variable names for the same issued pair.
-  env.HAINA_ACCESS_KEY_ID ||= env.HAINA_DATAHUB_AK;
-  env.HAINA_SECRET_ACCESS_KEY ||= env.HAINA_DATAHUB_SK;
+if (env.ONEEARTH_CREDENTIALS_FILE && env.ONEEARTH_USE_EXISTING_ACCESS === "1")
+  throw Error("请在独立凭据文件和开发复用模式中选择一项。");
+if(env.ONEEARTH_CREDENTIALS_FILE){
+  for(const [key,value] of Object.entries(readCredentials(env.ONEEARTH_CREDENTIALS_FILE)))
+    env[key] ??= value;
+}else if(env.ONEEARTH_USE_EXISTING_ACCESS==="1"){
+  const original=readPrototypeAccess(root);
+  for(const [key,value] of Object.entries(selectAccess(original)))env[key] ??= value;
+  if(typeof original.PATH==="string"&&!env.PATH)env.PATH=original.PATH;
 }
+env.HAINA_ACCESS_KEY_ID ||= env.HAINA_DATAHUB_AK;
+env.HAINA_SECRET_ACCESS_KEY ||= env.HAINA_DATAHUB_SK;
 for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
 
 const oldData = path.join(homedir(), "Applications/OneEarth");
@@ -65,7 +61,7 @@ mkdirSync(env.TMPDIR,{recursive:true,mode:0o700});
 
 const services = {
   discovery:["server/discovery-service.ts"],
-  worker:["server/index.ts"],
+  worker:["server/runtime-worker.ts"],
   runtime:["server/runtime-api.ts"],
   web:["server/index.ts"],
   spatial:["server/spatial-service.ts"],

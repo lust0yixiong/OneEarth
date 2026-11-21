@@ -1,4 +1,4 @@
-import type {CatalogueEvidence} from './chat-executor';
+import type {CatalogueEvidence} from './research-answer';
 import type {AnswerReference,WebHit,ToolCall,ManifestIndex} from '../src/domain/types';
 import {parseSynthesis,synthesisResponseSchema} from './scientific-answer';
 import type {CalculationReport} from './verified-calculation';

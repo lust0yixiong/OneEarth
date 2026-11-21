@@ -293,6 +293,8 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   attachScope(item);
                   input.current?.focus({preventScroll:true});
                 }}>
+              {m.answerNotes && m.runTrace && !m.failed &&
+                <CopyButton text={new URL("?research="+m.id,location.href).href} label="复制研究记录链接"/>}
               {m.catalogMatch && !m.answerNotes && m.candidates?.ids.map(id => (
                 <button className="candidate-link" key={id} onClick={() =>
                   inspectAsset(id, m.candidates!.filters, null, m.candidates)}>

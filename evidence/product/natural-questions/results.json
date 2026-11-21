@@ -1,0 +1,75 @@
+{
+  "entry": "http://127.0.0.1:5474",
+  "browser": "157.0.8103.79",
+  "results": [
+    {
+      "kind": "method",
+      "question": "我想比较干旱区和湿润区的闪旱发生率。用土壤湿度百分位做阈值时，怎么避免把气候差异误判成闪旱差异？先讲比较方法，不需要找资料。",
+      "id": "62e8cc77-b35a-4ddf-a4c9-970abfd6cda6",
+      "status": "complete",
+      "action": "respond",
+      "discoveries": 0,
+      "proofCount": 0,
+      "channels": [],
+      "actualExecutors": [
+        {
+          "executor": "codex",
+          "model": "gpt-6-luna",
+          "elapsedMs": 11023
+        },
+        {
+          "executor": "codex",
+          "model": "gpt-6-luna",
+          "elapsedMs": 18050
+        }
+      ],
+      "elapsedMs": 155389,
+      "prototypeRequests": 0
+    },
+    {
+      "kind": "ambiguity",
+      "question": "把它们的空间分辨率比较一下，哪一个更适合我这里？",
+      "id": "53cf5f4d-22b2-4cdf-9ad6-b1729b3da900",
+      "status": "complete",
+      "action": "clarify",
+      "discoveries": 0,
+      "proofCount": 0,
+      "channels": [],
+      "actualExecutors": [
+        {
+          "executor": "codex",
+          "model": "gpt-6-luna",
+          "elapsedMs": 10914
+        }
+      ],
+      "elapsedMs": 23327,
+      "prototypeRequests": 0
+    },
+    {
+      "kind": "discovery",
+      "question": "想知道川西滑坡的缓慢变形能不能和降雨对应起来。我想先比较过去几年的 InSAR 时序和降水产品，有哪些研究资料能用？最好说明范围和出处。",
+      "id": "cbefaa1e-3502-4fa2-a415-6242abb7411a",
+      "status": "complete",
+      "action": "search",
+      "discoveries": 1,
+      "proofCount": 3,
+      "channels": [
+        "web"
+      ],
+      "actualExecutors": [
+        {
+          "executor": "codex",
+          "model": "gpt-6-luna",
+          "elapsedMs": 19916
+        },
+        {
+          "executor": "codex",
+          "model": "gpt-6-luna",
+          "elapsedMs": 26717
+        }
+      ],
+      "elapsedMs": 87683,
+      "prototypeRequests": 0
+    }
+  ]
+}

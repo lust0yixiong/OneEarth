@@ -1,4 +1,4 @@
-import { openTaskEvents } from "./runtime-client";
+import { loadResearchRecord, openTaskEvents } from "./runtime-client";
 import {datasetScope,mergeScope,scopedQuestionContext,scopeDetail,scopeLabel,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
 import {rememberReadEvidence} from "./read-evidence";
@@ -490,7 +490,30 @@ async function loadInitialSession(): Promise<State> {
       state.messages = record.messages;
     }
     state.saved = await readFavorites();
-    if (!record) await writeSession(state.sessionId, sessionTitle(state), captureWorkspace(state));
+    const researchId=url.searchParams.get("research");
+    if(researchId&&!state.messages.some(message=>message.id===researchId)){
+      try{
+        const saved=await loadResearchRecord(researchId);
+        const reply=saved.result;
+        if(reply.paperRecords)registerPapers(reply.paperRecords,false);
+        if(reply.hainaRecords?.length&&reply.hainaCatalog)
+          registerHaina(reply.hainaRecords,reply.hainaCatalog.synced,reply.hainaCatalog.endpoint,false);
+        const stored=await readSession(saved.conversationId);
+        const messages:Message[]=[
+          {id:saved.turnId,role:"user",text:saved.question,time:saved.created},
+          {id:saved.id,role:"assistant",text:reply.message,time:saved.updated,replyTo:saved.turnId,
+            researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
+            conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
+            answerNotes:reply.answerNotes,runTrace:reply.runTrace,researchRegion:reply.researchRegion},
+        ];
+        state.sessionId=saved.conversationId;
+        state.messages=mergeMessages(stored?.messages||[],messages);
+        state.chatOpen=true;
+        await writeSession(state.sessionId,saved.question,captureWorkspace(state),state.messages);
+      }catch(error){
+        state.sessionError=error instanceof Error?error.message:"研究记录暂时无法打开。";
+      }
+    }else if(!record)await writeSession(state.sessionId,sessionTitle(state),captureWorkspace(state));
   } catch {
     // If the remembered snapshot could not be read, keep that record intact.
     if (remembered && state.sessionId === remembered && !state.messages.length)
@@ -786,7 +809,7 @@ function useWorkspaceValue(initialState: State) {
       serial.current++;
       lastSnapshot.current = captureWorkspace(next);
       const url = new URL(location.href);
-      for (const k of ["result", "case", "topic"]) url.searchParams.delete(k);
+      for (const k of ["result", "research", "case", "topic"]) url.searchParams.delete(k);
       if (url.hash.startsWith("#snapshot=")) url.hash = "";
       history.replaceState({...history.state,oneearthSession:next.sessionId,oneearthPath:url.pathname+url.search}, "", url);
       try { saveReaderCheckpoint(next.sessionId, next.evidence, next.readerPosition); }
@@ -1560,7 +1583,7 @@ function useWorkspaceValue(initialState: State) {
                   {
                     title: "获得服务响应",
                     detail:
-                      "POST /api/chat" +
+                      "POST /api/tasks" +
                       "\n" +
                       r.message,
                   },

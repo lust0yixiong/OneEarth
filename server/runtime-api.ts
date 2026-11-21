@@ -1,19 +1,23 @@
+import { resultSnapshots } from "./result-snapshots";
+import { releaseVersion } from "./version";
 import express from "express";
 import path from "node:path";
 import { mkdirSync } from "node:fs";
 import { accessGuard } from "./access";
 import { validateTurn } from "./runtime-input";
-import { openTaskStore, taskRoutes } from "./task-store";
+import { taskRoutes } from "./task-store";
+import { postgresTaskStore } from "./postgres-task-store";
 
 const state=process.env.ONEEARTH_STATE_DIR || path.resolve(".local/state");
 mkdirSync(state,{recursive:true,mode:0o700});
-const tasks=openTaskStore(path.join(state,"runtime.sqlite"));
+const tasks=await postgresTaskStore("runtime");
 const app=express();
 app.disable("x-powered-by");
 app.use(accessGuard());
+app.use("/api/results",await resultSnapshots());
 app.use(express.json({limit:"256kb"}));
-app.get("/api/health",(_req,res)=>res.json({status:"ok",service:"runtime",version:"0.1.0"}));
-taskRoutes(app,"/api/tasks",tasks,input=>validateTurn(tasks,input));
+app.get("/api/health",(_req,res)=>res.json({status:"ok",service:"runtime",version:releaseVersion}));
+taskRoutes(app,"/api/tasks",tasks,input=>validateTurn(tasks,input),{researchRecords:true});
 app.use((_error:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{
   res.status(400).json({error:"运行时任务请求无效。"});
 });

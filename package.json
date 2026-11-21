@@ -1,6 +1,6 @@
 {
   "name": "oneearth-next",
-  "version": "0.1.0",
+  "version": "0.2.0-dev.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
     "precompute:coverage": "node --import tsx scripts/precompute-coverage.ts",
     "sync:research-data": "node --import tsx scripts/sync-assertion-postgres.ts",
     "sync:haina": "node scripts/sync-haina.mjs",
-    "test": "tsx --test src/domain/*.test.ts server/task-store.test.ts",
+    "test": "tsx --test src/domain/*.test.ts server/*.test.ts",
     "test:ui": "node scripts/smoke.mjs && tsx scripts/interaction-check.ts",
     "test:data-ui": "node scripts/data-view-check.mjs",
     "test:chat-experience": "node scripts/chat-experience-check.mjs",
@@ -54,7 +54,11 @@
     "test:spatial": "node scripts/accept-spatial.mjs",
     "test:fault": "node scripts/accept-fault-and-confirmation.mjs",
     "test:compat": "node scripts/accept-restored.mjs",
-    "test:performance": "node scripts/compare-browser.mjs"
+    "test:performance": "node scripts/compare-browser.mjs",
+    "test:natural": "node scripts/accept-natural-questions.mjs",
+    "access:import": "node scripts/import-access-once.mjs",
+    "test:product-restore": "node scripts/accept-product-restore.mjs",
+    "storage:inspect": "node scripts/inspect-product-storage.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1175.0",

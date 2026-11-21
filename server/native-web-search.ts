@@ -1,6 +1,6 @@
 import type {ChatModel} from "../src/domain/chat-model";
 import type {WebHit} from "../src/domain/types";
-import {runExecutor} from "./chat-executor";
+import {runExecutor} from "./executor";
 
 /** Only actual web-search tool results become evidence. Model-written links are ignored. */
 export function parseNativeWebSearch(raw:string){

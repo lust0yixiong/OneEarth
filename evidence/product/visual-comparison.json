@@ -1,0 +1,44 @@
+[
+  {
+    "caseName": "首页与 Chat",
+    "reference": "../oneearth-goal-handoff/界面参考/首页与Chat.png",
+    "product": "evidence/product/first-turn/home.png",
+    "viewport": [
+      1512,
+      859
+    ],
+    "changedPixels": {
+      "header": 0,
+      "nav": 0,
+      "workspace": 112587
+    }
+  },
+  {
+    "caseName": "Chat 收起",
+    "reference": "../oneearth-goal-handoff/界面参考/地球工作区.png",
+    "product": "evidence/product/first-turn/globe.png",
+    "viewport": [
+      1512,
+      859
+    ],
+    "changedPixels": {
+      "header": 0,
+      "nav": 0,
+      "workspace": 112825
+    }
+  },
+  {
+    "caseName": "选格",
+    "reference": "evidence/visual/baseline-map/selected-grid.png",
+    "product": "evidence/product/spatial/selected-grid.png",
+    "viewport": [
+      1512,
+      859
+    ],
+    "changedPixels": {
+      "header": 0,
+      "nav": 0,
+      "workspace": 833
+    }
+  }
+]

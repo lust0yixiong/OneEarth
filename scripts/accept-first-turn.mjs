@@ -83,7 +83,7 @@ try {
   assert.ok(first.referenceCount>=2,"首次回答至少引用两份来源");
   if(first.paperIds.length < 2) throw Error("此次首答没有至少两篇带稳定引用的论文，需选另一真实样本。");
   const followStarted = Date.now();
-  await page.getByLabel("向 OneEarth 提问",{exact:true}).fill("第二篇论文用了什么数据？请只用刚才已读到的内容。");
+  await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(process.env.ONEEARTH_FOLLOWUP_QUESTION || "第二篇论文用了什么数据？请只用刚才已读到的内容。");
   await page.getByLabel("发送消息",{exact:true}).click();
   await page.waitForFunction(() => document.querySelectorAll(".message.assistant").length > 1 || document.querySelector(".chat-error"),{},{timeout:300000});
   const follow = await collect(2,followStarted);

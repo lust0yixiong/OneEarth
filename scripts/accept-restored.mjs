@@ -4,6 +4,7 @@ import { mkdir,writeFile } from "node:fs/promises";
 
 const base=new URL(process.env.ONEEARTH_URL || "http://127.0.0.1:5304");
 assert.notEqual(base.port,"5174");
+const health=await fetch(new URL("/api/health",base)).then(response=>response.json());
 const [firstId,followId]=process.argv.slice(2);
 assert.ok(firstId && followId);
 const evidence=process.env.ONEEARTH_EVIDENCE_DIR || "evidence/a4-restore";
@@ -54,6 +55,6 @@ try {
   await page.waitForTimeout(1500);
   assert.ok(transfers.some(r=>r.name==="20230715.webp"&&r.status===200),"恢复后的时空服务必须交付实际森林图层");
   await page.screenshot({path:evidence+"/restored-forest.png"});
-  await writeFile(evidence+"/results.json",JSON.stringify({entry:base.origin,version:"0.1.0",firstId,followId,citation:second.id,
+  await writeFile(evidence+"/results.json",JSON.stringify({entry:base.origin,version:health.version,firstId,followId,citation:second.id,
     legacySampleOpened:true,spatialObjects:transfers},null,2)+"\n");
 } finally {await browser.close();}

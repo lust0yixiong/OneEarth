@@ -1,0 +1,25 @@
+{
+  "versions": {
+    "postgresql": "18.7 (Postgres.app)",
+    "postgis": "3.6.3"
+  },
+  "runtime": {
+    "runtime_tasks": 8,
+    "runtime_events": 1575,
+    "runtime_confirmations": 2,
+    "runtime_references": 16,
+    "result_snapshots": 4
+  },
+  "discovery": {
+    "discovery_tasks": 5,
+    "discovery_events": 1505,
+    "discovery_findings": 15,
+    "discovery_channels": 9,
+    "discovery_papers": 72
+  },
+  "spatial": {
+    "layers": 3,
+    "layer_chunks": 6068
+  },
+  "recordedUserDecisions": 1
+}
