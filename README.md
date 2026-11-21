@@ -66,6 +66,14 @@ ONEEARTH_USE_EXISTING_ACCESS=1 ONEEARTH_PORT=5294 ONEEARTH_STATE_DIR=.local/base
 
 在新版与基线均健康后运行 `npm run test:performance`。对照脚本记录本机浏览器帧间隔、慢帧、请求数和首次检索状态。`ONEEARTH_EXTENDED_MAP=1` 会在新系统的真实后台任务期间切换降水年份、返回数据分布、选格和飞行。
 
+Mac mini 上可在实际限制 5174 的条件下复跑问答和图层验收。先按上文准备新版网格并构建，保持 5174 正常在线，再执行：
+
+```sh
+node scripts/accept-prototype-isolation.mjs
+```
+
+脚本使用 macOS 进程级网络限制阻断浏览器、运行服务和执行器到 TCP 5174 的连接，在 `.local` 新建状态目录，使用 5374–5377 进行验收。可通过 `ONEEARTH_ISOLATION_PORT` 配置其他连续端口的起点。结果写入 `evidence/prototype-isolation`，并在结束后关闭测试实例。
+
 故障注入使用全新的状态目录。
 
 ```sh

@@ -1,0 +1,39 @@
+{
+  "entry": "http://127.0.0.1:5374",
+  "version": "0.1.0",
+  "networkPolicy": "macOS Seatbelt denies outbound TCP 5174 in browser and service process trees",
+  "before": {
+    "outside": "ok",
+    "insideCurlExit": 7
+  },
+  "startedAt": "2026-11-21T16:54:17.744Z",
+  "after": {
+    "outside": "ok",
+    "insideCurlExit": 7
+  },
+  "finishedAt": "2026-11-21T16:56:44.062Z",
+  "tiles": 55,
+  "tileService": "spatial",
+  "refresh": {
+    "taskId": "6c2e7c61-9264-4d86-a002-13c0142d49da",
+    "statusBefore": "running",
+    "submissions": 3,
+    "uniqueTaskIds": 1
+  },
+  "turns": [
+    {
+      "id": "6c2e7c61-9264-4d86-a002-13c0142d49da",
+      "executor": "codex",
+      "status": "complete",
+      "assertionReferences": 3,
+      "discoveryCalls": 1
+    },
+    {
+      "id": "a1541063-ec07-492a-90bc-b3d23b5151d3",
+      "executor": "codex",
+      "status": "complete",
+      "assertionReferences": 1,
+      "discoveryCalls": 0
+    }
+  ]
+}
