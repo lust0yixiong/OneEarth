@@ -225,11 +225,35 @@ Mac mini 隔离候选 `287b8dd` 接受显式能力输入 `POST /api/tasks` 的 `
 
 工作台从同源 `GET /api/observation-materials` 显示可供对话使用的资料。运行时从操作者登记中挑选显式标记 `modelVisible: true` 的条目，列表只含文件身份、版本、显示名和变量名。工作台按正常提问流程发送问题。附着范围只记录 `{kind:"observation",artifactId,version,title}`，实际材料信息和摘要由运行时读取可信登记。
 
-运行时用受权 A2A `oneearth.observation.research.request.v1` 联系发现方。输入为 `{researchTaskId,question,materials,evidence}`。新会话首次提问时 `evidence` 为空。后续从同一会话的可信父任务取得仍获准的真实依据。运行时在受理检查点固定资料的 SHA-256。发现模型的规划输入仅含获准的资料身份、变量名、问题和已得事实。初始委托和复用规划均省去文件摘要。通过验证的执行回执仍按原契约提交 SHA-256。
+运行时用受权 A2A `oneearth.observation.research.request.v1` 联系发现方。输入为 `{researchTaskId,question,materials,evidence}`。新会话首次提问时 `evidence` 为空。后续从同一会话的可信父任务取得仍获准的真实依据。运行时在受理检查点固定资料的 SHA-256。发现模型的规划输入仅含获准的资料身份、变量名、问题和已得事实。初始委托和复用规划均省去单列的授权摘要字段。通过验证的执行回执仍按原契约提交 SHA-256。
 
 发现模型可选择请求读取、引用已得依据、澄清，或交回通用问答。读取需求引用一个获准资料版本和变量。报告实际单位、非空记录数及首尾日期时，需求使用 `purpose: "describe"`。对照已给标准时沿用明确的单位和起止日。两种需求使用相同只读执行链。运行时复核冻结的摘要与当前授权，并将结果交回同一个发现 Task。发现确认实际可用的证据，运行时据此保存可打开的版本引用。
 
 已得依据支持本轮时，发现模型可以在一次规划中选择复用，运行时回引归档中的文件版本，文件读取次数为零。文件中的变量全部为空时，已读单位和零非空条数仍可复用。后续撤掉模型使用许可时，原回答及其依据仍可重开，新提问按当前授权使用可用材料。显式 `input.observationCheck` 继续沿用原请求、执行及权限语义。观测资料浏览等待用户主动发出问题。
+
+### 从已保存来源读取已登记的 NetCDF 文件
+
+操作者可给获准文件版本登记 `source`，包含发布方下载入口 `dataUrl`、发布目录 `catalogUrl`、发布方版本说明 `versionLabel` 和已验证的关联网址 `referenceUrls`。运行时在 `GET /api/observation-materials` 的可选 `sourceBindings` 中发布这些字段及文件身份。工作台以完整来源网址匹配当时可选的精确文件版本。研究者主动选择后，仍提交原有观测附件形状。旧研究里的元数据链接和保存摘录保留其原有身份。
+
+以下响应示例中的两个数组以 `artifactId` 和 `version` 配对。撤权后，该条目及绑定从清单移除。
+
+```json
+{
+  "materials": [{"artifactId":"coastal-station","version":"release-1","title":"海岸观测","variables":["TEMP"]}],
+  "sourceBindings": [{
+    "artifactId":"coastal-station",
+    "version":"release-1",
+    "dataUrl":"https://data.example.org/files/coastal.nc",
+    "catalogUrl":"https://data.example.org/catalog/coastal",
+    "versionLabel":"2026-10-27T02:00:56Z",
+    "referenceUrls":["https://data.example.org/metadata/coastal"]
+  }]
+}
+```
+
+执行子进程可直接读取经典和 64 位偏移 NetCDF 的单值时间序列。文件必须在受权注册表中，实际完整文件的 SHA-256 须与受理版本一致。结果可带 `netcdf`，保存所查变量、单位、时间轴、首末原始时间值与 UTC 时刻、缺测标记、声明范围和计数口径。在同一文件中登记的其他变量可附上头部元数据。归档的 `artifactSource` 记录本次采用的发布入口及版本。发现规划使用公开版本 ID，初始请求省去单独的授权摘要字段、原文件路径和归档来源对象。若登记者选用内容寻址标识，公开版本 ID 本身可包含文件 SHA-256。已取得读据仍经原 Task 交回。归档详情可直接显示本次保存的依据，发布方链接可能提供更新版本。
+
+当前直接执行上限为 256 MiB 和每变量 200 万样本。读取器支持一个时间维和其余长度均为一的维度，以及支持范围内的公历 CF 时间轴。遇到超限文件或未支持的布局、历法和 NetCDF 格式时，返回可辨识的失败读据状态。
 
 ## 部署与兼容
 

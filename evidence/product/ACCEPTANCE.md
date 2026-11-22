@@ -1,5 +1,27 @@
 # Mac mini 产品验收
 
+## Mac mini SN-0107 原始观测文件回验
+
+**真实文件级追问通过 Mac mini 隔离阶段签收。** 候选源码 `a5b7d8dbdba41e6139740d4612e20023e84ceaf6`，构建清单 SHA-256 `71de7af70f7cc0079caa0adcd9861a961daf21ff1ad331e6b214fe135a8548f2`（3,424 文件）。独立测试从该源码重建 [6764](http://127.0.0.1:6764)，校验源码差异的 20 个文件和完整构建清单。常驻 5474 运行 rc.9。
+
+对照来自 706 题库的 SN-0107。题库原题运行编号为 `2d287a30-e46e-4655-9751-d28853f2502e`。历史寻源改写首问 `61f512db-8ec2-4a0e-b4d0-3b094d13ec4c` 的 KEO 引用指向 ISO 元数据。之后的旧对照追问 `3096bc39-09cd-49b1-9541-dc47a951b7e1` 已辨认入口类型。旧寻源与旧追问当时均未取得原始数据，两份记录和 461 条原事件按原编号、时间和保存内容恢复至隔离数据库。
+
+操作者从 NOAA NDBC [同一对象的服务目录](https://dods.ndbc.noaa.gov/thredds/catalog/oceansites/long_timeseries/KEO/catalog.html?dataset=oceansites/long_timeseries/KEO/OS_KEO_200406_M_TSVMBP_32N145E_hr.nc) 核对原始入口，从 [NDBC 发布站](https://www.ndbc.noaa.gov/data/oceansites/long_timeseries/KEO/OS_KEO_200406_M_TSVMBP_32N145E_hr.nc) 实际取得 HTTP 200 和 156,694,128 字节的 NetCDF classic 文件。发布方 Last-Modified 为 `2026-10-27T02:00:56Z`，原文件 SHA-256 为 `8db086dc9eda14dfc5be010a8522187fd93df55ff493e520ff66b982118428dd`。操作者登记了精确关联网址和该摘要，以授权此版本供模型选取。公开版本 ID 为 `sha256-` 加完整摘要，浏览器和发现规划均可见。此回验的入口核实、下载和登记是操作者动作。
+
+独立 Chrome 从原研究的 NOAA 来源卡选择已登记版本，使用同一会话和原父任务提交唯一的[文件级追问](http://127.0.0.1:6764/?research=ff7b3b44-fb14-43c2-a8cf-eca8afddd284)。浏览器发送自然问题和附件身份。真实 DeepSeek `deepseek-flash` 规划收到获准文件身份、变量名及空证据集合，选择 `read/describe WSPD`。A2A Task `234a5f9b-98cd-449f-b7aa-d97695538598` 包含一个规划作业和一个同 Task 回执作业。实际子进程一次读取上述原件，按同一摘要留存读据。正文〔1〕、来源抽屉及刷新后重开均能查看该归档引用。以这次浏览器提交为起点，到实际文件读取、服务端终态和首个可见答复分别用时 9.358、10.173、10.240 秒。发现规划用时 8.484 秒。
+
+实际答复和生产只读子进程的直接对照一致。变量 `WSPD` 的单位为 `m/s`。182,167 个时间位置中 130,402 条计入统计，51,765 条等于原件 `_FillValue`（`1.0000000409184788e+35`），该列无单独的 `missing_value`，其余剔除项为零。首末 UTC 时刻为 `2004-06-16T20:00:00.000Z` 与 `2025-03-28T18:00:00.000Z`。原始 `TIME` 值为 `19890.833333333332` 与 `27480.75`，以 `days since 1950-01-01T00:00:00Z` 计。C 读取全文件，期间没有派生转换或采样。关联列 `SWSPD`、`WDIR`、`UWND` 和 `VWND` 保留各自名称和角色。主程用直接执行对照确认 `SWSPD` 虽共享 CF 标准名，但起始时刻及条数不同。真实网页答复只统计 `WSPD`。本结论限文件级非缺测边界，原题的质量标记筛选、风流有效配对与通量差沿用原判分。
+
+类型检查、构建及限并发全套 815 项通过，包含真实隔离 PostgreSQL，无跳过。首次高并发测试有两项临时 PostgreSQL 初始化触发本机 SysV 共享内存段数上限，按并发 2 复跑通过，代码版本一致。总体负责人单独复跑 NetCDF、来源、契约和自然运行时四组受控测试，65 项全部通过，并以 Python `netCDF4` 直接检查同一原件。独立测试的原件扫描、Chrome、A2A、执行日志和论据重开另有 16 项证据。
+
+独立索引位于 `~/Library/Application Support/OneEarth Next/iterations/keo-0107-independent/evidence/sn-0107-independent-acceptance.json`，SHA-256 为 `b04aef607055a2af5c74a17eeed4d3b38d866ae2983cc8eaa5f49c551fbf2ee3`。主程证据位于 `~/Library/Application Support/OneEarth Next/iterations/keo-observation-0107/`。从该根目录核对 `shasum -a 256 -c source/raw.sha256`，从 `evidence/candidate-a5b7d8d/` 核对 `shasum -a 256 -c candidate-proof.sha256`。在对应的隔离源码中执行 `npm run check`、`npm run build` 和下列测试。直接读和浏览器复跑脚本 `verify-raw-reader.mts`、`verify-keo-workbench.mts` 位于证据根目录，复跑使用新输出位置。
+
+```sh
+node --import tsx --test --test-concurrency=2 src/domain/*.test.ts server/*.test.ts
+```
+
+含 PostgreSQL 的全套运行需设置 `ONEEARTH_A2A_TEST_PG_BIN` 指向可用于隔离测试的 PostgreSQL bin 目录。
+
 ## Mac mini 普通 Chat 的观测资料
 
 **Mac mini 隔离阶段通过总体签收。** 候选源码 `441f2e31c6bc67d75ead47c9761c622c44d01b82`，构建清单 SHA-256 `c5c00271b3db81c1a1349b12852a8c4b3ceb58ccde39fd0202675e29aefee840`（3,424 文件）。类型检查、构建及 790 项测试通过，包含真实隔离 PostgreSQL 用例。
