@@ -1,5 +1,23 @@
 # Mac mini 产品验收
 
+## Mac mini 网格问答目录引用 v0.2.0-rc.9
+
+**隔离单项验收通过。** 签收源码 `6b5f2c640a36634fb8fe4cc598ac91bfc0cf9a9e`，构建清单 SHA-256 `25e493fb639f031398a4f59853a31f5294c1297078f2c7b9fb839ea145bf1be7`（3,424 个文件）。隔离候选 [6174](http://127.0.0.1:6174)，rc.8 负基线 [6164](http://127.0.0.1:6164)。类型检查、723 项测试和独立重建通过，包含两个真实隔离 PostgreSQL 测试。
+
+- 原任务 `e52cb271-b3fb-4334-94de-0726be4b857f` 的权威空间结果已有一项精确来源，答复缺引用。Chrome 以原问法重试 [8ee3d47e](http://127.0.0.1:6174/?research=8ee3d47e-818f-4943-99c9-9fdbc4a4978c)，H3 `871f8aa03ffffff`、2003 年、受控论文 A 的范围修订与基线一致。实际 Codex `gpt-6-luna` 一次规划选择 `read` 与目录条目，一次确定性 A2A `records` 按权威内容 ID 返回 A。服务端任务从受理到完成 13.254 秒，精确目录往返代理实测 2.268 毫秒。期间的时空投影 head 是已有周期轮询。未新增发现 Task、论文正文读取或数据文件读取。
+- 回答列论文题名和数据产品，从正文编号和来源抽屉均能打开本轮保存的精确目录记录。Chrome 同一会话刷新和干净会话重开均通过。真实隔离数据库经正式导入同键 B 和撤下后，新签范围读取当前索引，旧句柄返回 410；已存研究仍按原 A 重开，归档字节一致。独立测试使用实际网页和模型，A、B 是受控目录样本，覆盖表示目录定位。
+- 受控回归覆盖仅计数、普通问答、同义问法、内容补读、明确开放发现、同会话材料复用、服务不可用及过期范围。首次没有精确目录材料时按缺项处理，保持原权威计数及范围。
+
+本机联调根为 `~/Library/Application Support/OneEarth Next/iterations/coverage-answer-references/`。证据在其 `evidence/` 下，包括 `original-failure.json`、`candidate-task-trace.json`、`candidate-current-a.json`、`candidate-current-b-publication.json`、`candidate-withdrawn-publication.json` 与 `candidate-reopen-withdrawn.json`。从联调根运行 `node verify-reopen.mjs 6174 <任务 ID> <精确来源 ID> <新输出名>` 可复测只读打开，使用新的输出名保留原截图及核对结果。固定动作回归在源码目录运行 `node --import tsx --test server/grid-catalogue-answer.test.ts`。
+
+### 日常入口切换
+
+**独立上线复核通过。** 2026-11-22 19:15（上海时间），[常驻 5474](http://127.0.0.1:5474) 切至同一签收代码和构建，沿用原 primary 和存储进程。排空后停写备份，在独立 PostgreSQL 和 Garage 恢复并核对三库、5,950 个对象、197 个当前映射和 217 个精确版本。三条原研究记录、论文依据、实际论文和 RGI 两组范围的成员及修订、森林图层字节均与切前一致。rc.8 原发布、启动配置及停写备份留存供回退。
+
+生产 [3e136b30](http://127.0.0.1:5474/?research=3e136b30-4f89-463f-87d5-8e1aefb47a7f) 在 H3 `871f8a902ffffff` 命中一个真实目录版本，数据 DOI 为 `10.1594/pangaea.886889`。实际 Codex `gpt-6-luna` 一次动作规划，按精确 ID 取得已发布目录记录，14.180 秒从受理到保存答复。浏览器点击与刷新后的归档重开均回到同一条目录记录，发现库任务数 24→24。
+
+独立复测索引为 `~/Library/Application Support/OneEarth Next/iterations/grid-paper-reference-acceptance/evidence/rc9-acceptance-index.json`。切换证据位于 `~/Library/Application Support/OneEarth Next/iterations/primary-rc9-scope-reference/` 的 `cutover.ndjson`、`deployment-verified.json`、`backup-restored-and-verified.json`、`task-persistence-verified.json`。生产重开截图、时间和线路核对见联调根的 `evidence/primary-reopen.json`、`primary-task-trace.json`。
+
 ## Mac mini 论文发布与时空投影 v0.2.0-rc.8
 
 **Mac mini 隔离阶段通过独立验收。** 签收源码 `0254e5352572d2b7fbd070757562c92e8ad98e9b`，构建清单 SHA-256 `8c4c1c82450f7426e53c7b784544c0f9f61a12908acff258dedcd718cd89e254`。隔离入口 [5924](http://127.0.0.1:5924)，rc.7 只读对照 [5914](http://127.0.0.1:5914)，新格式恢复 [6094](http://127.0.0.1:6094)。类型检查、693 项测试和构建全通过，包含真实隔离 PostgreSQL 测试。最终候选相对前一实测版 `04bcf02` 的产品差异为三处候选枚举逻辑。
