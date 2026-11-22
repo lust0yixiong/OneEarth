@@ -23,14 +23,19 @@ npm run check
 npm test
 npm run build
 ONEEARTH_PG_BIN_DIR=/path/to/Postgres.app/Contents/Versions/18/bin \
-  node scripts/macos-product-storage.mjs init primary 55432 5900
-deploy_config="$HOME/Library/Application Support/OneEarth Next/storage-primary/deployment.env"
+  node scripts/macos-product-storage.mjs init isolated-first 55442 5940
+oneearth_home="$HOME/Library/Application Support/OneEarth Next"
+deploy_config="$oneearth_home/storage-isolated-first/deployment.env"
+export ONEEARTH_CREDENTIALS_FILE="$oneearth_home/access.json"
+export ONEEARTH_DISCOVERY_CHAT_MODEL='{"executor":"codex","model":"deepseek-flash","provider":"deepseek"}'
+export ONEEARTH_PORT=5894 ONEEARTH_DISCOVERY_PORT=5895 ONEEARTH_SPATIAL_PORT=5896 ONEEARTH_RUNTIME_PORT=5897
 node --env-file="$deploy_config" scripts/launch.mjs seed
-ONEEARTH_PORT=5474 ONEEARTH_DISCOVERY_PORT=5475 ONEEARTH_SPATIAL_PORT=5476 \
-  node --env-file="$deploy_config" scripts/launch.mjs
+node --env-file="$deploy_config" scripts/launch.mjs
 ```
 
-启动前配置见 [.env.example](.env.example)。Mac mini 验收实例使用 5474–5477。也可使用 `node --env-file="$deploy_config" scripts/start-isolated-release.mjs <原型目录绝对路径>`，验证运行进程无法读取原型目录和启动项或连接 5174。应用前台用 Ctrl+C 停止。数据库与对象存储可以用 `node scripts/macos-product-storage.mjs start primary` 重新启动。
+首次独立部署选自己的状态目录、数据库、对象存储和未占用的端口。示例的 `isolated-first` 使用新的状态位置。启动发现进程前，按示例从已有授权的独立凭据引用加载 DeepSeek；也可把同名模型变量配置到部署环境。运行时使用其原有的 Codex `gpt-6-luna`。DeepSeek Search/Fetch 沿用既有部署配置与每轮开关。[配置模板](.env.example) · [发现服务接口与兼容用法](docs/发现服务-A2A.md)
+
+5474–5477 属于现有 Mac mini 常驻实例。也可使用 `node --env-file="$deploy_config" scripts/start-isolated-release.mjs <原型目录绝对路径>`，验证运行进程无法读取原型目录和启动项或连接 5174。应用前台用 Ctrl+C 停止。示例数据库与对象存储可以用 `node scripts/macos-product-storage.mjs start isolated-first` 重新启动。
 
 ### Mac mini 常驻入口
 
