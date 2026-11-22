@@ -149,6 +149,20 @@ export function SourceDrawer({refs,title,message,archived,question,close}:{refs:
           }}>查看已保存依据</button>}
         </section>;
       }
+      if (r.evidenceLevel==="observation-file") {
+        const evidence=r.observationEvidence;
+        return <section className="oe-network-dataset" data-reference-type={details.type} data-observation-evidence={r.id} key={r.id}>
+          <div className="oe-source-card">
+            <b><CitationIcon type={details.type}/><span>{r.title}</span></b>
+            <small>{details.evidence}</small>
+            {evidence ? <>
+              <small>文件版本 {evidence.version} · 变量 {evidence.variable} · 单位 {evidence.unit}</small>
+              <small>{evidence.count ? "非空记录 "+evidence.count+" 条 · "+evidence.first+" 至 "+evidence.last : "无非空记录"}</small>
+              <small style={{overflowWrap:"anywhere"}}>SHA-256 {evidence.sha256}</small>
+            </> : <small>这份档案未保存详细读取依据。</small>}
+          </div>
+        </section>;
+      }
       const a=assetById.get(r.id),url=safeUrl(a?.url),doi=doiFor(r.id);
       const hasPaperEvidence=details.type==="paper";
       const catalogueRecord=r.evidenceLevel==="catalogue-record";

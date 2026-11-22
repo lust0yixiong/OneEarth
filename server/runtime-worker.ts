@@ -2,7 +2,9 @@ import path from "node:path";
 import { mkdirSync } from "node:fs";
 import { workTasks } from "./task-store";
 import { postgresTaskStore } from "./postgres-task-store";
-import { executeTurn, type RuntimeServices } from "./runtime-turn";
+import { type RuntimeServices } from "./runtime-turn";
+import {observationExecution} from "./observation-execution";
+import {runtimeWorkerRunner} from "./runtime-worker-runner";
 import { requestPerformance, type ExecutorTiming } from "./request-performance";
 import { constellationService, parseSources } from "./constellations";
 import { spatialCoverageClient } from "./spatial-coverage-client";
@@ -22,8 +24,13 @@ const services:RuntimeServices = {
   canonicalCache:new Map(),
 };
 registerObservations(services.push.latest().records,true);
-await workTasks(services.tasks, ({id,body}, signal, emit) => {
+const engine=process.env.ONEEARTH_SKILL_REGISTRY&&(process.env.ONEEARTH_SKILL_SERVICE_TOKEN?.length??0)>=32?await observationExecution():undefined;
+const runner=runtimeWorkerRunner(services,engine);
+const stop=await workTasks(services.tasks, (task, signal, emit) => {
   const timings:ExecutorTiming[]=[];
-  return requestPerformance.run(timings, () => executeTurn(services,id,body,signal,emit));
-});
+  return requestPerformance.run(timings, () => runner.run(task,signal,emit));
+},{maintenance:runner.maintenance});
+let stopping=false;
+const shutdown=()=>{if(stopping)return;stopping=true;void stop().then(()=>engine?.close()).then(()=>services.tasks.close()).then(()=>process.exit(0),()=>process.exit(1));};
+process.once("SIGTERM",shutdown);process.once("SIGINT",shutdown);
 console.log("OneEarth runtime worker started");

@@ -10,6 +10,9 @@ export type Task = {id: string; body: string; fingerprint: string; status: TaskS
 type EventRow = {seq: number; at: number; payload: string};
 
 export class TaskConflict extends Error {}
+/** A trusted worker outcome: the durable checkpoint owns continuation now. */
+export class TaskParked {}
+export type TaskStep = {id:string;body:any;checkpoint:Payload};
 
 export function openTaskStore(file: string) {
   const db = new DatabaseSync(file);
@@ -28,6 +31,9 @@ export function openTaskStore(file: string) {
       at INTEGER NOT NULL, payload TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS task_replay ON task_events(id, seq);
+    CREATE TABLE IF NOT EXISTS task_steps (
+      id TEXT PRIMARY KEY REFERENCES tasks(id), checkpoint TEXT NOT NULL, wake_at INTEGER
+    );
   `);
   const find = db.prepare("SELECT * FROM tasks WHERE id = ?");
   const get = (id: string) => find.get(id) as Task | undefined;
@@ -48,7 +54,9 @@ export function openTaskStore(file: string) {
     return transaction(() => {
       const now = Date.now();
       if (!db.prepare("UPDATE tasks SET status=?,updated=? WHERE id=? AND status IN ('running','queued')").run(status, now, id).changes) return false;
-      write(id, payload, now);
+      const step=db.prepare("SELECT checkpoint FROM task_steps WHERE id=?").get(id) as {checkpoint:string}|undefined;
+      const retained=step&&status!=="complete"?JSON.parse(step.checkpoint)[status==="cancelled"?"cancelledResult":"failedResult"]:undefined;
+      write(id,retained?{...payload,result:retained}:payload,now);
       return true;
     });
   }
@@ -60,7 +68,7 @@ export function openTaskStore(file: string) {
       const row = db.prepare("SELECT payload FROM task_events WHERE id=? ORDER BY seq DESC LIMIT 1").get(id);
       if (row) return JSON.parse(String(row.payload));
     },
-    submit(id: string, body: unknown) {
+    submit(id: string, body: unknown, checkpoint?:Payload) {
       return transaction(() => {
         const raw = JSON.stringify(body);
         const hash = createHash("sha256").update(raw).digest("hex");
@@ -71,30 +79,59 @@ export function openTaskStore(file: string) {
         }
         const now = Date.now();
         db.prepare("INSERT INTO tasks VALUES (?, ?, ?, 'queued', ?, ?)").run(id, raw, hash, now, now);
+        if(checkpoint)db.prepare("INSERT INTO task_steps VALUES (?,?,?)").run(id,JSON.stringify(checkpoint),now);
         write(id, {queued: true, queuedAt: now}, now);
         return get(id)!;
       });
     },
     claim() {
       return transaction(() => {
-        const row = db.prepare("SELECT * FROM tasks WHERE status='queued' ORDER BY created,id LIMIT 1").get() as Task | undefined;
+        const row = db.prepare(`SELECT t.* FROM tasks t LEFT JOIN task_steps s ON s.id=t.id
+          WHERE t.status='queued' OR (t.status='running' AND s.wake_at<=?) ORDER BY t.updated,t.created,t.id LIMIT 1`).get(Date.now()) as Task | undefined;
         if (!row) return;
         const now = Date.now();
         db.prepare("UPDATE tasks SET status='running',updated=? WHERE id=?").run(now, row.id);
-        write(row.id, {started: true, startedAt: now}, now);
-        return {id:row.id, body:JSON.parse(row.body)};
+        if(row.status==="queued")write(row.id, {started: true, startedAt: now}, now);
+        const step=db.prepare("SELECT checkpoint FROM task_steps WHERE id=?").get(row.id) as {checkpoint:string}|undefined;
+        if(step)db.prepare("UPDATE task_steps SET wake_at=NULL WHERE id=?").run(row.id);
+        return {id:row.id, body:JSON.parse(row.body),...(step?{checkpoint:JSON.parse(step.checkpoint) as Payload}:{})};
       });
     },
     append(id: string, payload: Payload) {
       transaction(() => { if (get(id)?.status === "running") write(id, payload); });
     },
     finish,
+    step(id:string):Payload|undefined{const row=db.prepare("SELECT checkpoint FROM task_steps WHERE id=?").get(id) as {checkpoint:string}|undefined;return row?JSON.parse(row.checkpoint):undefined;},
+    saveStep(id:string,checkpoint:Payload,event?:Payload){return transaction(()=>{
+      if(get(id)?.status!=="running")return false;
+      db.prepare("INSERT INTO task_steps VALUES (?,?,NULL) ON CONFLICT(id) DO UPDATE SET checkpoint=excluded.checkpoint").run(id,JSON.stringify(checkpoint));
+      if(event)write(id,event);return true;
+    });},
+    cancelStep(id:string,cancellation:Payload,event?:Payload){return transaction(()=>{
+      if(get(id)?.status!=="cancelled")return false;
+      const row=db.prepare("SELECT checkpoint FROM task_steps WHERE id=?").get(id) as {checkpoint:string}|undefined;
+      if(!row)return false;
+      const checkpoint=JSON.parse(row.checkpoint);checkpoint.cancellation={...checkpoint.cancellation,...cancellation};
+      db.prepare("UPDATE task_steps SET checkpoint=? WHERE id=?").run(JSON.stringify(checkpoint),id);
+      if(event)write(id,{error:"任务已取消。",code:"cancelled",...event,result:checkpoint.cancelledResult});return true;
+    });},
+    park(id:string,checkpoint:Payload,wakeAt:number,event?:Payload){return transaction(()=>{
+      if(get(id)?.status!=="running")return false;
+      db.prepare("INSERT INTO task_steps VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET checkpoint=excluded.checkpoint,wake_at=excluded.wake_at").run(id,JSON.stringify(checkpoint),wakeAt);
+      const now=Date.now();db.prepare("UPDATE tasks SET updated=? WHERE id=?").run(now,id);if(event)write(id,event,now);return true;
+    });},
+    cancelledSteps():TaskStep[]{return (db.prepare(`SELECT t.id,t.body,s.checkpoint FROM task_steps s JOIN tasks t ON t.id=s.id
+      WHERE t.status='cancelled' AND json_extract(s.checkpoint,'$.cancellation.reconciled') IS NOT 1 ORDER BY t.updated LIMIT 20`).all() as {id:string;body:string;checkpoint:string}[])
+      .map(row=>({id:row.id,body:JSON.parse(row.body),checkpoint:JSON.parse(row.checkpoint)}));},
     recoverInterrupted() {
       const rows = db.prepare("SELECT id FROM tasks WHERE status='running'").all() as {id:string}[];
-      for (const {id} of rows) finish(id, "failed", {
+      for (const {id} of rows) {
+        if(db.prepare("UPDATE task_steps SET wake_at=? WHERE id=?").run(Date.now(),id).changes){write(id,{stepRecovered:true});continue;}
+        finish(id, "failed", {
         error:"后台进程中断。已取得的结果仍可查看，请明确重试未完成的工作。",
         code:"worker_interrupted",
-      });
+        });
+      }
     },
     events(id: string, after: number) {
       return (db.prepare("SELECT seq,at,payload FROM task_events WHERE id=? AND seq>? ORDER BY seq LIMIT 128")
@@ -110,11 +147,13 @@ export function openTaskStore(file: string) {
 }
 type LocalTaskStore = ReturnType<typeof openTaskStore>;
 export type TaskStore = {
-  [Method in Exclude<keyof LocalTaskStore,"materialEvents">]: (...args: Parameters<LocalTaskStore[Method]>) =>
+  [Method in Exclude<keyof LocalTaskStore,"materialEvents"|"step"|"saveStep"|"park"|"cancelStep"|"cancelledSteps">]: (...args: Parameters<LocalTaskStore[Method]>) =>
     ReturnType<LocalTaskStore[Method]> | Promise<ReturnType<LocalTaskStore[Method]>>;
-}&{materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>};
+}&{materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>}&{
+  [Method in "step"|"saveStep"|"park"|"cancelStep"|"cancelledSteps"]?:(...args:Parameters<LocalTaskStore[Method]>)=>ReturnType<LocalTaskStore[Method]>|Promise<ReturnType<LocalTaskStore[Method]>>;
+};
 
-export function taskRoutes(router: Router, base: string, store: TaskStore, validate: (body: unknown) => string | undefined | Promise<string | undefined>, options:{researchRecords?:boolean}={}) {
+export function taskRoutes(router: Router, base: string, store: TaskStore, validate: (body: unknown) => string | undefined | Promise<string | undefined>, options:{researchRecords?:boolean;initialCheckpoint?:(id:string,input:unknown)=>Payload|undefined;recoverRecord?:(task:Task)=>Promise<unknown>}={}) {
   router.param("taskId", (_req, res, next, id) => {
     if (!taskIdPattern.test(id)) { res.status(400).json({error:"无效的任务编号。"}); return; }
     next();
@@ -125,7 +164,7 @@ export function taskRoutes(router: Router, base: string, store: TaskStore, valid
     const issue = await validate(input);
     if (issue) { res.status(400).json({error:issue}); return; }
     try {
-      const task = await store.submit(id, input);
+      const task = await store.submit(id, input,options.initialCheckpoint?.(id,input));
       res.status(202).set("Cache-Control", "no-store").json({id, status:task.status, created:task.created});
     } catch (error) {
       if (!(error instanceof TaskConflict)) throw error;
@@ -140,7 +179,7 @@ export function taskRoutes(router: Router, base: string, store: TaskStore, valid
   if(options.researchRecords)router.get(base+"/:taskId/record",async(req,res)=>{
     const id=String(req.params.taskId);
     const task=await store.get(id);
-    const result=(await store.terminal(id))?.result;
+    const result=(await store.terminal(id))?.result??(task?await options.recoverRecord?.(task):undefined);
     if(!task||!result){res.status(404).json({error:"没有找到已完成的研究记录。"});return;}
     const {query,turnId,conversationId}=JSON.parse(task.body);
     res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,result});
@@ -181,14 +220,16 @@ export function taskRoutes(router: Router, base: string, store: TaskStore, valid
   });
 }
 
-export async function workTasks(store: TaskStore, run: (task: {id:string; body:any}, signal: AbortSignal, emit: (payload:Payload) => void) => Promise<Payload>) {
+export async function workTasks(store: TaskStore, run: (task: {id:string; body:any;checkpoint?:Payload}, signal: AbortSignal, emit: (payload:Payload) => void) => Promise<Payload|TaskParked>,options:{maintenance?:()=>Promise<void>}={}) {
   await store.recoverInterrupted();
   let active:AbortController|undefined;
   let stopped=false;
   let timer:ReturnType<typeof setTimeout>|undefined;
+  let polling:Promise<void>;
   async function poll(){
     if(stopped)return;
     try{
+      await options.maintenance?.();
       const task=await store.claim();
       if(!task)return;
       const controller=new AbortController();
@@ -212,14 +253,17 @@ export async function workTasks(store: TaskStore, run: (task: {id:string; body:a
         });
         await pending;
         if(appendFailed)throw Error("Could not persist task events");
-        await store.finish(task.id,payload.error?"failed":"complete",payload);
+        if(!(payload instanceof TaskParked))await store.finish(task.id,payload.error?"failed":"complete",payload);
       }catch{
         await pending;
-        await store.finish(task.id,"failed",{error:"后台执行未完成，请查看已取得的结果。",code:"worker_error"});
+        const checkpoint=controller.signal.aborted&&!appendFailed?await store.step?.(task.id):undefined;
+        if(checkpoint){
+          if(!stopped&&(await store.get(task.id))?.status==="running")await store.park?.(task.id,checkpoint,Date.now()+500,{stepInterrupted:true,workerReleased:true});
+        }else await store.finish(task.id,"failed",{error:"后台执行未完成，请查看已取得的结果。",code:"worker_error"});
       }finally{clearInterval(watch);active=undefined;}
     }catch{console.error("OneEarth task worker could not use its task store");}
-    finally{if(!stopped)timer=setTimeout(()=>void poll(),100);}
+    finally{if(!stopped)timer=setTimeout(()=>{polling=poll();},100);}
   }
-  void poll();
-  return ()=>{stopped=true;clearTimeout(timer);active?.abort();};
+  polling=poll();
+  return ()=>{stopped=true;clearTimeout(timer);active?.abort();return polling;};
 }

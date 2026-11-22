@@ -48,10 +48,11 @@ export function AnswerContent({quote,selectedReferences,text,references,details,
       if(marker){
         const ref=references[+marker[1]-1];if(!ref)return part;
         const id=ref.kind==="asset"?ref.id:undefined;
+        const observation=ref.kind==="asset"&&ref.evidenceLevel==="observation-file";
         const label=parts[i-1]?.trimEnd().endsWith(ref.title)?part:citationLabel(ref.title)+part;
         return <CitationLink key={i} reference={ref} number={+marker[1]} label={label} details={details?.[+marker[1]-1] || citationDetails(ref)}
           openSaved={ref.kind==="web"?savedActions?.get(ref.url):undefined}
-          quote={quote} selected={selectedReferences?.some(r=>r.kind===ref.kind && (r.kind==="asset" && ref.kind==="asset"?r.id===ref.id:r.kind==="web" && ref.kind==="web" && r.url===ref.url))} inspect={inspect} hover={hover} inCell={!!id&&inCell?.has(id)} focused={!!id&&focused===id}/>;
+          quote={observation?undefined:quote} selected={selectedReferences?.some(r=>r.kind===ref.kind && (r.kind==="asset" && ref.kind==="asset"?r.id===ref.id:r.kind==="web" && ref.kind==="web" && r.url===ref.url))} inspect={inspect} hover={observation?undefined:hover} inCell={!!id&&inCell?.has(id)} focused={!!id&&focused===id}/>;
       }
       if(part.startsWith("**")&&part.endsWith("**"))return <strong key={i}>{inline(part.slice(2,-2))}</strong>;
       if(part.startsWith("`")&&part.endsWith("`"))return <code key={i}>{part.slice(1,-1)}</code>;

@@ -260,7 +260,8 @@ export interface SearchRun {
   error?:string;warning?:string;requestUrl?:string;total?:number;startedAt?:string;elapsedMs?:number;cacheStoredAt?:string;
 }
 export type AnswerReference =
-  | {kind:"asset"; id:string; title:string; source:string;referenceType?:CitationType;sourceChannel?:ReferenceChannel; evidenceLevel?:"catalogue-record"}
+  | {kind:"asset"; id:string; title:string; source:string;referenceType?:CitationType;sourceChannel?:ReferenceChannel; evidenceLevel?:"catalogue-record"|"observation-file";
+      observationEvidence?:import("./observation-evidence").ObservationEvidence}
   | {kind:"web"; title:string; url:string;referenceType?:CitationType;sourceChannel?:ReferenceChannel};
 export interface ToolCall {
   id:string; kind:"Skill"|"MCP"|"tool"; name:string; input:string; output?:string;

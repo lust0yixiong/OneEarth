@@ -31,6 +31,7 @@ export function AnswerBody({message,question,animate,archived,children,clarifica
   const [ready,setReady]=useState(true);
   const finish=useCallback(()=>{setReady(true);onReady?.(m.id);},[m.id,onReady]);
   const notes=m.answerNotes;
+  const [drawer,setDrawer]=useState<{refs:AnswerReference[];title:string}|null>(null);
   const batch=m.candidates;
   const [expanded,setExpanded]=useState(false);
   const [limit,setLimit]=useState(20);
@@ -44,6 +45,8 @@ export function AnswerBody({message,question,animate,archived,children,clarifica
   }));
   const hover=(id:string|null)=>focusAnswerEvidence(m,id);
   const inspect=async(id:string)=>{
+    const observation=notes?.references?.find(ref=>ref.kind==="asset"&&ref.id===id&&ref.evidenceLevel==="observation-file");
+    if(observation){setDrawer({refs:[observation],title:"本轮观测文件依据"});return;}
     if(!assetById.has(id))await loadRemoteAssetIds([id]).catch(()=>undefined);
     if(!assetById.has(id)){patch({error:"当前未能载入这条资料，请重试。"});return;}
     if(active)focusAnswerEvidence(m,id,true);
@@ -61,7 +64,6 @@ export function AnswerBody({message,question,animate,archived,children,clarifica
     }
     return actions;
   },[inlineRefs,message,patch]);
-  const [drawer,setDrawer]=useState<{refs:AnswerReference[];title:string}|null>(null);
   const shown=new Set([
     ...(notes?.sources.map(a=>a.id) || []),
     ...(m.research?.rows.flatMap(row=>row.ids) || []),

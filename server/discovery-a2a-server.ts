@@ -3,7 +3,7 @@ import {once} from "node:events";
 import {setTimeout as delay} from "node:timers/promises";
 import express, {type Request, type Response} from "express";
 import {TaskConflict, taskIdPattern} from "./task-store";
-import {DiscoveryContinuationConflict, type DiscoveryA2aStore, type DiscoveryContinuation, type DiscoveryProgress, type StoredDiscoveryEvent} from "./discovery-a2a-store";
+import {DiscoveryContinuationConflict, DiscoveryTaskMissing, type DiscoveryA2aStore, type DiscoveryContinuation, type DiscoveryProgress, type StoredDiscoveryEvent} from "./discovery-a2a-store";
 import type {DiscoveryInput} from "./discovery-contract";
 import {hainaCatalogQueryKind,hainaCatalogResultKind,paperQueryKind,sceneCatalogQueryKind,sceneCatalogResultKind,sourceReadKind,type HainaCatalogPage} from "./discovery-materials-contract";
 import {prepareSourceRead, queryPaperCatalog} from "./discovery-material-operations";
@@ -13,6 +13,7 @@ import {parseSceneCatalogQuery,querySceneCatalog} from "./earth-search-source";
 import {paperId} from "../src/domain/paper-record";
 import {paperProjectionPageLimit,paperProjectionQueryKind,paperProjectionResultKind} from "./paper-projection-contract";
 import {PaperCatalogBaseUnavailable,PaperCatalogGenerationChanged,PaperCatalogUninitialized,type PostgresPaperCatalog} from "./postgres-paper-catalog";
+import {parseObservationCheck, skillRequestKind, skillResultKind, skillServiceAuthorized, validObservationResult} from "./observation-check-contract";
 
 const media = "application/a2a+json";
 const protocol = "1.0";
@@ -21,9 +22,11 @@ const states = {
   queued:"TASK_STATE_SUBMITTED", running:"TASK_STATE_WORKING", complete:"TASK_STATE_COMPLETED",
   failed:"TASK_STATE_FAILED", cancelled:"TASK_STATE_CANCELED",
 } as const;
-const active = (task: DiscoveryProgress) => task.status === "queued" || task.status === "running";
+const active = (task: DiscoveryProgress) => task.machineWaiting || task.status === "queued" || task.status === "running";
+const sendReady = (task: DiscoveryProgress) => task.machineWaiting || !active(task);
 const status = (task: DiscoveryProgress) => ({
-  state:task.needsInput ? "TASK_STATE_INPUT_REQUIRED" : states[task.status], timestamp:new Date(task.updated).toISOString(),
+  state:task.machineWaiting ? "TASK_STATE_WORKING" : task.needsInput ? "TASK_STATE_INPUT_REQUIRED" : states[task.status],
+  timestamp:new Date(task.updated).toISOString(),
 });
 const artifact = (event: StoredDiscoveryEvent) => ({
   artifactId:event.taskId + ":" + event.seq,
@@ -42,6 +45,7 @@ const invalid = (message: string, reason?: string) => new A2aError(400,"INVALID_
 const unavailable = (message: string) => new A2aError(503,"UNAVAILABLE",message);
 const precondition = (reason: string, message: string) => new A2aError(400,"FAILED_PRECONDITION",message,reason);
 const notFound = () => new A2aError(404,"NOT_FOUND","任务不存在或不可访问。","TASK_NOT_FOUND");
+const authorizedSkillCaller = (req:Request) => skillServiceAuthorized(req.get("authorization"));
 
 function record(value: unknown): Record<string,unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid("A2A 请求需要 JSON 对象。");
@@ -131,6 +135,7 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
     const data = record(part.data);
     only(data, ["kind","input"]);
     const available = data.kind === "oneearth.discovery.request.v1" ||
+      data.kind === skillRequestKind || data.kind === skillResultKind ||
       (catalog && (data.kind === paperQueryKind || data.kind === sourceReadKind)) ||
       (haina && data.kind === hainaCatalogQueryKind) || data.kind === sceneCatalogQueryKind ||
       (paperProjection && data.kind === paperProjectionQueryKind);
@@ -148,12 +153,33 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
       !config.acceptedOutputModes.some(mode => ["application/json","*/*","application/*"].includes(mode))))
       throw invalid("发现成果以 JSON 数据 part 返回。","CONTENT_TYPE_NOT_SUPPORTED");
     checkHistoryLength(config.historyLength);
-    if (data.kind !== "oneearth.discovery.request.v1" && taskId)
+    if (data.kind === skillRequestKind && taskId)
+      throw invalid("观测核对须先受理为新的发现委托。");
+    if (data.kind !== "oneearth.discovery.request.v1" && data.kind !== skillResultKind && taskId)
       throw invalid("目录查询和精确读取不能绑定到已有发现任务。");
     return {kind:data.kind,input,messageId:message.messageId,taskId,immediately:config.returnImmediately === true};
   }
 
-  async function submit({kind,input,messageId,taskId,immediately}: ReturnType<typeof decode>) {
+  async function submit({kind,input,messageId,taskId,immediately}: ReturnType<typeof decode>, skillAuthorized:boolean) {
+    if (kind === skillRequestKind || kind === skillResultKind) {
+      if (!skillAuthorized) throw new A2aError(401,"UNAUTHENTICATED","观测核对需要服务凭据。");
+      const digest = fingerprint({kind,taskId,input});
+      if (kind === skillRequestKind) {
+        only(input,["researchTaskId","check"]);
+        const {researchTaskId} = input, check = parseObservationCheck(input.check);
+        if (typeof researchTaskId !== "string" || !taskIdPattern.test(researchTaskId) || !check)
+          throw invalid("观测核对需要研究任务编号和有效的观测文件核对条件。");
+        return {id:await delegations.submitObservationCheck(messageId,digest,{researchTaskId,check}),immediately};
+      }
+      only(input,["requestId","afterSeq","result"]);
+      const {requestId,afterSeq,result} = input;
+      if (!taskId) throw invalid("观测核对结果须提交到受理该需求的发现任务。");
+      if (typeof requestId !== "string" || !taskIdPattern.test(requestId) || typeof afterSeq !== "number" ||
+          !Number.isSafeInteger(afterSeq) || afterSeq < 1 || typeof record(result).status !== "string" ||
+          !validObservationResult(result))
+        throw invalid("观测核对结果需要有效的需求编号、等待序号和执行结果。");
+      return {id:await delegations.acceptObservationResult(messageId,digest,taskId,{requestId,afterSeq,result}),immediately};
+    }
     // Transport preferences may change when resuming. The authorization-bearing input may not.
     const digest = fingerprint(kind === sourceReadKind ? {kind,input} : {taskId,input});
     const previous = await delegations.find(messageId,digest);
@@ -166,7 +192,7 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
     let continuation: DiscoveryContinuation | undefined;
     if (taskId) {
       const task = await delegations.progress(taskId);
-      if (!task) throw notFound();
+      if (!task || task.privateTask) throw notFound();
       if (task.waitingSeq === undefined) {
         const accepted = await delegations.find(messageId,digest);
         if (accepted) return {id:accepted,immediately};
@@ -184,8 +210,8 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
     return {id,immediately};
   }
 
-  async function read(id: string) {
-    const snapshot = await delegations.snapshot(id);
+  async function read(id: string, skillAuthorized:boolean) {
+    const snapshot = await delegations.snapshot(id,0,undefined,skillAuthorized);
     if (!snapshot) throw notFound();
     return snapshot;
   }
@@ -244,13 +270,14 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
       } finally {res.off("close",abort);}
       return;
     }
-    const {id,immediately} = await submit(request);
+    const skillAuthorized = authorizedSkillCaller(req);
+    const {id,immediately} = await submit(request,skillAuthorized);
     while (!res.destroyed) {
       const progress = immediately ? undefined : await delegations.progress(id);
       if (!immediately && !progress) throw notFound();
-      if (!progress || !active(progress)) {
-        const snapshot = await read(id);
-        if (immediately || !active(snapshot.task)) {
+      if (!progress || sendReady(progress)) {
+        const snapshot = await read(id,skillAuthorized);
+        if (immediately || sendReady(snapshot.task)) {
           res.json({task:taskDocument(snapshot.task,snapshot.events)});
           return;
         }
@@ -260,21 +287,22 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
   });
   router.get(/^\/tasks\/(?<taskId>[^/:]+)$/, async (req,res) => {
     checkHistoryLength(req.query.historyLength);
-    const {task,events} = await read(operationId(req));
+    const {task,events} = await read(operationId(req),authorizedSkillCaller(req));
     res.json(taskDocument(task,events));
   });
   router.post(/^\/tasks\/(?<taskId>[^/:]+):cancel$/, async (req,res) => {
     const id = operationId(req);
     checkAction(req,id,["id","metadata"]);
-    const outcome = await delegations.cancel(id);
+    const skillAuthorized = authorizedSkillCaller(req);
+    const outcome = await delegations.cancel(id,skillAuthorized);
     if (outcome === "missing") throw notFound();
     if (outcome === "terminal") throw precondition("TASK_NOT_CANCELABLE","任务已经结束，无法取消。");
-    const {task,events} = await read(id);
+    const {task,events} = await read(id,skillAuthorized);
     res.json(taskDocument(task,events));
   });
 
-  async function stream(res: Response, id: string, subscribe: boolean) {
-    const {task,events} = await read(id);
+  async function stream(res: Response, id: string, subscribe: boolean, skillAuthorized:boolean) {
+    const {task,events} = await read(id,skillAuthorized);
     if (subscribe && !active(task) && !task.needsInput)
       throw precondition("UNSUPPORTED_OPERATION","任务已经结束，请通过 GET 读取存档。");
     if (res.destroyed) return;
@@ -294,7 +322,7 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
       let heartbeat = Date.now();
       if (active(task)) {
         while (!controller.signal.aborted) {
-          const next = await delegations.snapshot(id,cursor,128);
+          const next = await delegations.snapshot(id,cursor,128,skillAuthorized);
           if (!next) throw notFound();
           for (const event of next.events) {
             await send({artifactUpdate:{taskId:id,contextId:id,artifact:artifact(event),lastChunk:true}});
@@ -323,13 +351,14 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
   router.post(/^\/tasks\/(?<taskId>[^/:]+):subscribe$/, async (req,res) => {
     const id = operationId(req);
     checkAction(req,id,["id"]);
-    await stream(res,id,true);
+    await stream(res,id,true,authorizedSkillCaller(req));
   });
   router.post(/^\/message:stream$/, async (req,res) => {
     const request = decode(req);
     if (directQuery(request.kind)) throw precondition("UNSUPPORTED_OPERATION","目录查询请使用同步 Send Message。");
-    const {id} = await submit(request);
-    await stream(res,id,false);
+    const skillAuthorized = authorizedSkillCaller(req);
+    const {id} = await submit(request,skillAuthorized);
+    await stream(res,id,false,skillAuthorized);
   });
   router.all(a2aPath, () => {
     throw precondition("UNSUPPORTED_OPERATION","此发现端点不支持该 A2A 操作。");
@@ -337,6 +366,7 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
   const handleError: express.ErrorRequestHandler = (error, _req, res, _next) => {
     if (res.headersSent || res.destroyed) { if (!res.destroyed) res.destroy(); return; }
     const failure = error instanceof A2aError ? error
+      : error instanceof DiscoveryTaskMissing ? notFound()
       : error instanceof PaperCatalogGenerationChanged ? precondition("CATALOG_GENERATION_CHANGED",error.message)
       : error instanceof PaperCatalogBaseUnavailable ? precondition("CATALOG_BASE_UNAVAILABLE",error.message)
       : error instanceof PaperCatalogUninitialized ? unavailable(error.message)
@@ -349,6 +379,7 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
       : error.type === "entity.too.large" ? new A2aError(413,"RESOURCE_EXHAUSTED","A2A 请求超过容量限制。")
       : new A2aError(500,"INTERNAL","发现服务未能处理 A2A 请求。");
     if (failure.http === 500) console.error("OneEarth discovery could not process an A2A request");
+    if (failure.http === 401) res.set("WWW-Authenticate","Bearer");
     res.status(failure.http).type(media).json({error:{
       code:failure.http, status:failure.status, message:failure.message,
       ...(failure.reason ? {details:[{"@type":"type.googleapis.com/google.rpc.ErrorInfo",

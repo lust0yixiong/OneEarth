@@ -36,6 +36,9 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         CREATE INDEX IF NOT EXISTS ${events}_replay ON ${events}(id,seq);`);
       if(namespace==="runtime"){
         await db.query(`
+          CREATE TABLE IF NOT EXISTS runtime_steps (
+            id uuid PRIMARY KEY REFERENCES runtime_tasks(id), checkpoint jsonb NOT NULL, wake_at bigint
+          );
           CREATE TABLE IF NOT EXISTS runtime_confirmations (
             task_id uuid PRIMARY KEY REFERENCES runtime_tasks(id), parent_task_id uuid,
             decision jsonb, proposal jsonb
@@ -80,6 +83,11 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
       const now=Date.now();
       const updated=await db.query(`UPDATE ${tasks} SET status=$1,updated=$2 WHERE id=$3 AND status IN ('running','queued')`,[status,now,id]);
       if(!updated.rowCount)return false;
+      if(namespace==="runtime"&&status!=="complete"){
+        const checkpoint=(await db.query<{checkpoint:Payload}>("SELECT checkpoint FROM runtime_steps WHERE id=$1",[id])).rows[0]?.checkpoint;
+        const retained=checkpoint?.[status==="cancelled"?"cancelledResult":"failedResult"];
+        if(retained)payload={...payload,result:retained};
+      }
       await write(db,id,payload,now);
       const result=payload.result as {
         questionCheck?:unknown;
@@ -118,7 +126,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         WHERE e.id=$1 AND t.status NOT IN ('queued','running') ORDER BY e.seq DESC LIMIT 1`,[id]);
       return result.rows[0]?.payload;
     },
-    async submit(id,body){
+    async submit(id,body,checkpoint){
       return transaction(async db=>{
         const raw=JSON.stringify(body), hash=createHash("sha256").update(raw).digest("hex"), now=Date.now();
         const inserted=await db.query<Task>(`INSERT INTO ${tasks}(id,body,fingerprint,status,created,updated)
@@ -127,6 +135,10 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
           const previous=(await db.query<Task>(`SELECT * FROM ${tasks} WHERE id=$1`,[id])).rows[0];
           if(!previous||previous.fingerprint!==hash)throw new TaskConflict("该任务编号已经用于另一份提交。");
           return row(previous);
+        }
+        if(checkpoint){
+          if(namespace!=="runtime")throw Error("持久研究步骤仅属于运行时。");
+          await db.query("INSERT INTO runtime_steps VALUES($1,$2::jsonb,$3)",[id,JSON.stringify(checkpoint),now]);
         }
         const decision=(body as {questionDecision?:{checkMessageId?:string}})?.questionDecision;
         if(namespace==="runtime"&&decision){
@@ -139,13 +151,16 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
     },
     async claim(){
       return transaction(async db=>{
-        const selected=(await db.query<Task>(`SELECT * FROM ${tasks} WHERE status='queued'
-          ORDER BY created,id LIMIT 1 FOR UPDATE SKIP LOCKED`)).rows[0];
+        const selected=(await db.query<Task>(namespace==="runtime"?`SELECT t.* FROM runtime_tasks t LEFT JOIN runtime_steps s ON s.id=t.id
+          WHERE t.status='queued' OR (t.status='running' AND s.wake_at<=$1)
+          ORDER BY t.updated,t.created,t.id LIMIT 1 FOR UPDATE OF t SKIP LOCKED`:`SELECT * FROM ${tasks} WHERE status='queued'
+          ORDER BY created,id LIMIT 1 FOR UPDATE SKIP LOCKED`,namespace==="runtime"?[Date.now()]:[])).rows[0];
         if(!selected)return;
         const now=Date.now();
         await db.query(`UPDATE ${tasks} SET status='running',updated=$1 WHERE id=$2`,[now,selected.id]);
-        await write(db,selected.id,{started:true,startedAt:now},now);
-        return {id:selected.id,body:JSON.parse(selected.body)};
+        if(selected.status==="queued")await write(db,selected.id,{started:true,startedAt:now},now);
+        const step=namespace==="runtime"?(await db.query<{checkpoint:Payload}>("UPDATE runtime_steps SET wake_at=NULL WHERE id=$1 RETURNING checkpoint",[selected.id])).rows[0]:undefined;
+        return {id:selected.id,body:JSON.parse(selected.body),...(step?{checkpoint:step.checkpoint}:{})};
       });
     },
     async append(id,payload){
@@ -155,14 +170,45 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
       });
     },
     finish,
+    ...(namespace==="runtime"?{
+      async step(id:string){return (await pool.query<{checkpoint:Payload}>("SELECT checkpoint FROM runtime_steps WHERE id=$1",[id])).rows[0]?.checkpoint;},
+      async saveStep(id:string,checkpoint:Payload,event?:Payload){return transaction(async db=>{
+        const active=await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id]);
+        if(!active.rowCount)return false;
+        await db.query("INSERT INTO runtime_steps VALUES($1,$2::jsonb,NULL) ON CONFLICT(id) DO UPDATE SET checkpoint=EXCLUDED.checkpoint",[id,JSON.stringify(checkpoint)]);
+        if(event)await write(db,id,event);return true;
+      });},
+      async cancelStep(id:string,cancellation:Payload,event?:Payload){return transaction(async db=>{
+        if(!(await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='cancelled' FOR UPDATE",[id])).rowCount)return false;
+        const saved=(await db.query<{checkpoint:Payload}>(`UPDATE runtime_steps SET checkpoint=jsonb_set(checkpoint,'{cancellation}',COALESCE(checkpoint->'cancellation','{}'::jsonb)||$2::jsonb)
+          WHERE id=$1 RETURNING checkpoint`,[id,JSON.stringify(cancellation)])).rows[0];
+        if(!saved)return false;
+        if(event)await write(db,id,{error:"任务已取消。",code:"cancelled",...event,result:saved.checkpoint.cancelledResult});return true;
+      });},
+      async park(id:string,checkpoint:Payload,wakeAt:number,event?:Payload){return transaction(async db=>{
+        const active=await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id]);
+        if(!active.rowCount)return false;
+        await db.query("INSERT INTO runtime_steps VALUES($1,$2::jsonb,$3) ON CONFLICT(id) DO UPDATE SET checkpoint=EXCLUDED.checkpoint,wake_at=EXCLUDED.wake_at",[id,JSON.stringify(checkpoint),wakeAt]);
+        const now=Date.now();await db.query("UPDATE runtime_tasks SET updated=$2 WHERE id=$1",[id,now]);if(event)await write(db,id,event,now);return true;
+      });},
+      async cancelledSteps(){const {rows}=await pool.query<{id:string;body:string;checkpoint:Payload}>(`SELECT t.id,t.body,s.checkpoint FROM runtime_steps s JOIN runtime_tasks t ON t.id=s.id
+        WHERE t.status='cancelled' AND (s.checkpoint->'cancellation'->>'reconciled') IS DISTINCT FROM 'true' ORDER BY t.updated LIMIT 20`);
+        return rows.map(row=>({id:row.id,body:JSON.parse(row.body),checkpoint:row.checkpoint}));},
+    }:{}),
     async recoverInterrupted(){
       const client=await pool.connect();
       try{
         const elected=await client.query("SELECT pg_try_advisory_lock($1::bigint) AS acquired",[lock]);
         if(!elected.rows[0].acquired)throw Error("同一任务库已有后台 worker。");
         const interrupted=await pool.query<{id:string}>(`SELECT id FROM ${tasks} WHERE status='running'`);
-        for(const {id} of interrupted.rows)await finish(id,"failed",{
+        for(const {id} of interrupted.rows){
+          if(namespace==="runtime"){
+            const resumed=await pool.query("UPDATE runtime_steps SET wake_at=$2 WHERE id=$1",[id,Date.now()]);
+            if(resumed.rowCount){await transaction(db=>write(db,id,{stepRecovered:true}));continue;}
+          }
+          await finish(id,"failed",{
           error:"后台进程中断。已取得的结果仍可查看，请明确重试未完成的工作。",code:"worker_interrupted"});
+        }
         client.on("error",()=>{
           console.error("OneEarth "+namespace+" worker lost its PostgreSQL lease");
           process.exit(1);

@@ -24,6 +24,8 @@ export function citationDetails(ref:AnswerReference,notes?:Partial<AnswerNotes>)
     return {type:"web",channel:previous?"会话已读记录":dataCite?"DataCite":search || hit?"网页检索":"公开网页",evidence,
       ...(material?{material}:{})};
   }
+  if(ref.evidenceLevel==="observation-file")
+    return {type:"data",channel:"本地观测文件",evidence:"本轮已保存的固定版本读取依据"};
   const a=assetById.get(ref.id),record=paperRecords.get(ref.id),tabs=record?.need.tabs || a?.tabs || [];
   const type=referenceCitationType(ref,a,observationById(ref.id));
   if(ref.evidenceLevel==="catalogue-record")

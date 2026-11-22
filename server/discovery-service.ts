@@ -23,6 +23,8 @@ import {discoveryA2aRouter} from "./discovery-a2a-server";
 import {discoveryA2aStore} from "./discovery-a2a-store";
 import {runSourceRead,type SourceReadJob} from "./discovery-material-operations";
 import {sourceReadKind} from "./discovery-materials-contract";
+import {runObservationCheckJob,type ObservationCheckJob} from "./discovery-observation-job";
+import {skillRequestKind,skillResultKind} from "./observation-check-contract";
 
 const configuration = discoveryConfiguration();
 const state = process.env.ONEEARTH_STATE_DIR || path.resolve(".local/state");
@@ -48,18 +50,19 @@ app.post("/v1/discoveries", (_req,res,next) => {
   next();
 });
 taskRoutes(app, "/v1/discoveries", discoveryLegacyStore(store,delegations,configuration,prepare), prepare.legacy);
-await workTasks(store, async ({id,body: input}: {id:string;body: DiscoveryInput}, signal, emit) => {
+await workTasks(store, async ({id,body}: {id:string;body:DiscoveryInput|SourceReadJob|ObservationCheckJob}, signal, emit) => {
   const a2a = await delegations.hasJob(id);
-  const sourceRead = input as unknown as SourceReadJob;
-  if (a2a && sourceRead.kind === sourceReadKind)
-    return runSourceRead(sourceRead,signal,emit,catalog,fetchAllowed());
+  if (a2a && "kind" in body) {
+    if (body.kind === skillRequestKind || body.kind === skillResultKind) return runObservationCheckJob(body,signal);
+    if (body.kind === sourceReadKind) return runSourceRead(body,signal,emit,catalog,fetchAllowed());
+  }
+  const input = body as DiscoveryInput;
   if (configuration.kind !== "configured" && (a2a || configuration.kind === "invalid"))
     return {error:configuration.issue,code:"discovery_configuration_unavailable"};
   if (a2a && !sameModel(input.config,configuration.kind === "configured" ? configuration.model : undefined))
     return {error:"发现服务模型在委托受理后已变更，请确认后重新委托。",code:"discovery_configuration_changed"};
-  input = prepare.effective(input);
   const {query, config, deepseekTools, decision, clarificationReply, continuedFrom, scope, initialPlan, researchGoal, evidenceGap, conversationContext, previousResearchIntent,
-    history, references, currentDatasets, conversationEvidence, continuation} = input;
+    history, references, currentDatasets, conversationEvidence, continuation} = prepare.effective(input);
   const clarification = clarificationReply && continuedFrom
     ? (await store.terminal(continuedFrom))?.result as import("./data-search").DataSearchResult|undefined
     : undefined;

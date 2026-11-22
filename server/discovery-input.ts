@@ -133,14 +133,15 @@ export function discoveryInput(store: Pick<TaskStore,"get"|"terminal">, configur
       } else if (typeof body.continuedFrom === "string" && taskIdPattern.test(body.continuedFrom)) {
         if (await delegations.hasJob(body.continuedFrom))
           return {issue:"确认须引用实际发现任务编号。"};
-        if (await delegations.progress(body.continuedFrom)) {
+        const original = await delegations.progress(body.continuedFrom);
+        if (original && !original.privateTask) {
           if (body.continuedFrom !== body.continuation?.previousId)
             return {issue:"待确认的 A2A 委托请通过原 taskId 续行。"};
         }
       }
       if (body.continuation && typeof body.continuation.previousId === "string" && taskIdPattern.test(body.continuation.previousId)) {
         const parent = await delegations.progress(body.continuation.previousId);
-        if (parent) body.continuation = {...body.continuation,previousId:parent.jobId};
+        if (parent && !parent.privateTask) body.continuation = {...body.continuation,previousId:parent.jobId};
         else if (await delegations.hasJob(body.continuation.previousId))
           return {issue:"补充发现须引用实际发现任务编号。"};
       }
