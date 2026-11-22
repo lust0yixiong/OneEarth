@@ -9,13 +9,69 @@
 | 操作 | 在 OneEarth 中的用途 |
 | --- | --- |
 | `GET /.well-known/agent-card.json` | 声明数据发现能力和流式订阅 |
-| `POST /message:send` | 接收一个业务消息，响应 `{task}`。运行时显式设置 `configuration.returnImmediately=true`，随后按已受理的 Task ID 取进展 |
+| `POST /message:send` | 确定性的论文、海纳目录与指定条件逐景查询响应 `{message}`。开放发现和精确补读响应 `{task}`，运行时显式设置 `configuration.returnImmediately=true`，随后按已受理的 Task ID 取进展 |
 | `POST /message:stream` | 接收委托并打开该任务的 SSE |
 | `GET /tasks/{id}` | 读取已保存的受托任务状态与材料 |
 | `POST /tasks/{id}:subscribe` | 首帧给出 Task 快照，随后推送按序保存的进展。任务快速结束或连接断开时按同一 ID 取回快照 |
 | `POST /tasks/{id}:cancel` | 取消已验证受理的委托。服务不可达时保留取消未确认的诊断 |
 
+直接 Message 带服务端生成的 `contextId` 和 `messageId`。这种查询使用独立响应上下文，不生成 `taskId` 或受托任务。运行时接受提供方的非空上下文标识。参见 [A2A Message 规范](https://a2a-protocol.org/v1.0.1/specification/#414-message)。
+
 `message.parts` 携带一个带 `kind=oneearth.discovery.request.v1` 的数据 part。它描述本次目的、证据缺口、已确认范围、引用或已取得材料，以及本轮 DeepSeek Search 和 DeepSeek Fetch 两个开关。启用条件是本轮开关和发现部署配置同时允许。既有 Bing、DataCite 等渠道仍可发公开查询。机构和项目权限、具体材料能否外发由各自权限边界约束。模型、执行器、访问凭据和内部计划由发现服务保管。发现服务按既有逻辑规划和检索。
+
+### 确定性论文查询
+
+`kind=oneearth.paper.query.v1` 在同一个 `POST /message:send` 接收 `input.operation`。网页仍使用运行时提供的相同 `/api/paper-records` 路径。以下操作使用当前发现域的发布记录与只读论文连接。打开归档回答时，当轮原材料仍来自运行时研究记录。
+
+| operation | input 其余字段 | 返回的 value |
+| --- | --- | --- |
+| `records` | `ids`，1–20 个精确内容 ID | 按输入顺序返回找到的记录。未知 ID 不触发查找 |
+| `list` | `view` 为 `full`、`catalog` 或 `map`，`cursor` 为字符串，`limit` 为 1–500 | `records`、`nextCursor`、`total`、`catalog` 和 `cached`。`catalog.revision` 标记本次分页发布状态，供投影判断是否可复用 |
+| `questions` | `id`、`cursor`，起始游标为空字符串 | `items` 和 `nextCursor` |
+| `evidence` | `id` | `dataset` 和 `papers`。缺失 ID 返回 404，断言读取不可用返回相应错误 |
+| `search` | 用户明确输入的 `query`，最长 240 字符 | 原名称/DOI 检索结果和渠道限制。沿用显式查询的发布行为 |
+
+已知 ID 查询不要求模型可用，不创建受托任务。显式 `search` 可以查上游并更新发布目录。空记录和错误不降级为搜索。以下请求在没有该内容 ID 时返回空数组。
+
+```json
+{
+  "message": {
+    "messageId": "5f1a50e7-d613-495e-b559-189296f07626",
+    "role": "ROLE_USER",
+    "parts": [{"data": {
+      "kind": "oneearth.paper.query.v1",
+      "input": {"operation": "records", "ids": ["earthnano:0000000000000000000000000000000000000000000000000000000000000000"]}
+    }}]
+  }
+}
+```
+
+```json
+{
+  "message": {
+    "messageId": "82e55883-259b-4bc4-9028-d8d7c436e8cd",
+    "contextId": "c9125c51-a10e-490b-9c48-8cd2ebf93872",
+    "role": "ROLE_AGENT",
+    "parts": [{"data": {"kind": "oneearth.paper.result.v1", "operation": "records", "value": []}}]
+  }
+}
+```
+
+### 海纳目录分页
+
+`kind=oneearth.haina.catalog.query.v1` 的输入为 `{"cursor":0,"limit":250}`。游标为上页返回的 `nextCursor`，`null` 表示末页。返回直接 Message，其数据 part 为 `kind=oneearth.haina.catalog.result.v1`，`value` 含发布快照时间 `synced`、条目及总数、端点和分区、下一页游标及可用性说明。运行时统一 API 保持网页原 `GET /api/haina/catalog` 的分页格式。
+
+发现服务负责同步并发布完整目录。数据触达按同一快照加载，各次筛选复用现有投影。开放发现返回本轮命中海纳记录及实际状态，运行时用于回答和重开；旧研究仍读其原档。此契约只涉及目录及引用，原始文件沿既有获取路径。
+
+### 指定集合的逐景查询
+
+`kind=oneearth.scene.catalog.query.v1` 接收已知 Landsat C2 L2 或 Sentinel-2 L2A 的 `assetIds`、经纬度 `point`、起止年 `years` 和可选半开 UTC `utcWindow`。发现服务以这些原条件查询 Earth Search STAC，直接返回 `kind=oneearth.scene.catalog.result.v1`。每个已查集合在 `lookups` 保留匹配数、最多五条实际返回的影像元数据、采集时刻、云量和出处。服务不可用或来源响应异常列在 `failures`，运行时显示匹配数未知。来源确认没有匹配时，才以 `matched:0` 归档。地图覆盖、瓦片和已接入图层仍沿时空服务查询。
+
+### 指定来源补读
+
+`kind=oneearth.source.read.v1` 发送 `question` 和最多三项明确来源。论文用精确内容 ID `{"kind":"paper","id":"earthnano:…"}`，公开网页和 PDF 用原地址和标题 `{"kind":"web","url":"https://example.org/report.pdf","title":"报告"}`。可选的 `deepseekFetch` 只有与发现进程自身开关同时开启才生效。服务沿现有公开 URL 及重定向约束取材，保留指定对象的身份和读取层级。
+
+请求示例带 `configuration.returnImmediately=true`。确认受理后用 Task ID 获取快照、SSE 和取消。已保存的终态成果位于受托事件的 `sourceReadResult`，含取得的 `searches`、`papers`、`issues`，可包含带实际读取时间的 `paperEvidence`。新材料与旧档摘录由运行时分别保存。精确补读未取得新材料时保留真实失败，普通打开原站或传输 PDF 文件不产生这类研究任务。
 
 ### 最小委托示例
 
@@ -70,7 +126,7 @@
 }
 ```
 
-缺少发现配置时，新委托的错误响应为 HTTP 503，正文例如 `{"error":{"code":503,"status":"UNAVAILABLE","message":"ONEEARTH_DISCOVERY_CHAT_MODEL 未配置。"}}`。已受理 Task 的读取、幂等、确认等待和终态竞态示例见[隔离 PostgreSQL 契约测试](../server/discovery-a2a.test.ts)及[客户端回归](../server/discovery-a2a-client.test.ts)。
+缺少发现模型配置时，新的开放发现委托返回 HTTP 503，正文例如 `{"error":{"code":503,"status":"UNAVAILABLE","message":"ONEEARTH_DISCOVERY_CHAT_MODEL 未配置。"}}`。确定性目录查询与精确补读按各自来源的可用性处理。已受理 Task 的读取、幂等、确认等待和终态竞态示例见[隔离 PostgreSQL 契约测试](../server/discovery-a2a.test.ts)及[客户端回归](../server/discovery-a2a-client.test.ts)。
 
 运行时消息的 `messageId` 用于同一委托提交的幂等。发现服务另行生成并保存外部 Task ID，返回后由运行时写入研究事件；服务进程用内部作业执行实际工作。相同的消息及业务输入只登记一次，改动内容后重用消息 ID 会失败。稳定的产物 ID 和保存的事件序号用于重放去重。浏览器刷新接回运行时的同一个任务，发现客户端断线则以已经确认受理的 A2A Task 恢复材料。运行时进程重启仍沿用已归档材料及 `worker_interrupted` 语义。
 
@@ -80,10 +136,10 @@
 
 ## 部署与兼容
 
-发现进程单独读取并校验 `ONEEARTH_DISCOVERY_CHAT_MODEL`，启动器只向发现角色传递此选择。已有授权的原生执行器模型或 DeepSeek 模型可以按部署配置启用；部署使用自己的凭据来源。缺少有效配置时，新 A2A 委托返回可识别的 `UNAVAILABLE`，此前保存的任务和材料可读取。运行时模型和执行器仍取其原有授权配置。参见[部署说明](../README.md)。
+发现进程单独读取并校验 `ONEEARTH_DISCOVERY_CHAT_MODEL`，启动器只向发现角色传递此选择。已有授权的原生执行器模型或 DeepSeek 模型可以按部署配置启用，部署使用自己的凭据来源。缺少有效配置时，新的开放发现委托返回 `UNAVAILABLE`。已保存任务、确定性论文查询及可用来源的精确补读继续各走原路径。运行时模型和执行器仍取其原有授权配置。参见[部署说明](../README.md)。
 
-旧调用方可以继续使用 `/v1/discoveries` 的 HTTP+NDJSON 接口。发现服务配置了有效的本地模型时，v1 使用该模型，DeepSeek Search/Fetch 按本地与请求的开关取交集。旧部署未设置独立模型时，v1 沿用其请求中的合法配置；A2A 新委托返回 503。显式设置了无效配置时，现有档案继续可读，新委托报告配置错误。连接只提供旧接口的发现服务时，运行时须显式设置 `ONEEARTH_DISCOVERY_PROTOCOL=v1`。研究记录保持原本的运行时任务 ID 和引用。
+旧调用方可以继续使用 `/v1/discoveries` 的 HTTP+NDJSON 接口及发现端旧纸本路由。发现服务配置了有效的本地模型时，v1 使用该模型，DeepSeek Search/Fetch 按本地与请求的开关取交集。旧部署未设置独立模型时，v1 沿用其请求中的合法配置，新 A2A 开放发现返回 503。连接只提供旧接口的发现服务时，`ONEEARTH_DISCOVERY_PROTOCOL=v1` 仅用于开放发现。新运行时的当前论文查询和精确补读需要提供对应 A2A 操作的发现服务。研究记录保持原本的任务 ID 和引用。
 
 A2A Task 的受理关系、消息去重和作业映射随发现 PostgreSQL 库保存，由停写产品备份包含。内部计划由发现服务产生，归档产物沿用的结果结构仍包含历史计划字段。
 
-此批验证同一 Mac mini 上的服务间委托与已列操作。受托成果仍封装现有发现事件和结果类型，包含历史计划结构。论文缓存仍是共享 SQLite，机构身份、项目权限和跨主机授权另待验证。List Tasks 和推送通知未在本批启用。
+此批覆盖同一 Mac mini 上的服务间委托与已列操作。开放发现的归档产物仍包含旧内部计划结构。论文发布 SQLite 由发现及授权导入方维护，时空服务继续读取。运行时经协议读取当前论文或使用自己的历史材料。机构身份、项目权限和跨主机授权另待验证。List Tasks 和推送通知尚未启用。

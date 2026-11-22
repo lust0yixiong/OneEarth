@@ -1,5 +1,36 @@
 # Mac mini 产品验收
 
+## Mac mini 工作台与证据归属候选 v0.2.0-rc.7
+
+**Mac mini 本批独立阶段验收通过。** 总体负责人于 2026-11-22 签收“工作台统一业务 API、发现职责收口”，源码为 `555f9e16bb853c0e8176d025ab46ef3647bf9a5c`，构建清单 SHA-256 为 `c4976780a1976ce3369f754222fcced77291aea2633d3edc5072e192cb6303ad`。入口为本机隔离的 [5894](http://127.0.0.1:5894)，负基线为 `4cad67b` 的 [5884](http://127.0.0.1:5884)。两边从独立 PostgreSQL 和 S3 恢复同一份快照，各恢复三库及 5,950 个对象。最终候选类型检查、构建和含真实隔离 PostgreSQL 的 680 项测试通过。图见[工作台与证据服务架构](../../docs/diagrams/oneearth-mac-mini-rc7.png)。
+
+| 验收项 | 证据与口径 |
+| --- | --- |
+| 当前论文与历史依据 | 基线当前查询由同源入口直转发现，A2A 按 ID 操作返回 400。候选经运行时转发得到直接 Message。Chrome 重开同一研究任务 `c8c430a9-b5aa-4dea-b1cb-011ca40edc3b` 后，历史 SCIGN 两段原文逐字匹配原档，查看当前详情另发一笔读取。缺 ID 不启动搜索。 |
+| 普通查询的故障隔离 | 集成预检临时设无效发现模型。论文详情 200，开放发现 503，发现任务数量不增。停止发现或挂起上游响应时，当前依据返回 503；原研究记录及两段原文仍可读取，原档 SHA-256 一致。最终套件仍覆盖这些边界。 |
+| A2A 直接回执兼容 | `b5ca6cd` 修复 `618be0d` 缺少 `contextId` 的回执。实际 5895 论文、海纳均返回有效的独立上下文且没有 `taskId`，PG 中发现任务数 15→15。含 STAC 的受控生产方/客户端回归接受符合规范的回执并拒绝缺失上下文。 |
+| 定向取材 | `618be0d` 的 Chrome 实问运行时任务 `9034ce2b-b4a7-428d-a2f8-bb8ed328da2c` 由独立发现任务 `7a8f8637-2856-4e8e-99d1-c462fb276016` 读取所指 SCEC PDF，第 2 页图注的摘录真实可重开。该版答复误将原档已存四站分组写成新补齐事实，已保留原档。最终代码用同一父档、原动作及已存读取回执，走真实 `gpt-6-luna` 合成与原有一次修复，答复将图注及垂向 GPS 吻合句归为此前已有、本轮复核，保留页码、截断和误差未知。两次调用分别 31.768、37.779 秒，总耗时 69.590 秒，无独立分类调用或 PDF 上游重复请求。受控对照另覆盖确有新增材料、裁短后未知，以及新读论文方法段进入模型输入、采用后按原资产和论文块归档。 |
+| 真实开放发现 | `618be0d` 上的运行时任务 `d389ebbf-126d-42d5-9ed1-97d8d1342ac6` 触发初次发现 `e9070e3c-697f-44b3-88d5-97023673fc26`，模型判断存在证据缺口后补查 `45c52ada-9dca-49d7-b6e9-421c492db882`。真实进展通过 SSE 到达，Chrome 刷新后同一运行时任务继续，仅启动一个 worker 作业。运行时实际 Codex `gpt-6-luna`，发现实际 DeepSeek `deepseek-flash`。首条可见阶段材料 29.187 秒，首个非空终答正文 192.033 秒。第一条来源的已存依据在 Chrome 打开；另一出版社引用附带临时挑战参数，单项记录于 `evidence/observations/open-discovery-citation-identity.json`，站点可达性未核。 |
+| 目录所有权与覆盖 | 海纳分页保持 461 条发布记录，已观测到的上游请求由发现进程发出，普通翻页没有触发同步。混合目录对同一修订继续查询只核对目录状态；用隔离发布接口更换同一真实数据集的版本后读到新版本，旧引用仍能按原 ID 打开。运行时转发时空覆盖，保留过期 410，森林图层对象条件请求仍返回 304。 |
+| 逐景查询 | 控制上游验证固定的 Landsat/Sentinel 集合、点和时间窗口、影像条目、明确零结果及不可达的未知状态。运行时向发现方提交结构化条件，已有图层覆盖仍由时空服务提供。 |
+
+证据根为 `~/Library/Application Support/OneEarth Next/iterations/runtime-discovery-ownership/`。基线浏览器与接口见 `evidence/baseline/`，构建指纹、真实查询、脱敏线路与 Chrome 截图见 `evidence/candidate/`。最终重启后的论文归档实测见 `paper-555f9e1-restarted.json`。五个候选应用角色的文件检查见 `file-ownership-555f9e1.json`，纸本 SQLite 由发现与时空打开，派生混合目录索引由运行时 API 打开。受控新论文断言见 `runtime-final-evidence/`，PDF 来源新旧对照见 `runtime-novelty-evidence/archive-replay.json`，A2A 提供方分项日志见 `evidence/discovery-provider/`。
+
+独立复测索引位于 `~/Library/Application Support/OneEarth Next/iterations/workbench-discovery-acceptance/evidence/acceptance-index-555f9e1.json`。同目录的 `final-live-browser-555f9e1.json`、`direct-message-555f9e1.json` 和 `pdf-model-replay-controlled-555f9e1.json` 记录最终版的重启后档案、三类直接回执及 PDF 新旧事实对照，`acceptance-final-555f9e1.sha256` 保存签收证据清单。总体负责人据此签收本机隔离候选。临时挑战链接作为引用稳定性问题由主程单项跟进。
+
+本机 Chrome 157 用相同的父研究记录、问题及 `gpt-6-luna` 各跑一次 PDF 补读。基线/`618be0d` 的服务端规划分别为 14.017/13.716 秒，指定来源实际读取为 2.532/3.051 秒，证据决策为 10.013/11.883 秒，终态为 44.417/41.710 秒。网页非空正文首次可见为 45.063/42.297 秒。候选受托调用合计 3.246 秒，其中包括来源读取。上游与模型缓存未统一，单样本只说明各段耗时。最终代码的回答重放单列于 `pdf-model-replay-555f9e1.json`。从恢复状态首次查混合目录为约 99/130 毫秒，随后同修订筛选为约 2–4 毫秒。论文详情与地图 HTTP 样本分阶段记在 `read-healthy.json`、`read-rc7.json` 和 `workbench-rc7.json`。
+
+在候选源码目录复测类型、含隔离 PostgreSQL 的集成回归和构建。运行时与发现方分别使用各自的库，不读取常驻实例的数据库。
+
+```sh
+npm ci
+npm run check
+ONEEARTH_A2A_TEST_PG_BIN=/path/to/Postgres.app/Contents/Versions/18/bin npm test
+npm run build
+```
+
+复跑使用新输出目录和独立实例，原截图和 JSON 保留。工作目录中的 `start-isolated.mjs` 记录 5884 或 5894 的角色与本机绑定，并核对三库及对象存储端口。观察器写入本次运行的 `wire.ndjson`。脚本 `probe-reads.mjs`、`probe-paper-browser.mjs` 和 `probe-source.mjs` 支持独立结果命名，报告与截图拒绝覆盖现有同名结果。当前仍有发现与时空之间的论文发布 SQLite 物理共享。机构与项目身份、真实 LAN Safari、多主机和容量另行验收。常驻 5474、前版隔离 5814 和题库部署沿用原配置。
+
 ## Mac mini A2A 与发现模型独立配置候选 v0.2.0-rc.6
 
 **Mac mini 本机隔离候选通过独立验收。** 2026-11-22，总体负责人签收 A2A 委托和发现侧模型独立配置。 最终候选代码 `855670db503c4b93d226b03611853410756c644c`，独立入口 [5814](http://127.0.0.1:5814)，构建 SHA-256 为 `5992c2b10d4b545ab459100ee79fab7f2e7fdd6030882102372e3dc1f78c1444`。类型检查、构建和 629 项自动化测试通过，包含真实隔离 PostgreSQL 的受托协议测试。历史版本与常驻入口按原验收范围保留。
