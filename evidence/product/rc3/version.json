@@ -1,0 +1,18 @@
+{
+  "checkedAt": "2026-11-22T01:03:42.680Z",
+  "version": "0.2.0-rc.3",
+  "candidateCommit": "2603062b8ac632c7e1b9464a26604d51e5fd48eb",
+  "release": "v0.2.0-rc.3-2603062",
+  "entry": "http://127.0.0.1:5474",
+  "node": "v26.0.0",
+  "arch": "arm64",
+  "tests": 553,
+  "build": true,
+  "prototype": {
+    "online": true,
+    "restrictedTcp": true,
+    "restrictedSource": true,
+    "restrictedLaunchAgent": true
+  },
+  "distIndexSha256": "da0687a48fe2644c4455f36d9c127ec3883d07d12324d6c5767b89cb460eedcf"
+}

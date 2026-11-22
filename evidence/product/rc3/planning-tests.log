@@ -1,0 +1,16 @@
+✔ natural literature ordinals use order within the literature channel (2.88575ms)
+✔ citation markers follow the displayed, mixed-source ordering (0.245625ms)
+✔ source identity is independent of the requested research action (0.112916ms)
+✔ the same numbered source reaches model planning with its real read coverage (1.891209ms)
+✔ mere presence of a numbered asset does not count as a reading (0.124792ms)
+✔ a valid model action can omit a single server-bound reference without replanning or changing the action (3.228292ms)
+✔ unknown targets, conflicting reads and forbidden discovery remain blocked (0.341875ms)
+✔ a final invalid plan exposes a user action, with validation details only in the trace (0.270208ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 410.933125
