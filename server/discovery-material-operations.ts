@@ -24,11 +24,11 @@ export async function queryPaperCatalog(catalog: PaperCatalogAccess, input: Reco
   switch (operation) {
     case "records":
       if (!only(input,["operation","ids"])) throw invalid();
-      return result(operation,catalog.batch(input.ids));
+      return result(operation,await catalog.batch(input.ids));
     case "list":
       if (!only(input,["operation","cursor","limit","view"]) || typeof input.cursor !== "string" ||
         typeof input.limit !== "number" || !["full","catalog","map"].includes(input.view as string)) throw invalid();
-      const page = catalog.page(input);
+      const page = await catalog.page(input);
       const value = page.read();
       const list = {...value,catalog:{...value.catalog,revision:page.revision}};
       return result(operation,list);
@@ -81,7 +81,7 @@ export async function runSourceRead(job: SourceReadJob, signal: AbortSignal, emi
     const call = {id:"read-paper-" + id,kind:"tool",name:"读取指定文献资料",input:id};
     emit({stage:"正在读取指定文献资料",call:{...call,status:"running"}});
     let paper: PaperRecord;
-    try {paper = catalog.detail(id);}
+    try {paper = await catalog.detail(id);}
     catch (error) {
       if (!(error instanceof PaperCatalogError)) throw error;
       const issue = id + "：指定版本的文献资料不存在或不可用。";

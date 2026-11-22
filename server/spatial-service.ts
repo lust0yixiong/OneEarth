@@ -2,9 +2,10 @@ import express from "express";
 import path from "node:path";
 import { coverageIndex, coverageScope } from "./coverage-index";
 import { coverageRouter } from "./coverage-router";
-import { coveragePublication } from "./coverage-publication";
-import { paperCache } from "./earthnano";
-import { assetById, registerPapers } from "../src/domain/datasets";
+import { coveragePublication, loadSpatialPaperPublication, pollSpatialPaperPublication } from "./coverage-publication";
+import { spatialPaperStore } from "./spatial-paper-store";
+import { coverageCellBounds } from "./spatial-paper-bounds";
+import { paperId } from "../src/domain/paper-record";
 import { emptyFilters } from "../src/domain/spatial";
 import { regionRecords } from "../src/domain/product-distribution";
 import { accessGuard } from "./access";
@@ -18,20 +19,27 @@ app.disable("x-powered-by");
 app.use(accessGuard());
 app.use((_req,res,next)=>{res.set("X-OneEarth-Service","spatial");next();});
 const state = process.env.ONEEARTH_STATE_DIR || path.resolve(".local/state");
-const papers = paperCache(path.join(state,"paper-evidence.sqlite"));
-const revision = coveragePublication(papers);
-revision();
+const papers = await spatialPaperStore();
+const publication = coveragePublication();
+await loadSpatialPaperPublication(papers, publication);
+pollSpatialPaperPublication(papers, publication);
 const coverage = coverageIndex(process.env.ONEEARTH_COVERAGE_DB || path.join(state,"spatial-coverage.sqlite"));
 void coverage.warm(coverageScope(regionRecords(emptyFilters())).geometries).catch(()=>{
   console.error("OneEarth spatial coverage warm failed");
 });
 app.use("/api/coverage", express.json({ limit: "2mb" }), coverageRouter(coverage, {
-  revision,
-  hydrateBatch(ids) {
-    registerPapers(ids.filter(id => !assetById.has(id)).flatMap(id => papers.get(id) || []), false);
+  ...publication,
+  paperCandidates(generation, filters, batch, grid, cells) {
+    if (filters.source && filters.source !== "paper") return Promise.resolve([]);
+    const ids = batch ? batch.ids.filter(paperId) : null;
+    if (ids && !ids.length) return Promise.resolve([]);
+    return papers.candidates(generation, ids, coverageCellBounds(grid, cells), filters);
   },
 }));
-app.get("/api/health", (_req,res) => res.json({status:"ok",service:"spatial",engine:index.engine,postgis,objects:objects.backend}));
+app.get("/api/health", (_req,res) => res.json({
+  status:"ok",service:"spatial",engine:index.engine,postgis,objects:objects.backend,
+  paperProjection: publication.head(),
+}));
 app.get("/api/spatial/layers", async (_req,res) => res.json(await index.layers()));
 function date(value:unknown):value is string {
   return typeof value==="string" && /^\d{4}-\d\d-\d\d$/.test(value) &&

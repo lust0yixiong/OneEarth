@@ -7,12 +7,11 @@ import { postgresTaskStore } from "./postgres-task-store";
 import { runExecutor } from "./executor";
 import { rememberConversationReferences } from "../src/domain/reference-memory";
 import { dataSearchInstructions, dataSearchSchema, requiredDataSearch } from "./data-search";
-import { paperCache, searchPapers } from "./earthnano";
+import { searchPapers } from "./earthnano";
 import { paperCatalogRoutes } from "./paper-catalog";
 import { paperCatalogAccess } from "./paper-catalog-access";
 import { productDatabase } from "./product-database";
-import { restoreDiscoveryPaperCache } from "./paper-cache-restore";
-import { registerPapers } from "../src/domain/datasets";
+import {postgresPaperCatalog} from "./postgres-paper-catalog";
 import { hainaService } from "./haina-search";
 import { searchSources } from "./web-search";
 import { nativeWebSearch } from "./native-web-search";
@@ -29,13 +28,9 @@ const configuration = discoveryConfiguration();
 const state = process.env.ONEEARTH_STATE_DIR || path.resolve(".local/state");
 mkdirSync(state, {recursive:true, mode:0o700});
 const store = await postgresTaskStore("discovery");
-const papers = paperCache(path.join(state,"paper-evidence.sqlite"));
-const records=productDatabase("DISCOVERY");
-try{
-  await restoreDiscoveryPaperCache(papers,sql=>records.query(sql));
-}finally{await records.end();}
-const delegations = await discoveryA2aStore(productDatabase("DISCOVERY"));
-registerPapers(papers.list());
+const records = productDatabase("DISCOVERY");
+const papers = await postgresPaperCatalog(records);
+const delegations = await discoveryA2aStore(records);
 const haina = hainaService(path.join(state, "haina-catalog.json"));
 haina.start();
 const app = express();
@@ -44,7 +39,7 @@ app.use(accessGuard());
 const prepare = discoveryInput(store,configuration,delegations);
 const catalog = paperCatalogAccess(papers);
 const fetchAllowed = () => process.env.ONEEARTH_DEEPSEEK_FETCH === "true";
-app.use(discoveryA2aRouter(delegations,prepare.a2a,{catalog,fetchAllowed,haina}));
+app.use(discoveryA2aRouter(delegations,prepare.a2a,{catalog,fetchAllowed,haina,paperProjection:papers}));
 app.use(express.json({limit:"384kb"}));
 app.use("/api/paper-records",paperCatalogRoutes(catalog));
 app.get("/api/health", (_req, res) => res.json({status:"ok", service:"discovery"}));
@@ -106,9 +101,11 @@ await workTasks(store, async ({id,body: input}: {id:string;body: DiscoveryInput}
         ...(correction ? {planningCorrection:correction, correctionRule:"只修正参数格式与检索短语，保留原问题和已确认的意图，不添加研究条件。"} : {}),
       }), signal, {outputSchema:dataSearchSchema}),
     paper: async plan => {
+      const stamp=await papers.beginLookup();
+      signal.throwIfAborted();
       const batch = await searchPapers(plan, signal, stage, call => emit({call}));
-      papers.saveBatch(batch.records);
-      registerPapers(batch.records);
+      signal.throwIfAborted();
+      await papers.publishLookup(batch.records,stamp);
       return batch;
     },
     haina: queries => haina.search(queries, signal),

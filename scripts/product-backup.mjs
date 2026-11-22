@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants, createReadStream, writeFileSync } from "node:fs";
-import { chmod, copyFile, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
-import { DatabaseSync, backup } from "node:sqlite";
+import { createReadStream } from "node:fs";
+import { copyFile, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { GetObjectCommand, HeadBucketCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
@@ -15,7 +16,7 @@ const bin=process.env.ONEEARTH_PG_BIN_DIR;
 if(!bin||!path.isAbsolute(bin))throw Error("请设置 ONEEARTH_PG_BIN_DIR。");
 const bucket=process.env.ONEEARTH_OBJECT_BUCKET;
 if(!bucket)throw Error("请设置独立图层对象桶。");
-const root=fileURLToPath(new URL("../",import.meta.url));
+const root = fileURLToPath(new URL("../",import.meta.url));
 const bundle=productPath(root,path.resolve(location));
 const catalogueFile=path.join(bundle,"paper-evidence.sqlite");
 const prefix=(process.env.ONEEARTH_OBJECT_PREFIX || "oneearth/").replace(/\/?$/,"/");
@@ -74,34 +75,98 @@ async function exists(file){
   try{return await lstat(file);}catch(error){if(error.code!=="ENOENT")throw error;return null;}
 }
 const state=productPath(root,process.env.ONEEARTH_STATE_DIR || ".local/state");
-const paperDatabase=path.join(state,"paper-evidence.sqlite");
-productPath(root,paperDatabase);
-function inspectCatalogue(file){
-  const db=new DatabaseSync(file,{readOnly:true});
+const oldStateCatalogue=path.join(state,"paper-evidence.sqlite");
+productPath(root,oldStateCatalogue);
+async function inspectLegacyCatalogue(){
+  const wal=await exists(catalogueFile+"-wal");
+  assert.ok(!wal||(wal.isFile()&&wal.size===0),"旧备份附带未归档的 WAL 内容。");
+  assert.equal(await exists(catalogueFile+"-journal"),null,"旧备份附带 SQLite 回滚日志。");
+  const scratch=await mkdtemp(path.join(tmpdir(),"oneearth-legacy-catalogue-"));
+  const copy=path.join(scratch,"paper-evidence.sqlite");
+  let db;
   try{
+    await copyFile(catalogueFile,copy);
+    db=new DatabaseSync(copy,{readOnly:true});
     assert.deepEqual(db.prepare("PRAGMA quick_check").all().map(row=>row.quick_check),["ok"]);
     assert.ok(db.prepare("SELECT payload FROM dataset_catalog_state WHERE key='current'").get(),"论文目录快照缺少发布状态。");
     assert.equal(db.prepare("SELECT count(*) AS n FROM dataset_catalog c LEFT JOIN evidence e ON e.id=c.id WHERE e.id IS NULL").get().n,
       0,"论文目录快照缺少已发布版本对应的记录。");
     return {published:db.prepare("SELECT count(*) AS n FROM dataset_catalog").get().n,
       versions:db.prepare("SELECT count(*) AS n FROM evidence").get().n};
-  }finally{db.close();}
+  }finally{
+    db?.close();
+    await rm(scratch,{recursive:true,force:true});
+  }
 }
+function catalogueCommand(args){
+  try {
+    const response=execFileSync(process.execPath,["--import","tsx",path.join(root,"scripts/migrate-paper-catalog.ts"),...args],{
+      cwd:root,stdio:["ignore","pipe","pipe"],encoding:"utf8",maxBuffer:1024*1024,
+    });
+    return JSON.parse(response);
+  } catch (error) {
+    throw Error("论文发布目录操作失败（"+args[0]+"，"+(error.status ?? error.code ?? "无有效报告")+"）。");
+  }
+}
+
+function discoveryCatalogue(){
+  const record=catalogueCommand(["--status"]);
+  assert.equal(record.initialized,true,"发现服务的论文发布目录尚未初始化。");
+  const {revision,generation,publishedCount,versionCount}=record;
+  assert.ok(typeof revision==="string" && revision && typeof generation==="string" && generation);
+  assert.ok(Number.isSafeInteger(publishedCount) && publishedCount>=0 && Number.isSafeInteger(versionCount) && versionCount>=publishedCount);
+  return {revision,generation,publishedCount,versionCount};
+}
+
+function spatialProjection(){
+  const query=sql=>command("psql",["--no-psqlrc","--tuples-only","--no-align","--command",sql],"spatial").trim();
+  if(query("SELECT to_regclass('public.spatial_paper_state')")!=="spatial_paper_state")return null;
+  const row=query(`SELECT json_build_object('revision',revision,'generation',generation,
+    'publishedCount',published_count,'versionCount',version_count) FROM spatial_paper_state WHERE singleton`);
+  return row ? JSON.parse(row) : null;
+}
+
+async function publishLayerObjects(manifest){
+  await parallel(manifest.objects,async record=>{
+    assert.match(record.hash,/^[a-f0-9]{64}$/);
+    assert.equal(record.key,record.hash.slice(0,2)+"/"+record.hash);
+    const bytes=await readFile(path.join(bundle,"objects",record.hash));
+    assert.equal(bytes.length,record.bytes);
+    assert.equal(sha(bytes),record.hash);
+    await client.send(new PutObjectCommand({Bucket:bucket,Key:prefix+record.key,Body:bytes,IfNoneMatch:"*"}));
+  });
+}
+
+async function restoreDatabases(){
+  // Keep the restore-list outside the sealed bundle so it is reusable read-only.
+  const scratch=await mkdtemp(path.join(tmpdir(),"oneearth-restore-"));
+  try {
+    for(const db of databases){
+      const args=["--exit-on-error","--no-owner","--no-privileges","--single-transaction","--dbname",
+        new URL(process.env["ONEEARTH_"+db.toUpperCase()+"_DATABASE_URL"]).pathname.slice(1)];
+      if(db==="spatial"){
+        const toc=command("pg_restore",["--list",artifact(db)]);
+        const keep=toc.split("\n").filter(line=>!/(?:EXTENSION - postgis|COMMENT - EXTENSION postgis|TABLE DATA public spatial_ref_sys)/.test(line));
+        const list=path.join(scratch,"spatial.restore-list");
+        await writeFile(list,keep.join("\n"),{mode:0o600});
+        args.push("--use-list",list);
+      }
+      command("pg_restore",[...args,artifact(db)],db);
+    }
+  } finally {await rm(scratch,{recursive:true,force:true});}
+}
+
 await client.send(new HeadBucketCommand({Bucket:bucket}));
 if(action==="export"){
-  assert.ok((await exists(paperDatabase))?.isFile(),"论文发布状态缺失。请使用已经初始化的产品状态目录。");
-  await mkdir(bundle,{mode:0o700}); // Require a fresh backup directory.
+  const paperCatalogue=discoveryCatalogue();
+  const projection=spatialProjection();
+  await mkdir(bundle,{mode:0o700});
   await mkdir(path.join(bundle,"objects"),{mode:0o700});
   const databaseFiles=[];
   for(const db of databases){
     command("pg_dump",["--format=custom","--no-owner","--no-privileges","--file",artifact(db)],db);
     databaseFiles.push({db,hash:await fileHash(artifact(db))});
   }
-  const db=new DatabaseSync(paperDatabase,{readOnly:true});
-  // Capture committed data from both the database and its WAL.
-  try{await backup(db,catalogueFile);}finally{db.close();}
-  await chmod(catalogueFile,0o600);
-  const paperCatalogue={hash:await fileHash(catalogueFile),...inspectCatalogue(catalogueFile)};
   const rows=await objects();
   assert.ok(rows.length,"图层对象备份不能为空。");
   await parallel(rows,async record=>{
@@ -111,21 +176,23 @@ if(action==="export"){
     assert.equal(sha(bytes),record.hash);
     await writeFile(path.join(bundle,"objects",record.hash),bytes,{mode:0o600,flag:"wx"});
   });
-  await writeFile(marker,JSON.stringify({format:2,databases:databaseFiles,objects:rows,paperCatalogue},null,2)+"\n",{mode:0o600,flag:"wx"});
-  console.log(JSON.stringify({action,databases:databaseFiles.length,objects:rows.length,paperCatalogue,verified:true}));
+  assert.deepEqual(discoveryCatalogue(),paperCatalogue,"备份期间论文发布目录发生写入。请停写并使用新备份路径重试。");
+  assert.deepEqual(spatialProjection(),projection,"备份期间时空论文投影发生写入。请停写并使用新备份路径重试。");
+  await writeFile(marker,JSON.stringify({format:3,databases:databaseFiles,objects:rows,paperCatalogue,spatialProjection:projection},null,2)+"\n",{mode:0o600,flag:"wx"});
+  console.log(JSON.stringify({action,format:3,databases:databaseFiles.length,objects:rows.length,paperCatalogue,spatialProjection:projection,verified:true}));
 }else{
   const manifest=JSON.parse(await readFile(marker,"utf8"));
-  assert.ok([1,2].includes(manifest.format),"产品备份格式无法识别。");
+  assert.ok([1,2,3].includes(manifest.format),"产品备份格式无法识别。");
   assert.deepEqual(manifest.databases.map(entry=>entry.db),databases);
   for(const suffix of ["","-wal","-shm","-journal"]){
-    assert.equal(await exists(paperDatabase+suffix),null,"目标论文目录必须为空且产品服务尚未启动。");
+    assert.equal(await exists(oldStateCatalogue+suffix),null,"目标应用状态不能含旧论文目录，且产品服务须尚未启动。");
   }
-  const paperCatalogue=manifest.format===2?manifest.paperCatalogue:null;
+  const oldCatalogue=manifest.format===2?manifest.paperCatalogue:null;
   if(manifest.format===2){
-    assert.ok(paperCatalogue,"此备份缺少论文发布目录，无法恢复完整产品状态。");
-    assert.match(paperCatalogue.hash,/^[a-f0-9]{64}$/);
-    assert.equal(await fileHash(catalogueFile),paperCatalogue.hash,"论文目录快照校验失败。");
-    assert.deepEqual(inspectCatalogue(catalogueFile),{published:paperCatalogue.published,versions:paperCatalogue.versions});
+    assert.ok(oldCatalogue,"此备份缺少论文发布目录，无法恢复完整产品状态。");
+    assert.match(oldCatalogue.hash,/^[a-f0-9]{64}$/);
+    assert.equal(await fileHash(catalogueFile),oldCatalogue.hash,"论文目录快照校验失败。");
+    assert.deepEqual(await inspectLegacyCatalogue(),{published:oldCatalogue.published,versions:oldCatalogue.versions});
   }
   for(const db of databases){
     const count=command("psql",["--no-psqlrc","--tuples-only","--no-align","--command",
@@ -134,33 +201,28 @@ if(action==="export"){
   }
   assert.equal((await objects()).length,0,"目标对象前缀必须为空。");
   for(const record of manifest.databases)assert.equal(await fileHash(artifact(record.db)),record.hash);
-  await parallel(manifest.objects,async record=>{
-    assert.match(record.hash,/^[a-f0-9]{64}$/);
-    assert.equal(record.key,record.hash.slice(0,2)+"/"+record.hash);
-    const bytes=await readFile(path.join(bundle,"objects",record.hash));
-    assert.equal(bytes.length,record.bytes);
-    assert.equal(sha(bytes),record.hash);
-    await client.send(new PutObjectCommand({Bucket:bucket,Key:prefix+record.key,Body:bytes,IfNoneMatch:"*"}));
-  });
-  for(const db of databases){
-    const args=["--exit-on-error","--no-owner","--no-privileges","--single-transaction","--dbname",
-      new URL(process.env["ONEEARTH_"+db.toUpperCase()+"_DATABASE_URL"]).pathname.slice(1)];
-    if(db==="spatial"){
-      const toc=command("pg_restore",["--list",artifact(db)]);
-      const keep=toc.split("\n").filter(line=>!/(?:EXTENSION - postgis|COMMENT - EXTENSION postgis|TABLE DATA public spatial_ref_sys)/.test(line));
-      const list=path.join(bundle,"spatial.restore-list");
-      writeFileSync(list,keep.join("\n"),{mode:0o600});
-      args.push("--use-list",list);
-    }
-    command("pg_restore",[...args,artifact(db)],db);
-  }
-  if(paperCatalogue){
-    await mkdir(state,{recursive:true,mode:0o700});
-    await copyFile(catalogueFile,paperDatabase,constants.COPYFILE_EXCL);
-    await chmod(paperDatabase,0o600);
-    assert.equal(await fileHash(paperDatabase),paperCatalogue.hash);
+  await publishLayerObjects(manifest);
+  await restoreDatabases();
+  let catalogueRecovery;
+  if(manifest.format===2){
+    catalogueCommand(["--sqlite",catalogueFile]);
+    catalogueRecovery="migrated-publication";
   }else if(manifest.format===1){
-    console.warn("旧版备份未包含论文发布目录，只能从已保存的发现任务重建可用线索。");
+    catalogueCommand(["--from-discovery-history"]);
+    catalogueRecovery="limited-history-reconstruction";
+    console.warn("旧版备份未包含论文发布目录。这次仅根据已保存发现记录有限重建，无法恢复原发布顺序或未归档的发布。");
+  }else{
+    catalogueRecovery="durable-publication";
   }
-  console.log(JSON.stringify({action,databases:databases.length,objects:manifest.objects.length,paperCatalogue,verified:true}));
+  const paperCatalogue=discoveryCatalogue();
+  if(manifest.format===2){
+    assert.equal(paperCatalogue.publishedCount,oldCatalogue.published);
+    assert.ok(paperCatalogue.versionCount>=oldCatalogue.versions,"迁移后的精确版本少于原备份。");
+  }
+  const projection=spatialProjection();
+  if(manifest.format===3){
+    assert.deepEqual(paperCatalogue,manifest.paperCatalogue);
+    assert.deepEqual(projection,manifest.spatialProjection);
+  }
+  console.log(JSON.stringify({action,format:manifest.format,databases:databases.length,objects:manifest.objects.length,paperCatalogue,spatialProjection:projection,catalogueRecovery,verified:true}));
 }

@@ -1,6 +1,6 @@
 import {globalProduct,productKey,regionHit,regionRecords,timeFits} from "./product-distribution";
 import {countBand,countBands} from "./distribution-heat";
-import { paperRecords } from "./paper-record";
+import { paperId, paperRecords } from "./paper-record";
 import {accessMembership} from "./data-access";
 import {dateEvidence,withinWindow} from "./time-window";
 import { observationCells } from "./observation-grid";
@@ -210,6 +210,7 @@ export function catalogGrid(
   filters: Filters,
   result?: CandidateSet | null,
   references?: { cell: string; records: Map<string, Set<string>> },
+  paperCandidates?: ReadonlySet<string>,
 ) {
   if (catalogEvidenceGrid(grid, result).key !== grid.key)
     return new Map<string, Set<string>>();
@@ -226,6 +227,7 @@ export function catalogGrid(
     result?.layer,
     result?.selection?.grid.key,
     result?.selection?.id,
+    paperCandidates && [...paperCandidates],
   ]);
   const cached = references ? undefined : cachedGrids.get(key);
   if (cached) return cached;
@@ -253,6 +255,7 @@ export function catalogGrid(
       (a) =>
         a.caseId === caseId &&
         a.kind !== "requirement" &&
+        (!paperCandidates || !paperId(a.id) || paperCandidates.has(a.id)) &&
         (!allowed || allowed.has(assetIdentity(a))),
     );
     const selection = result?.selection;

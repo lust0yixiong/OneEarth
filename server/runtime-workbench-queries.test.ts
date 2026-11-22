@@ -103,3 +103,53 @@ test("the mixed catalogue pulls a Haina publication once and rejects mixed revis
   await assert.rejects(refresh, /分页期间更新/);
   assert.deepEqual(snapshots, [[1, 2]]);
 });
+
+test("a persistent publication revision survives provider restart and unpublished history without reloading",async()=>{
+  let time=100_000,revision="pg-publication:stable-7",process=1;
+  const a=paper("dataset","a"),b=paper("dataset","b"),updates:PaperRecord[][]=[],reads:{process:number;limit:number}[]=[];
+  let current=b;
+  const pull=paperCatalogueProjection(async input=>{reads.push({process,limit:input.limit});return page([current],1,null,revision);},rows=>updates.push(rows),()=>time);
+  await pull();assert.deepEqual(updates,[[b]]);
+  process=2;time+=2_000;await pull();
+  assert.deepEqual(reads,[{process:1,limit:1},{process:1,limit:500},{process:2,limit:1}]);
+  // An unrelated provider history write leaves its publication revision intact.
+  time+=2_000;await pull();assert.equal(reads.at(-1)?.limit,1);assert.deepEqual(updates,[[b]]);
+  current=a;revision="pg-publication:stable-8";time+=2_000;await pull();assert.deepEqual(updates,[[b],[a]]);
+});
+
+test("publication during an initial scan never exposes partial generations and retry begins at a new head",async()=>{
+  const a=paper("alpha","a"),b=paper("alpha","b"),tail=paper("zeta","c"),updates:PaperRecord[][]=[],requests:{cursor:string;limit:number;revision:string}[]=[];
+  let revision="pg-publication:11",interrupt=true;
+  const pull=paperCatalogueProjection(async input=>{
+    requests.push({cursor:input.cursor,limit:input.limit,revision});
+    const value=input.cursor?page([tail],2,null,revision):page([revision.endsWith("11")?a:b],2,"alpha",revision);
+    if(input.limit===500&&input.cursor===""&&interrupt){interrupt=false;revision="pg-publication:12";}
+    return value;
+  },rows=>updates.push(rows));
+  await assert.rejects(pull,/分页期间更新/);assert.deepEqual(updates,[]);
+  const retryStart=requests.length;await pull();assert.deepEqual(updates,[[b,tail]]);
+  assert.deepEqual(requests.slice(retryStart).map(r=>[r.cursor,r.limit]),[["",1],["",500],["alpha",500]]);
+});
+
+for(const failure of ["revision","total","duplicate","incomplete","cursor-cycle","unavailable"] as const){
+  test("a failed replacement scan retains the whole previous publication: "+failure,async()=>{
+    const a=paper("alpha","a"),b=paper("alpha","b"),tail=paper("zeta","c"),updates:PaperRecord[][]=[];
+    let time=100_000,replace=false,fail=true;
+    const pull=paperCatalogueProjection(async input=>{
+      if(!replace)return page([a],1,null,"pg-publication:20");
+      if(input.limit===1)return page([b],2,"alpha","pg-publication:21");
+      if(!input.cursor)return page([b],2,"alpha","pg-publication:21");
+      if(fail){
+        if(failure==="unavailable")throw Error("controlled service unavailable");
+        if(failure==="revision")return page([tail],2,null,"pg-publication:22");
+        if(failure==="total")return page([tail],3,null,"pg-publication:21");
+        if(failure==="duplicate")return page([b],2,null,"pg-publication:21");
+        if(failure==="incomplete")return page([],2,null,"pg-publication:21");
+        return page([tail],2,"alpha","pg-publication:21");
+      }
+      return page([tail],2,null,"pg-publication:21");
+    },rows=>updates.push(rows),()=>time);
+    await pull();replace=true;time+=2_000;await assert.rejects(pull);assert.deepEqual(updates,[[a]]);
+    fail=false;await pull();assert.deepEqual(updates,[[a],[b,tail]]);
+  });
+}

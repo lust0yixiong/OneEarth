@@ -27,14 +27,14 @@ export function paperCatalogRoutes(catalog: PaperCatalogAccess) {
     try {res.set("Cache-Control","no-store").json(await catalog.questions(req.params.id,req.query.cursor || ""));}
     catch (error) {respondError(res,error);}
   });
-  router.get("/", (req,res) => {
+  router.get("/", async (req,res) => {
     res.set("Cache-Control","no-store");
     try {
       if (req.query.ids !== undefined) {
-        res.json(catalog.batch(typeof req.query.ids === "string" ? req.query.ids.split(",") : []));
+        res.json(await catalog.batch(typeof req.query.ids === "string" ? req.query.ids.split(",") : []));
         return;
       }
-      const page = catalog.page(req.query);
+      const page = await catalog.page(req.query);
       if (!req.acceptsEncodings("gzip")) {res.json(page.read());return;}
       let compressed = pages.get(page.cacheKey);
       if (!compressed) {

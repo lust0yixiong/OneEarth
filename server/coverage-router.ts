@@ -25,7 +25,19 @@ function validBatch(batch:any) {
       typeof item?.id==="string" && typeof item.datetime==="string" && Number.isFinite(Date.parse(item.datetime))))))return false;
   return true;
 }
-type CoveragePublication = { revision(): string; hydrateBatch?(ids: string[]): void };
+type CoveragePublication = {
+  revision(): string | null;
+  generation?(): string | undefined;
+  hydrateBatch?(ids: string[]): void;
+  batchAvailable?(ids: string[]): boolean;
+  paperCandidates?(generation: string, filters: Filters, batch: CandidateSet | null, grid: GridSpec, cells: string[]): Promise<string[] | null>;
+};
+type PreparedScope = {
+  paperIds?: ReadonlySet<string>;
+  prepared: ReturnType<typeof coverageScope>;
+  count: ReturnType<typeof coverageCounter>;
+  bases: Map<string, Map<string, Set<string>>>;
+};
 type Scope = {
   id: string;
   revision: string;
@@ -33,9 +45,8 @@ type Scope = {
   batch: CandidateSet | null;
   selection: Selection | null;
   summary: CoverageScopeSummary;
-  prepared: ReturnType<typeof coverageScope>;
-  count: ReturnType<typeof coverageCounter>;
-  bases: Map<string, Map<string, Set<string>>>;
+  generation?: string;
+  views: Map<string, PreparedScope>;
 };
 
 function normalizeFilters(f: Filters): Filters {
@@ -75,13 +86,17 @@ function expired(res: Response, revision: string) {
   return res.status(410).json({ code: "coverage_scope_expired", error: "数据已更新或查询范围已过期，请重新载入。", revision });
 }
 
-function sourceReferences(scope: Scope, grid: GridSpec, cell: string, geometryKeys: string[], members: string[]) {
+function unavailable(res: Response) {
+  return res.status(503).json({ code: "coverage_unavailable", error: "覆盖未知，网格分布暂时无法读取。" });
+}
+
+function sourceReferences(scope: Scope, view: PreparedScope, grid: GridSpec, cell: string, geometryKeys: string[], members: string[]) {
   const records = new Map<string, Set<string>>();
-  catalogGrid(grid, scope.filters, scope.batch, { cell, records });
+  catalogGrid(grid, scope.filters, scope.batch, { cell, records }, view.paperIds);
   const geometries = new Set(geometryKeys);
   if (geometries.size) {
     const frequency = scope.batch?.metric === "scenes";
-    for (const region of regionRecords(scope.filters, scope.batch)) {
+    for (const region of regionRecords(scope.filters, scope.batch, view.paperIds)) {
       if (!frequency && !region.scene && backgroundCoverageProduct(region.asset)) continue;
       const member = frequency ? region.scene && region.asset.datasetId + "/" + region.scene : productKey(region.asset);
       if (!member || !geometries.has(coverageGeometryKey(region.area))) continue;
@@ -97,7 +112,7 @@ export function coverageRouter(index: ReturnType<typeof coverageIndex>, publicat
   const router=Router();
   const scopes = new Map<string, Scope>();
   const scopeKeys = new Map<string, Scope>();
-  let activeRevision: string | undefined;
+  let activeRevision: string | null | undefined;
   function currentRevision() {
     const revision = publication.revision();
     if (activeRevision !== revision) {
@@ -109,7 +124,11 @@ export function coverageRouter(index: ReturnType<typeof coverageIndex>, publicat
   }
 
   router.use((_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
-  router.get("/revision", (_req, res) => res.json({ revision: currentRevision() }));
+  router.get("/revision", (_req, res) => {
+    const revision = currentRevision();
+    if (revision === null) { unavailable(res); return; }
+    res.json({ revision });
+  });
   router.post("/scopes",(req,res)=>{
     const {filters: requestedFilters, batch: requestedBatch = null, revision: expected} = req.body || {};
     const batchSelection = requestedBatch?.selection ?? null;
@@ -122,6 +141,7 @@ export function coverageRouter(index: ReturnType<typeof coverageIndex>, publicat
       res.status(400).json({error:"网格查询条件无效。"});return;
     }
     const revision = currentRevision();
+    if (revision === null) { unavailable(res); return; }
     if (expected !== undefined && expected !== revision) {
       res.status(409).json({ code: "coverage_revision_changed", error: "覆盖数据已更新。", revision }); return;
     }
@@ -133,6 +153,9 @@ export function coverageRouter(index: ReturnType<typeof coverageIndex>, publicat
     // Only restore already cached local evidence for an explicit saved batch.
     // Hydration registers references without publishing them to the catalogue.
     if (batch) {
+      if (publication.batchAvailable && !publication.batchAvailable(batch.ids)) {
+        res.status(503).json({ code: "coverage_inputs_unavailable", error: "部分覆盖来源尚不可读。", revision }); return;
+      }
       publication.hydrateBatch?.(batch.ids);
       if (batch.ids.some(id => !assetById.has(id))) {
         res.status(503).json({ code: "coverage_inputs_unavailable", error: "部分覆盖来源尚不可读。", revision }); return;
@@ -142,10 +165,9 @@ export function coverageRouter(index: ReturnType<typeof coverageIndex>, publicat
     const key = JSON.stringify([filters, batchKey, selection ? [selection.grid.key, selection.id, selection.point] : null]);
     let scope = scopeKeys.get(key);
     if (!scope) {
-      const prepared = coverageScope(regionRecords(filters, batch), batch?.metric === "scenes");
       scope = {
         id: randomUUID(), revision, filters, batch, selection, summary: summarizeScope(filters, batch, selection, batchKey),
-        prepared, count: coverageCounter(prepared.products), bases: new Map(),
+        generation: publication.generation?.(), views: new Map(),
       };
       scopes.set(scope.id, scope);
     } else {
@@ -163,6 +185,7 @@ export function coverageRouter(index: ReturnType<typeof coverageIndex>, publicat
     const {id,cells,includeProducts,includeReferences,requireSelection}=req.body||{};
     const grid=grids.find(g=>g.key===req.body?.grid?.key && g.system===req.body.grid.system && g.n===req.body.grid.n);
     const revision = currentRevision();
+    if (revision === null) { unavailable(res); return; }
     const scope=scopes.get(id);
     if (!scope || (req.body.revision !== undefined && req.body.revision !== revision)) {
       expired(res, revision); return;
@@ -184,16 +207,47 @@ export function coverageRouter(index: ReturnType<typeof coverageIndex>, publicat
     }
     if(frozen && (frozen.grid.key!==grid.key || cells.some(cell=>cell!==frozen.id))) {res.status(400).json({error:"请读取原选网格。"});return;}
     try {
-      const result=await index.read(grid,[...new Set(cells)],scope.prepared.geometries);
+      const requested = [...new Set<string>(cells)];
+      const generation = publication.generation?.();
+      if (scope.generation !== generation) {
+        if (scope.batch && publication.batchAvailable && !publication.batchAvailable(scope.batch.ids)) {
+          expired(res, revision); return;
+        }
+        scope.generation = generation;
+        scope.views.clear();
+      }
+      let paperIds: string[] | undefined;
+      if (publication.paperCandidates) {
+        if (!generation) { unavailable(res); return; }
+        const candidates = await publication.paperCandidates(generation, scope.filters, scope.batch, grid, requested);
+        const latest = currentRevision();
+        if (latest === null) { unavailable(res); return; }
+        if (latest !== scope.revision || !scopes.has(scope.id) || publication.generation?.() !== generation) {
+          expired(res, latest); return;
+        }
+        if (candidates === null) { unavailable(res); return; }
+        paperIds = candidates;
+      }
+      const key = JSON.stringify(paperIds ?? null);
+      let view = scope.views.get(key);
+      if (!view) {
+        const paperCandidates = paperIds && new Set(paperIds);
+        const prepared = coverageScope(regionRecords(scope.filters, scope.batch, paperCandidates), scope.batch?.metric === "scenes");
+        view = { paperIds: paperCandidates, prepared, count: coverageCounter(prepared.products), bases: new Map() };
+        scope.views.set(key, view);
+        if (scope.views.size > 4) scope.views.delete(scope.views.keys().next().value!);
+      }
+      const result=await index.read(grid,requested,view.prepared.geometries);
       const latest = currentRevision();
-      if (latest !== scope.revision || !scopes.has(scope.id)) { expired(res, latest); return; }
-      let base=scope.bases.get(grid.key);
-      if(!base){base=catalogGrid(grid,scope.filters,scope.batch);scope.bases.set(grid.key,base);}
-      const counts=result.hits.map(([cell,geometries]):[string,number]=>[cell,scope.count(geometries,base!.get(cell))]);
+      if (latest === null) { unavailable(res); return; }
+      if (latest !== scope.revision || !scopes.has(scope.id) || publication.generation?.() !== generation) { expired(res, latest); return; }
+      let base=view.bases.get(grid.key);
+      if(!base){base=catalogGrid(grid,scope.filters,scope.batch,undefined,view.paperIds);view.bases.set(grid.key,base);}
+      const counts=result.hits.map(([cell,geometries]):[string,number]=>[cell,view.count(geometries,base!.get(cell))]);
       const members = includeProducts ? result.hits.map(([cell, geometries]): [string, string[]] =>
-        [cell, [...coverageProducts(scope.prepared.products, geometries, base!.get(cell))].sort()]) : undefined;
+        [cell, [...coverageProducts(view.prepared.products, geometries, base!.get(cell))].sort()]) : undefined;
       const references = includeReferences && members ? result.hits.map(([cell, geometries], i) =>
-        [cell, sourceReferences(scope, grid, cell, geometries, members[i][1])] as const) : undefined;
+        [cell, sourceReferences(scope, view, grid, cell, geometries, members[i][1])] as const) : undefined;
       const sourceIds = references?.map(([cell, grouped]) =>
         [cell, [...new Set(grouped.flatMap(([, ids]) => ids))].slice(0, 32)]);
       const response = {
@@ -201,10 +255,10 @@ export function coverageRouter(index: ReturnType<typeof coverageIndex>, publicat
         pending: result.pending, members, references, sourceIds,
       };
       res.json(requireSelection ? { ...response, scope: scope.summary } : response);
-    } catch {res.status(503).json({code:"coverage_unavailable",error:"覆盖未知，网格分布暂时无法读取。"});}
+    } catch { unavailable(res); }
   });
   router.use((_error: unknown, _req: unknown, res: Response, _next: unknown) => {
-    res.status(503).json({ code: "coverage_unavailable", error: "覆盖未知，网格分布暂时无法读取。" });
+    unavailable(res);
   });
   return router;
 }

@@ -18,6 +18,14 @@ export interface PaperRecord {
   questionSource?:"postgres-readonly";
 }
 
+/** Local geometry and time metadata. This intentionally cannot validate as research evidence. */
+export type CoverageOnlyPaperRecord = PaperRecord & {
+  coverageOnly: true;
+  catalogSummary: true;
+  papers: 0;
+  need: Need & { tabs: [] };
+};
+
 export const paperRecords = new Map<string, PaperRecord>();
 /** Preserve searchable identities, questions, methods and spatial/time constraints.
  * Reading tabs are fetched by the unchanged historical content id on demand. */

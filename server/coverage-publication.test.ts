@@ -8,12 +8,11 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import express from "express";
 import { coverageIndex } from "./coverage-index";
-import { coveragePublication } from "./coverage-publication";
+import { coveragePublication, projectedCoverageRecords } from "./coverage-publication";
 import { coverageRouter } from "./coverage-router";
-import { paperCache } from "./earthnano";
-import { runtimePaperEvidence } from "./runtime-paper-evidence";
 import { assetById, assets } from "../src/domain/datasets";
-import type { PaperRecord } from "../src/domain/paper-record";
+import type { PaperMapEntry } from "./paper-projection-contract";
+import { validPaperRecord } from "../src/domain/paper-record";
 import { cellAt, cellShape, emptyFilters, gridSpec } from "../src/domain/spatial";
 import type { Coordinate } from "../src/domain/types";
 
@@ -23,34 +22,22 @@ const point = cellShape(publicCell, grid).center as Coordinate;
 const selection = { id: publicCell, grid, point };
 const time = { period: [2003, 2003] as [number, number] };
 const filters = { ...emptyFilters(), ...time, source: "paper", type: "coverage-test-selected" };
-function record(name: string, kind: string, location: Coordinate, polygon = false): PaperRecord {
+function record(name: string, kind: string, location: Coordinate, polygon = false): PaperMapEntry {
   const dsKey = "coverage-test:" + name;
   const id = "earthnano:" + createHash("sha256").update(JSON.stringify([dsKey, kind, location])).digest("hex");
   const [x, y] = location;
   const w = x - 0.025, s = y - 0.025, e = x + 0.025, n = y + 0.025;
   return {
-    dsKey, id, papers: 1, points: polygon ? [] : [location], paperTitle: name, studyContext: "fixture",
-    need: {
-      datasetId: dsKey, name, product: name, type: kind, source: "EarthNano 论文断言库", status: "used", detail: "fixture",
-      profile: {
-        role: "data", spatial: "coverage", years: time.period, coverage: "fixture",
-        access: "fixture", limitation: "synthetic",
-        ...(polygon ? {
-          areaBasis: "geometry", area: { type: "Polygon", coordinates: [[[w,s],[w,n],[e,n],[e,s],[w,s]]] },
-        } : {}),
-      },
-      tabs: [{ kind: "table", label: "论文用法（本页）", rows: [[name,"","","","fixture-paper","D1"]] }],
+    dsKey, id, title:name, type:kind, source:"文献资料", published:true, points:polygon ? [] : [location],
+    profile:{
+      role:"data", spatial:"coverage", years:time.period, coverage:"fixture",
+      ...(polygon ? {areaBasis:"geometry",area:{type:"Polygon",coordinates:[[[w,s],[w,n],[e,n],[e,s],[w,s]]]}} : {}),
     },
   };
 }
 
 test("coverage publishes committed inputs, binds the exact scope, and never reuses an expired handle", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "coverage-publication-"));
-  const file = path.join(directory, "paper.sqlite");
-  const writer = paperCache(file);
-  const reader = paperCache(file);
-  const runtimeCache = paperCache(file);
-  const runtime = runtimePaperEvidence(runtimeCache);
   const index = coverageIndex(path.join(directory, "coverage.sqlite"));
   let indexClosed = false;
   const anchor = record("anchor", filters.type, point);
@@ -58,21 +45,16 @@ test("coverage publishes committed inputs, binds the exact scope, and never reus
   const otherType = record("other-type", "coverage-test-other", point);
   const moved = record("moving", filters.type, [140,36], true);
   const historical = record("unpublished", filters.type, point);
-  for (const r of [anchor, moving, otherType]) writer.save(r);
-  let scans = 0, loads = 0;
-  const makePublication = () => coveragePublication({
-    dataVersion: reader.dataVersion,
-    publishedIds: () => { scans++; return reader.publishedIds(); },
-    list: () => { loads++; return reader.list(); },
-  });
-  const revision = makePublication();
+  const [localProjection] = projectedCoverageRecords([anchor]);
+  assert.deepEqual(localProjection.need.tabs, []);
+  assert.equal(validPaperRecord(localProjection), false);
+  const publication = coveragePublication();
+  function apply(generation: string, entries: PaperMapEntry[], publishedCount: number, versionCount: number, baseGeneration?: string) {
+    publication.activate({generation, revision:generation, entries, publishedCount, versionCount, baseGeneration});
+  }
   const app = express();
   app.use(express.json());
-  app.use("/api/coverage", coverageRouter(index, {
-    revision, hydrateBatch: ids => {
-      assert.ok(ids.every(id => assetById.has(id)));
-    },
-  }));
+  app.use("/api/coverage", coverageRouter(index, publication));
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -108,6 +90,10 @@ test("coverage publishes committed inputs, binds the exact scope, and never reus
     throw new Error("Coverage didn't finish");
   }
   try {
+    const coldStart = await request("scopes", {filters, selection});
+    assert.equal(coldStart.status,503);
+    assert.equal(coldStart.body.code,"coverage_unavailable");
+    apply("g1",[anchor,moving,otherType],3,3);
     const original = await scope();
     const batch = { ids: [moving.id, otherType.id], layer: "all", selection, caseId: null };
     const frozen = await scope({batch});
@@ -184,15 +170,9 @@ test("coverage publishes committed inputs, binds the exact scope, and never reus
     assert.deepEqual(zero.members,[[publicCell,[]]]);
 
     for (let i = 0; i < 10; i++) await ready(original);
-    assert.deepEqual([scans,loads], [1,1], "unchanged coverage must not scan or load the published catalogue");
-    writer.save(historical, false);
+    apply("g2",[{...historical,published:false}],3,4,"g1");
     assert.equal((await request("revision")).body.revision, original.revision);
-    assert.deepEqual([scans,loads], [2,1], "a historical record must not rebuild the published view");
-    writer.save(moved);
-    // An earlier turn finishes with the old version after discovery publishes the new one.
-    runtime.remember([moving]);
-    assert.deepEqual(runtime.get(moving.id),moving);
-    assert.equal(writer.list().find(record=>record.dsKey===moving.dsKey)?.id,moved.id);
+    apply("g3",[{...moving,published:false},moved],3,5,"g2");
     assert.deepEqual(assets.filter(asset=>asset.datasetId===moving.dsKey).map(asset=>asset.id),[moved.id]);
     const expired = await read(original);
     assert.equal(expired.status, 410);
@@ -206,10 +186,15 @@ test("coverage publishes committed inputs, binds the exact scope, and never reus
     const next = await scope();
     assert.notEqual(next.id, original.id);
     assert.deepEqual((await ready(next)).members, [[publicCell, [anchor.dsKey]]]);
-    assert.deepEqual([scans,loads], [3,2]);
-    assert.equal(makePublication()(), next.revision, "revision must be independent of in-process registration order");
+    const saved = await scope({batch:{...batch,ids:[moving.id]}});
+    assert.deepEqual((await ready(saved)).sourceIds,[[publicCell,[moving.id]]]);
+    assert.deepEqual(assets.filter(asset=>asset.datasetId===moving.dsKey).map(asset=>asset.id),[moved.id]);
+    const reopened = coveragePublication();
+    reopened.activate({generation:"g3",revision:"g3",publishedCount:3,versionCount:5,
+      entries:[moved,anchor,otherType,{...moving,published:false},{...historical,published:false}]});
+    assert.equal(reopened.revision(), next.revision, "revision must be independent of in-process registration order");
 
-    writer.replaceCatalog([anchor,otherType], {source:"fixture",sourceTotal:2,filteredOut:0,updatedAt:"2004-01-01"});
+    apply("g4",[{...moved,published:false}],2,5,"g3");
     assert.notEqual((await request("revision")).body.revision, next.revision);
     assert.ok(!assets.some(asset => asset.id === moved.id));
     assert.ok(assetById.has(moving.id), "historical cited records remain addressable");
@@ -223,9 +208,6 @@ test("coverage publishes committed inputs, binds the exact scope, and never reus
   } finally {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     if (!indexClosed) await index.close();
-    reader.close();
-    runtimeCache.close();
-    writer.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

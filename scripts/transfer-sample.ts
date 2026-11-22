@@ -6,13 +6,16 @@ import { mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { layerObjects, spatialStore, type Chunk, type Layer } from "../server/spatial-store";
 import { openTaskStore, taskIdPattern } from "../server/task-store";
-import { paperCache } from "../server/earthnano";
+import { postgresPaperCatalog } from "../server/postgres-paper-catalog";
+import { productDatabase } from "../server/product-database";
 import type { PaperRecord } from "../src/domain/paper-record";
 
 interface TaskSample {
   task: Record<string,SQLInputValue>;
   events: {at:number;payload:string}[];
 }
+// Legacy task samples preserve the original SQLite task/event format.
+// Published product backups use product-backup.mjs.
 type Sample = {format:1; layers:[Layer,Chunk[]][]; runtime:TaskSample[]; discovery:TaskSample[]; papers:PaperRecord[]};
 
 const [action,bundlePath,...taskIds] = process.argv.slice(2);
@@ -134,8 +137,11 @@ try {
       await index!.writeLayer(layer);
       await index!.writeChunks(chunks);
     }
-    const papers=paperCache(path.join(state,"paper-evidence.sqlite"));
-    try{for(const record of sample.papers)papers.save(record);}finally{papers.close();}
+    if(sample.papers.length) {
+      const pool=productDatabase("DISCOVERY");
+      try { await (await postgresPaperCatalog(pool)).archiveRecords(sample.papers); }
+      finally { await pool.end(); }
+    }
     await mergeTaskSamples("runtime",sample.runtime);
     await mergeTaskSamples("discovery",sample.discovery);
     console.log(JSON.stringify({action,runtime:sample.runtime.length,discovery:sample.discovery.length,papers:sample.papers.length,layers:sample.layers.length}));

@@ -10,6 +10,9 @@ import {prepareSourceRead, queryPaperCatalog} from "./discovery-material-operati
 import {PaperCatalogError,type PaperCatalogAccess} from "./paper-catalog-access";
 import type {hainaService} from "./haina-search";
 import {parseSceneCatalogQuery,querySceneCatalog} from "./earth-search-source";
+import {paperId} from "../src/domain/paper-record";
+import {paperProjectionPageLimit,paperProjectionQueryKind,paperProjectionResultKind} from "./paper-projection-contract";
+import {PaperCatalogBaseUnavailable,PaperCatalogGenerationChanged,PaperCatalogUninitialized,type PostgresPaperCatalog} from "./postgres-paper-catalog";
 
 const media = "application/a2a+json";
 const protocol = "1.0";
@@ -71,8 +74,8 @@ function operationId(req: Request) {
 type Prepare = (input: Record<string,unknown>, continuation?: DiscoveryContinuation) => Promise<{body: DiscoveryInput} | {issue: string; unavailable?: boolean}>;
 export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prepare,
   materials?: {catalog?:PaperCatalogAccess;fetchAllowed?:()=>boolean;haina?:Pick<ReturnType<typeof hainaService>,"page">;
-    sceneFetcher?:typeof fetch}) {
-  const {catalog,haina} = materials ?? {};
+    sceneFetcher?:typeof fetch;paperProjection?:Pick<PostgresPaperCatalog,"projectionHead"|"projectionPage">}) {
+  const {catalog,haina,paperProjection} = materials ?? {};
   const router = express.Router();
   const parse = express.json({type:media,limit:"384kb"});
   router.get("/.well-known/agent-card.json", (req,res) => res.set("Cache-Control","no-store").json({
@@ -93,6 +96,9 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
       ] : []), ...(haina ? [
         {id:"oneearth.haina.catalog",name:"Haina catalog",description:"Return a page from the published Haina catalog as a synchronous Message.",
           tags:["data","catalog"]},
+      ] : []), ...(paperProjection ? [
+        {id:"oneearth.paper.projection",name:"Paper map projection",description:"Read the published head and generation-pinned paper map projection.",
+          tags:["paper","map","catalog"]},
       ] : [])],
   }));
 
@@ -126,7 +132,8 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
     only(data, ["kind","input"]);
     const available = data.kind === "oneearth.discovery.request.v1" ||
       (catalog && (data.kind === paperQueryKind || data.kind === sourceReadKind)) ||
-      (haina && data.kind === hainaCatalogQueryKind) || data.kind === sceneCatalogQueryKind;
+      (haina && data.kind === hainaCatalogQueryKind) || data.kind === sceneCatalogQueryKind ||
+      (paperProjection && data.kind === paperProjectionQueryKind);
     if (!available)
       throw invalid("不支持此发现委托类型。","CONTENT_TYPE_NOT_SUPPORTED");
     const input = record(data.input);
@@ -201,10 +208,26 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
     if (!query) throw invalid("逐景查询须指定允许的影像集合、有效坐标和一致的时段。");
     return {kind:sceneCatalogResultKind,value:await querySceneCatalog(query,signal,materials?.sceneFetcher)};
   }
+  async function queryProjection(input:Record<string,unknown>,signal:AbortSignal) {
+    signal.throwIfAborted();
+    if (input.operation === "head") {
+      only(input,["operation"]);
+      return {kind:paperProjectionResultKind,value:await paperProjection!.projectionHead()};
+    }
+    only(input,["operation","generation","cursor","limit","baseGeneration"]);
+    const {generation,cursor,limit,baseGeneration}=input;
+    if (input.operation!=="page" || typeof generation!=="string" || !generation || generation.length>200 ||
+      typeof cursor!=="string" || (cursor!=="" && !paperId(cursor)) ||
+      typeof limit!=="number" || !Number.isSafeInteger(limit) || limit<1 || limit>paperProjectionPageLimit ||
+      (baseGeneration!==undefined && (typeof baseGeneration!=="string" || !baseGeneration || baseGeneration.length>200)))
+      throw invalid("论文投影分页参数无效。");
+    return {kind:paperProjectionResultKind,value:await paperProjection!.projectionPage(generation,cursor,limit,baseGeneration)};
+  }
   function directQuery(kind: unknown) {
     if (kind === paperQueryKind && catalog) return (input:Record<string,unknown>,signal:AbortSignal) => queryPaperCatalog(catalog,input,signal);
     if (kind === hainaCatalogQueryKind && haina) return queryHaina;
     if (kind === sceneCatalogQueryKind) return queryScenes;
+    if (kind === paperProjectionQueryKind && paperProjection) return queryProjection;
   }
   router.post(/^\/message:send$/, async (req,res) => {
     const request = decode(req);
@@ -314,6 +337,9 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
   const handleError: express.ErrorRequestHandler = (error, _req, res, _next) => {
     if (res.headersSent || res.destroyed) { if (!res.destroyed) res.destroy(); return; }
     const failure = error instanceof A2aError ? error
+      : error instanceof PaperCatalogGenerationChanged ? precondition("CATALOG_GENERATION_CHANGED",error.message)
+      : error instanceof PaperCatalogBaseUnavailable ? precondition("CATALOG_BASE_UNAVAILABLE",error.message)
+      : error instanceof PaperCatalogUninitialized ? unavailable(error.message)
       : error instanceof PaperCatalogError ? new A2aError(error.status,
         error.status === 503 ? "UNAVAILABLE" : error.status === 404 ? "NOT_FOUND" : "INVALID_ARGUMENT",
         error.message || (error.status === 404 ? "指定文献资料不存在。" : "论文目录操作或参数无效。"))

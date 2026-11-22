@@ -12,7 +12,7 @@ import { cellAt, cellShape, getModel } from "./spatial";
 import { withinWindow } from "./time-window";
 import type { CandidateSet, Filters, GridSpec } from "./types";
 import { windManifest } from "./wind";
-import { paperRecords } from "./paper-record";
+import { paperId, paperRecords } from "./paper-record";
 import { rectangleContainsVertex } from "./geo-rectangle";
 
 export type Area = Polygon | MultiPolygon;
@@ -111,6 +111,7 @@ function displayArea(g:Area){
 export function regionRecords(
   f: Filters,
   batch?: CandidateSet | null,
+  paperCandidates?: ReadonlySet<string>,
 ): RegionRecord[] {
   if (f.depth || f.maxDem !== null || (batch && batch.layer !== "all"))
     return [];
@@ -118,6 +119,7 @@ export function regionRecords(
   const allowed=batch?new Set(batch.ids):null;
   const include = (a: Asset) =>
     acceptsAsset(a, f) &&
+    (!paperCandidates || !paperId(a.id) || paperCandidates.has(a.id)) &&
     (!allowed || allowed.has(a.id)) &&
     (!batch?.caseId || batch.caseId === a.caseId);
   const inventory = assetById.get(inventoryId)!;

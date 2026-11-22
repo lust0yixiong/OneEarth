@@ -6,9 +6,10 @@ import { emptyFilters, gridSpec } from "../src/domain/spatial";
 import { regionRecords } from "../src/domain/product-distribution";
 import { addCoverage, coverageSignature } from "../src/globe/coverage-grid";
 import { coverageIndex, coverageScope } from "../server/coverage-index";
-import { paperCache } from "../server/earthnano";
+import { coveragePublication } from "../server/coverage-publication";
+import { readLocalPaperProjection } from "../server/spatial-paper-store";
 import { constellationService, parseSources } from "../server/constellations";
-import { registerPapers, registerObservations } from "../src/domain/datasets";
+import { registerObservations } from "../src/domain/datasets";
 
 // Only static catalogue footprints are loaded in this build process. Live feeds
 // change the scope fingerprint and are calculated independently at runtime.
@@ -22,14 +23,13 @@ for (const system of ["h3", "s2"] as const) {
 }
 writeFileSync(new URL("../src/data/evidence/catalog-coverage.json", import.meta.url), JSON.stringify({signature: coverageSignature(regions), grids}) + "\n");
 
-// Materialize the installed catalogue too, including cached assertion-library records.
-// Geometry keys are independent of filters and products, so an unchanged rebuild is a disk lookup.
+// Warm the derived geometry cache using the last complete local spatial projection when available.
+// This command does not publish a catalogue or synchronize a remote service.
 const root=fileURLToPath(new URL("..",import.meta.url));
 if(existsSync(path.join(root,".env")))process.loadEnvFile(path.join(root,".env"));
-const papers=path.join(root,".local","paper-evidence.sqlite");
-if(existsSync(papers)) {
-  const cache=paperCache(papers);
-  try{registerPapers(cache.list());}finally{cache.close();}
+if(process.env.ONEEARTH_SPATIAL_DATABASE_URL) {
+  const local=await readLocalPaperProjection();
+  if(local)coveragePublication().activate(local);
 }
 const observations=process.env.ONEEARTH_OBSERVATION_DB || path.join(root,".local","observations.sqlite");
 if(existsSync(observations)) {

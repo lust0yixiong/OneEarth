@@ -69,6 +69,7 @@ const services = {
   baseline:[".local/baseline/server/index.ts"],
   haina:["scripts/probe-haina.py"],
 };
+const serviceDatabase = {discovery:"DISCOVERY",worker:"RUNTIME",runtime:"RUNTIME",spatial:"SPATIAL",seed:"SPATIAL",web:null};
 const roles = process.argv.slice(2);
 if (!roles.length) roles.push("discovery","spatial","worker","runtime","web");
 if (!roles.every(role => Object.hasOwn(services,role))) throw Error("未知 OneEarth 服务。");
@@ -84,6 +85,11 @@ for (const role of roles) {
   const args=role==="haina" ? services[role] : ["--import","tsx",...services[role]];
   const childEnv={...env,ONEEARTH_ROLE:role};
   if (role!=="discovery") delete childEnv.ONEEARTH_DISCOVERY_CHAT_MODEL;
+  if (Object.hasOwn(serviceDatabase,role)){
+    for(const database of ["RUNTIME","DISCOVERY","SPATIAL"]){
+      if(database!==serviceDatabase[role]) delete childEnv["ONEEARTH_"+database+"_DATABASE_URL"];
+    }
+  }
   const child = spawn(executable,args,{
     stdio:"inherit",cwd:root,env:childEnv,
   });

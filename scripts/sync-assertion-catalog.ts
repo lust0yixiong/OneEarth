@@ -3,18 +3,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { paperCache } from "../server/earthnano";
+import {postgresPaperCatalog} from "../server/postgres-paper-catalog";
+import {productDatabase} from "../server/product-database";
 import { validPaperRecord, type PaperRecord } from "../src/domain/paper-record";
-import { productPath } from "./product-path.mjs";
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..");
 const local=path.join(root,".local");mkdirSync(local,{recursive:true});
 try {process.loadEnvFile(path.join(root,".env"));}catch { /* Environment variables may supply the endpoint. */ }
-const file=productPath(root,path.join(process.env.ONEEARTH_STATE_DIR || ".local","paper-evidence.sqlite"));
 const args=process.argv.slice(2),value=(flag:string)=>{const i=args.indexOf(flag);return i>=0?args[i+1]:undefined;};
 const schema="oneearth-assertion-dataset-catalog-v1";
 
-function ingest(raw:unknown) {
+async function ingest(raw:unknown) {
   const source=raw as {schema?:string;complete?:boolean;source?:string;exportedAt?:string;totalDatasets?:number;records?:unknown[]};
   if(source?.schema!==schema || source.complete!==true || !Array.isArray(source.records) ||
     !Number.isSafeInteger(source.totalDatasets) || source.records.length!==source.totalDatasets ||
@@ -27,23 +26,24 @@ function ingest(raw:unknown) {
     if(accepted.has(item.dsKey))duplicates++;
     accepted.set(item.dsKey,item);
   }
-  mkdirSync(path.dirname(file),{recursive:true,mode:0o700});
-  const cache=paperCache(file);
+  const pool=productDatabase("DISCOVERY");
   try {
-    cache.replaceCatalog([...accepted.values()],{source:source.source,sourceTotal:source.totalDatasets!,filteredOut:invalid+duplicates,updatedAt:source.exportedAt});
-    const report={...cache.status(),invalid,duplicates};
+    const store=await postgresPaperCatalog(pool);
+    await store.replaceCatalog([...accepted.values()],{source:source.source,sourceTotal:source.totalDatasets!,
+      filteredOut:invalid+duplicates,updatedAt:source.exportedAt});
+    const report={...await store.status(),invalid,duplicates};
     writeFileSync(path.join(local,"assertion-catalog-sync-report.json"),JSON.stringify(report,null,2)+"\n");
     console.log(JSON.stringify(report,null,2));
-  } finally {cache.close();}
+  } finally {await pool.end();}
 }
 
 async function main(){
   const input=value("--import");
-  if(input){ingest(JSON.parse(readFileSync(path.resolve(input),"utf8")));return;}
+  if(input){await ingest(JSON.parse(readFileSync(path.resolve(input),"utf8")));return;}
   if(args.includes("--audit")){
-    mkdirSync(path.dirname(file),{recursive:true,mode:0o700});
-    const cache=paperCache(file);
-    try {console.log(JSON.stringify(cache.status(),null,2));}finally{cache.close();}
+    const pool=productDatabase("DISCOVERY");
+    try {console.log(JSON.stringify(await (await postgresPaperCatalog(pool,{initializeSchema:false})).status(),null,2));}
+    finally {await pool.end();}
     return;
   }
   if(!args.includes("--inspect")&&!args.includes("--sync")){
@@ -71,7 +71,7 @@ async function main(){
     const text=reply.content?.find(item=>item.type==="text");
     const payload=reply.structuredContent|| (text?.type==="text"?JSON.parse(text.text):null);
     writeFileSync(path.join(local,"assertion-source-export.json"),JSON.stringify(payload)+"\n");
-    ingest(payload);
+    await ingest(payload);
   } finally {await client.close();}
 }
 main().catch(error=>{console.error("断言库目录同步未完成："+(error instanceof Error?error.message:String(error)));process.exitCode=1;});

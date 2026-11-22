@@ -1,7 +1,7 @@
 import {literatureDisplay} from "./literature-label";
 import { pushId, pushPrefix, observationNeed, rememberObservation, observationURL, type Observation } from "./push-observations";
 import { inventoryId, sample } from "./earth-search";
-import { paperGroup, paperId, paperRecords, validPaperRecord, type PaperRecord } from "./paper-record";
+import { paperGroup, paperId, paperRecords, validPaperRecord, type CoverageOnlyPaperRecord, type PaperRecord } from "./paper-record";
 import { observationById } from "./push-observations";
 import { caseById, catalogGroups, catalogGroupById, resources } from "./catalog";
 import type { EvidenceTab, Need, Resource, SpatialEntry } from "./types";
@@ -306,10 +306,14 @@ export function observationAssets(ids?:string[]) {
     assets.filter(a=>a.origins.includes("constellation"));
 }
 export function registerPapers(records: PaperRecord[], includeInCatalog = true) {
+  registerPaperRecords(records.filter(validPaperRecord), includeInCatalog);
+}
+
+function registerPaperRecords(records: PaperRecord[], includeInCatalog: boolean) {
   let changed = false;
   // The catalogue publishes one current record per dataset. A restored answer
   // instead needs every exact cited record, including different historical hashes.
-  const selected=new Map(records.filter(validPaperRecord).map(record=>[includeInCatalog?record.dsKey:record.id,record]));
+  const selected=new Map(records.map(record=>[includeInCatalog?record.dsKey:record.id,record]));
   if(includeInCatalog) for(let i=assets.length-1;i>=0;i--) {
     if(paperId(assets[i].id) && selected.has(assets[i].datasetId)) {assets.splice(i,1);changed=true;}
   }
@@ -346,8 +350,17 @@ export function registerPapers(records: PaperRecord[], includeInCatalog = true) 
 
 /** Replace the published view while keeping historical citation IDs addressable. */
 export function replacePublishedPapers(records: PaperRecord[]) {
+  replacePublishedPaperRecords(records.filter(validPaperRecord));
+}
+
+export function registerCoverageOnlyPapers(records: CoverageOnlyPaperRecord[], replaceCurrent = false) {
+  if (replaceCurrent) replacePublishedPaperRecords(records);
+  else registerPaperRecords(records, false);
+}
+
+function replacePublishedPaperRecords(records: PaperRecord[]) {
   const current = new Map(assets.filter(asset => paperId(asset.id)).map(asset => [asset.datasetId, asset.id]));
-  const next = new Map(records.filter(validPaperRecord).map(record => [record.dsKey, record]));
+  const next = new Map(records.map(record => [record.dsKey, record]));
   const updated = [...next.values()].filter(record => current.get(record.dsKey) !== record.id);
   let removed = false;
   for (let i = assets.length - 1; i >= 0; i--) {
@@ -357,7 +370,7 @@ export function replacePublishedPapers(records: PaperRecord[]) {
       removed = true;
     }
   }
-  if (updated.length) registerPapers(updated);
+  if (updated.length) registerPaperRecords(updated, true);
   else if (removed) catalogChanged();
 }
 
