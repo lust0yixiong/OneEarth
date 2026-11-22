@@ -84,7 +84,8 @@ try{
       action:output?.action,reason:output?.reason,gap:output?.gap,targets:output?.targets?.map(publicAddress),fallback:output?.fallback,
       visibleMaterials:{papers:input?.papers,haina:input?.haina,web:input?.web?.map(item=>({...item,url:publicAddress(item.url)})),
         channels:input?.channels,reads:input?.exactReads?.map(r=>({...r,query:publicAddress(r.query)}))}});
-    if(c.name==="独立数据发现服务")entries.push({...common,type:"discovery",childId:output?.discoveryId||input?.discoveryId||record.taskId,
+    if(c.name==="独立数据发现服务")entries.push({...common,type:"discovery",
+      childId:output?.discoveryId||input?.discoveryId||(input?.messageId?null:record.taskId),
       previousId:input?.previousId,channels:output?.channels,materials:materials(output?.materials)});
     if(c.id.startsWith("research-read-"))entries.push({...common,type:"exact-read",source:publicAddress(c.input),returnedHits:output?.hits||0});
     if(c.id==="answer-generation")entries.push({...common,type:"retained-sources-fallback"});

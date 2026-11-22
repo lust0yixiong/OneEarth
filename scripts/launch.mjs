@@ -82,8 +82,10 @@ function stop(signal = "SIGTERM") {
 for (const role of roles) {
   const executable=role==="haina" ? path.join(root,".local/haina-venv/bin/python") : process.execPath;
   const args=role==="haina" ? services[role] : ["--import","tsx",...services[role]];
+  const childEnv={...env,ONEEARTH_ROLE:role};
+  if (role!=="discovery") delete childEnv.ONEEARTH_DISCOVERY_CHAT_MODEL;
   const child = spawn(executable,args,{
-    stdio:"inherit",cwd:root,env:{...env,ONEEARTH_ROLE:role},
+    stdio:"inherit",cwd:root,env:childEnv,
   });
   children.push(child);
   child.once("exit",(code,signal)=>{

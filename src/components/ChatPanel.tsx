@@ -35,6 +35,7 @@ import { useWorkspace } from "../domain/store";
 import { caseById } from "../domain/catalog";
 import { emptyFilters } from "../domain/spatial";
 import type { SessionSummary } from "../domain/session-storage";
+import {canReplyToDiscoveryClarification} from "../domain/runtime-client";
 import type { Message } from "../domain/types";
 import "../styles/research-chat.css";
 import { assetById } from "../domain/datasets";
@@ -205,6 +206,16 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     question.focus({preventScroll:true});
   },[]);
   const input = useRef<HTMLTextAreaElement>(null);
+  const replyTargets=useMemo(()=>{
+    const answered=new Set(s.messages.flatMap(m=>m.role==="user" && m.id!==s.unansweredQuestionId && m.clarificationReply
+      ? [m.clarificationReply.parentTaskId] : []));
+    return new Map(s.messages.filter(m=>canReplyToDiscoveryClarification(m) && !answered.has(m.id)).map(m=>[m.id,m]));
+  },[s.messages,s.unansweredQuestionId]);
+  const clarificationTarget=s.clarificationReply && replyTargets.get(s.clarificationReply.parentTaskId);
+  const selectClarification=useCallback((parentTaskId:string)=>{
+    patch({clarificationReply:{parentTaskId}});
+    input.current?.focus({preventScroll:true});
+  },[patch]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyRows, setHistoryRows] = useState<SessionSummary[]>([]);
   const [historyStatus, setHistoryStatus] = useState("");
@@ -288,7 +299,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                 </footer>
               </>}
               {m.id === s.unansweredQuestionId && m === s.messages.at(-1) && !s.pending && (
-                <button className="activity-link" onClick={() => { setText(m.text); patch({draftScope:m.attachedScope || null,citation:m.citation || null}); input.current?.focus(); }}>
+                <button className="activity-link" onClick={() => { setText(m.text); patch({draftScope:m.attachedScope || null,citation:m.citation || null,clarificationReply:m.clarificationReply ?? null}); input.current?.focus(); }}>
                   这条问题未收到回答，重新提问
                 </button>
               )}
@@ -297,6 +308,9 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   (s.messages.some(next=>next.role==="user" && next.time>m.time)?"superseded":undefined)}
                 onChoose={(choice,edited)=>void confirmQuestion(m.id,choice,edited)}/>}
               {m.role==="assistant" && !m.questionCheck && <AnswerBody message={m} animate={!historyIds.has(m.id) && Date.now()-m.time<3000} onReady={answerReady}
+                clarificationAction={replyTargets.has(m.id) && <button type="button" className="activity-link"
+                  aria-controls="chat-question-input" aria-pressed={clarificationTarget?.id===m.id}
+                  disabled={s.pending} onClick={()=>selectClarification(m.id)}>回复此问题</button>}
                 showLiveMembership={!hasCoverageRecord(m,questions.get(m.id))}
                 question={questions.get(m.id)?.text || "OneEarth 研究记录"} onQuote={(reference,number)=>{
                   const item={kind:"reference" as const,reference,number,messageId:m.id};
@@ -349,7 +363,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                 <button disabled={s.pending} onClick={() => retry(m.retry!)}>重试</button>
               ) : <small>旧记录没有保存完整请求，可重新提问。</small>)}
             </article>
-          )),[s.messages,s.unansweredQuestionId,s.pending,s.camera,s.gridSystem,historyIds,questions,patch,confirmQuestion,attachScope,retry,inspectAsset,answerReady,regionsByQuestion,flyToResearchRegion,locateQuestion]);
+          )),[s.messages,s.unansweredQuestionId,s.pending,s.camera,s.gridSystem,historyIds,questions,patch,confirmQuestion,attachScope,retry,inspectAsset,answerReady,regionsByQuestion,flyToResearchRegion,locateQuestion,replyTargets,clarificationTarget,selectClarification]);
   if (!s.chatOpen) return null;
   const examples =
     c?.id === "wind"
@@ -466,8 +480,17 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
             <span className="composer-sources-icon" aria-hidden="true"><ListChecks size={14}/><Clock3 className="composer-sources-recent" size={8}/></span>本轮来源与依据 · <span>{latestSources.length}</span><ChevronRight size={13} aria-hidden="true"/>
           </button>
         </div>}
-        <div className={"chat-composer-input"+(s.citation || s.draftScope?.length ? " composer-with-reference" : "")}>
-        {(s.citation || !!s.draftScope?.length) && <div className="composer-references">
+        <div className={"chat-composer-input"+(clarificationTarget || s.citation || s.draftScope?.length ? " composer-with-reference" : "")}>
+        {clarificationTarget ? <div className="composer-references">
+          <div className="citation-attachment" role="group" aria-label="正在回复的澄清">
+            <Quote size={13} aria-hidden="true"/>
+            <span title={clarificationTarget.text}>回复澄清：{clarificationTarget.text.trim().replace(/\s+/g," ")}</span>
+            <button type="button" aria-label="取消回复此问题"
+              onClick={()=>{patch({clarificationReply:null});input.current?.focus();}}>
+              <X size={13}/>
+            </button>
+          </div>
+        </div> : (s.citation || !!s.draftScope?.length) && <div className="composer-references">
         <QuestionScope items={s.draftScope || []} remove={key=>patch({draftScope:(s.draftScope || []).filter(i=>scopeKey(i)!==key)})}/>
         {s.citation && (
           <div className="citation-attachment" role="group" aria-label="本次提问引用的材料">
@@ -486,11 +509,12 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
           onSubmit={(e) => {
             e.preventDefault();
             if (!text.trim() || s.pending || s.attachingMapScope) return;
-            void send(text);
+            void send(text,clarificationTarget ? {parentTaskId:clarificationTarget.id} : undefined);
             setText("");
           }}
         >
           <textarea
+            id="chat-question-input"
             ref={input}
             aria-label="向 OneEarth 提问"
             rows={2}

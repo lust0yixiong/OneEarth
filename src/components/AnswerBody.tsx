@@ -24,7 +24,7 @@ import { emptyFilters } from "../domain/spatial";
 import { useWorkspace } from "../domain/store";
 import type { AnswerReference, Message } from "../domain/types";
 
-export function AnswerBody({message,question,animate,children,onQuote,onReady,showLiveMembership=true}:{message:Message;question:string;animate:boolean;children?:ReactNode;onQuote?:(reference:AnswerReference,number:number)=>void;onReady?:(id:string)=>void;showLiveMembership?:boolean}){
+export function AnswerBody({message,question,animate,children,clarificationAction,onQuote,onReady,showLiveMembership=true}:{message:Message;question:string;animate:boolean;children?:ReactNode;clarificationAction?:ReactNode;onQuote?:(reference:AnswerReference,number:number)=>void;onReady?:(id:string)=>void;showLiveMembership?:boolean}){
   const m=useMemo(()=>literatureDisplay(message),[message]);
   const {state:s,inspectAsset,openVisualization,patch,focusAnswerEvidence}=useWorkspace();
   const revision=useCatalogRevision();
@@ -72,6 +72,7 @@ export function AnswerBody({message,question,animate,children,onQuote,onReady,sh
   if(m.clarification)return <div role="region" aria-label="补充关键信息">
     <RunDetails trace={m.runTrace}/>
     <AnswerContent text={m.text} references={[]} inspect={inspect} animate={animate} onComplete={finish}/>
+    {clarificationAction}
   </div>;
   return <>
     <RunDetails trace={m.runTrace} runs={notes?.searches} stage={notes?.paperTrace || notes?.basis} failed={m.failed}/>

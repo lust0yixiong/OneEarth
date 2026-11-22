@@ -1,3 +1,5 @@
+import type {DiscoveryResponse,Message} from "./types";
+
 export async function openTaskEvents(id: string, body: string, signal: AbortSignal) {
   const input: unknown = JSON.parse(body);
   const created = await fetch("/api/tasks", {
@@ -9,6 +11,15 @@ export async function openTaskEvents(id: string, body: string, signal: AbortSign
 
 export const researchRecordId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 
+export function discoveryClarificationResult(result:Pick<DiscoveryResponse,"clarification"|"discoveryClarification"|"questionCheck">):boolean {
+  return result.clarification===true && result.discoveryClarification===true && !result.questionCheck;
+}
+
+export function canReplyToDiscoveryClarification(message?:Message):boolean {
+  return !!message && message.role==="assistant" && !message.failed &&
+    discoveryClarificationResult(message) && researchRecordId.test(message.id);
+}
+
 interface ResearchRecord {
   id:string;
   question:string;
@@ -16,7 +27,7 @@ interface ResearchRecord {
   turnId:string;
   created:number;
   updated:number;
-  result:import("./types").DiscoveryResponse;
+  result:DiscoveryResponse;
 }
 
 export async function loadResearchRecord(id:string):Promise<ResearchRecord>{

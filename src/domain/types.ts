@@ -285,7 +285,10 @@ export interface AnswerNotes {
   elapsedMs: number;
   executor: string;
 }
+export type ClarificationReply = {parentTaskId:string};
 export interface Message {
+  clarificationReply?: ClarificationReply;
+  discoveryClarification?: boolean;
   gridCoverage?: import("./grid-coverage").GridCoverageEvidence;
   researchRegion?:import("./research-region").ResearchRegion|null;
   conversationAssertionEvidence?:import("./assertion-evidence-memory").AssertionEvidenceMemory[];
@@ -322,6 +325,7 @@ export interface VisualizationState {
   color: boolean;
 }
 export interface DiscoveryAttempt {
+  clarificationReply?: ClarificationReply;
   questionDecision?:QuestionDecision;
   localOnly?:boolean;
   webSearch?:boolean;
@@ -362,6 +366,7 @@ export interface CapabilityGap {
   verification: string;
 }
 export interface DiscoveryResponse {
+  discoveryClarification?: boolean;
   gridCoverage?: import("./grid-coverage").GridCoverageEvidence;
   researchRegion?:import("./research-region").ResearchRegion|null;
   conversationAssertionEvidence?:import("./assertion-evidence-memory").AssertionEvidenceMemory[];
