@@ -1,0 +1,13 @@
+{
+  "live": "da0687a48fe2644c4455f36d9c127ec3883d07d12324d6c5767b89cb460eedcf",
+  "release": "da0687a48fe2644c4455f36d9c127ec3883d07d12324d6c5767b89cb460eedcf",
+  "source": "2603062b8ac632c7e1b9464a26604d51e5fd48eb",
+  "runtimeFiles": {
+    "server/turn-planning.ts": "5bf708b79b10b11afdcc77f5c2ac86d218658672bc847d6ac0d02d576414e093",
+    "server/runtime-turn.ts": "3897897512638be2607221c94b723f37cf8467496e7b930feac4063b6f0905a9",
+    "server/follow-up-reference.ts": "d93ea54a109e74513cc450ade93ed5ff3f0e6403a8cde929448568692ac766e7",
+    "server/research-executor.ts": "b757c134a8ee112ec4dae9acdc839b2ffd975e26d420ebbfa99784e4d09dee76",
+    "server/research-answer.ts": "2ca24151ac2aa7117f3d02d41765b41eeef59a5b399c7924cf69ca7be87a4fe7",
+    "server/turn-reading.ts": "48eebb2d5bb3505e24dc3c655cf8f84c04598474ab1400118ea18076950a7e8d"
+  }
+}

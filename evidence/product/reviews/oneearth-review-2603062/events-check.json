@@ -1,0 +1,157 @@
+{
+  "parent": "c4036a5b-0444-4279-b9b0-d6283c9dd4f0",
+  "source": "https://www.psl.noaa.gov/data/gridded/data.chirps.html",
+  "cases": [
+    {
+      "id": "9259ade2-d9c8-481a-ac55-640d4a94b466",
+      "events": [
+        {
+          "seq": 5369,
+          "id": "citation-ordinal",
+          "name": "定位上一回答的来源",
+          "status": "done",
+          "action": null,
+          "restored": false,
+          "bound": "https://www.psl.noaa.gov/data/gridded/data.chirps.html",
+          "hits": null,
+          "child": null
+        },
+        {
+          "seq": 5372,
+          "id": "turn-action",
+          "name": "本轮目标与动作规划",
+          "status": "done",
+          "action": "search",
+          "restored": true,
+          "bound": "https://www.psl.noaa.gov/data/gridded/data.chirps.html",
+          "hits": null,
+          "child": null
+        },
+        {
+          "seq": 5438,
+          "id": "9259ade2-d9c8-481a-ac55-640d4a94b466:discovery",
+          "name": "独立数据发现服务",
+          "status": "done",
+          "action": null,
+          "restored": false,
+          "bound": null,
+          "hits": null,
+          "child": "9259ade2-d9c8-481a-ac55-640d4a94b466"
+        },
+        {
+          "seq": 5441,
+          "id": "research-decision-1",
+          "name": "根据真实材料决定下一步",
+          "status": "done",
+          "action": "read",
+          "restored": false,
+          "bound": null,
+          "hits": null,
+          "child": null
+        },
+        {
+          "seq": 5445,
+          "id": "research-read-1-0",
+          "name": "读取指定来源",
+          "status": "done",
+          "action": null,
+          "restored": false,
+          "bound": null,
+          "hits": 1,
+          "child": null
+        },
+        {
+          "seq": 5449,
+          "id": "research-decision-2",
+          "name": "根据真实材料决定下一步",
+          "status": "done",
+          "action": "answer",
+          "restored": false,
+          "bound": null,
+          "hits": null,
+          "child": null
+        }
+      ],
+      "answer": "有一篇直接符合条件的论文：**《ANALYSIS OF FLOOD CHARACTERISTICS OF YANGTZE RIVER BASIN IN 2020 USING SATELLITE OBSERVATIONS》**。研究对象是**2020年长江流域洪水**；摘要称作者分析了 CHIRPS 降水的空间分布、强度和总量。论文发表于 *Annual Journal of Hydraulic Engineering*，2021 年，77 卷 2 期，I_1465–I_1470；[J-STAGE 论文页面](https://www.jstage.jst.go.jp/article/jscejhe/77/2/77_I_1465/_article/-char/en)。〔1〕\n\n另有一篇独立的流域产品评估论文也纳入 CHIRPS：Xiao、Xia、Zou（2020），研究期为 **2003–2017 年**，比较长江流域七种卫星降水产品。〔2〕〔3〕",
+      "references": [
+        {
+          "title": "ANALYSIS OF FLOOD CHARACTERISTICS OF YANGTZE RIVER BASIN IN 2020 USING SATELLITE OBSERVATIONS - Annual Journal of Hydraulic Engineering, JSCE, Vol.66",
+          "url": "https://www.jstage.jst.go.jp/article/jscejhe/77/2/77_I_1465/_article/-char/en",
+          "id": null
+        },
+        {
+          "title": "成果检索-武汉大学|机构知识库 - Evaluation of Multi-Satellite Precipitation Products and Their Ability in Capturing the Characteristics of Extreme Climate Event...",
+          "url": "https://openir.whu.edu.cn/AchievementDetail/WOS_c1948598-493b-4775-9b58-6b22c3257195",
+          "id": null
+        },
+        {
+          "title": "Details: Evaluation of Multi-Satellite Precipitation Products and Their Ability in Capturing the Characteristics of Extreme Climate Events over the Yangtze River Basin, China Fachinformationsdienst Geschichtswissenschaft",
+          "url": "https://www.historicum.net/historicumsearch/Record/baseftmdpioaimdpicom_2073-4441_12_4_1179_?sid=14300936&lng=en",
+          "id": null
+        }
+      ]
+    },
+    {
+      "id": "4825f3c3-153a-475c-a97b-70bff19581aa",
+      "events": [
+        {
+          "seq": 5458,
+          "id": "citation-ordinal",
+          "name": "定位上一回答的来源",
+          "status": "done",
+          "action": null,
+          "restored": false,
+          "bound": "https://www.psl.noaa.gov/data/gridded/data.chirps.html",
+          "hits": null,
+          "child": null
+        },
+        {
+          "seq": 5461,
+          "id": "turn-action",
+          "name": "本轮目标与动作规划",
+          "status": "done",
+          "action": "search",
+          "restored": false,
+          "bound": "https://www.psl.noaa.gov/data/gridded/data.chirps.html",
+          "hits": null,
+          "child": null
+        },
+        {
+          "seq": 5537,
+          "id": "4825f3c3-153a-475c-a97b-70bff19581aa:discovery",
+          "name": "独立数据发现服务",
+          "status": "done",
+          "action": null,
+          "restored": false,
+          "bound": null,
+          "hits": null,
+          "child": "4825f3c3-153a-475c-a97b-70bff19581aa"
+        },
+        {
+          "seq": 5540,
+          "id": "research-decision-1",
+          "name": "根据真实材料决定下一步",
+          "status": "done",
+          "action": "answer",
+          "restored": false,
+          "bound": null,
+          "hits": null,
+          "child": null
+        }
+      ],
+      "answer": "可以。较合适的一篇是 Wang 等发表于 *Atmospheric Research* 的《Evaluation of multi-source precipitation products over the Yangtze River Basin》。论文比较了长江流域的多种降水产品，明确包括 CHIRPS；研究区为长江流域，评估时段为 **1998 年 1 月至 2014 年 12 月**。DOI：[10.1016/j.atmosres.2020.105287](https://doi.org/10.1016/j.atmosres.2020.105287)。〔1〕〔2〕\n\n武汉大学机构知识库的发表记录也列出该题名、期刊、2021 年 2 月正式发表日期和同一 DOI；ScienceDirect 摘录的摘要及 highlights 则给出评估时段和研究内容。〔2〕〔1〕",
+      "references": [
+        {
+          "title": "Evaluation of multi-source precipitation products over the Yangtze River Basin - Skip to main contentSkip to article",
+          "url": "https://www.sciencedirect.com/science/article/abs/pii/S0169809520312242?via%3Dihub",
+          "id": null
+        },
+        {
+          "title": "成果检索-武汉大学|机构知识库 - Evaluation of multi-source precipitation products over the Yangtze River Basin",
+          "url": "https://openir.whu.edu.cn/AchievementDetail/WOS_4cd784bc-745e-4839-aab1-f7be0a59a1b1",
+          "id": null
+        }
+      ]
+    }
+  ]
+}

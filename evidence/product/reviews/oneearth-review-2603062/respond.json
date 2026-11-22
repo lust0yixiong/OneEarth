@@ -1,0 +1,63 @@
+{
+  "kind": "respond",
+  "question": "第二个来源里写的长期平均，是用哪几年作基准？只按前面已经取得的摘录答，给起止年。",
+  "parent": "c4036a5b-0444-4279-b9b0-d6283c9dd4f0",
+  "wrongPort": 0,
+  "browser": "157.0.8103.79",
+  "health": {
+    "status": "ok",
+    "mode": "oneearth-next",
+    "version": "0.2.0-rc.3",
+    "sources": {
+      "constellationPush": 0,
+      "earthSearch": "collection-snapshot-and-live-item-search"
+    },
+    "cases": 24,
+    "verifiedCases": 9,
+    "spatialDataReady": true
+  },
+  "taskId": "00a3ffba-86fd-4772-a2be-7bde1cb3a84e",
+  "linkedParent": "c4036a5b-0444-4279-b9b0-d6283c9dd4f0",
+  "status": "complete",
+  "elapsedMs": 99958,
+  "answer": "摘录中 CHIRPS 的长期平均基准期为 **1991–2020 年**，起止年是 **1991 年至 2020 年**。〔1〕",
+  "references": [
+    {
+      "kind": "web",
+      "url": "https://www.psl.noaa.gov/data/gridded/data.chirps.html",
+      "title": "CHIRPS Monthly Mean : NOAA Physical Sciences Laboratory CHIRPS Monthly Mean"
+    }
+  ],
+  "calls": [
+    {
+      "id": "citation-ordinal",
+      "name": "定位上一回答的来源",
+      "status": "done",
+      "restored": false,
+      "source": "https://www.psl.noaa.gov/data/gridded/data.chirps.html"
+    },
+    {
+      "id": "turn-action",
+      "name": "本轮目标与动作规划",
+      "status": "done",
+      "action": "respond",
+      "restored": false,
+      "numbered": [
+        "https://www.psl.noaa.gov/data/gridded/data.chirps.html"
+      ],
+      "reason": "指定来源的摘录已明确写出“Long Term Mean: 1991-2020”，足以按要求给出起止年，无需重新读取或检索。"
+    }
+  ],
+  "timings": [
+    {
+      "executor": "codex",
+      "model": "gpt-6-luna",
+      "elapsedMs": 12557
+    },
+    {
+      "executor": "codex",
+      "model": "gpt-6-luna",
+      "elapsedMs": 8110
+    }
+  ]
+}
