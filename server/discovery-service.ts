@@ -8,7 +8,8 @@ import { runExecutor } from "./executor";
 import { rememberConversationReferences } from "../src/domain/reference-memory";
 import { dataSearchInstructions, dataSearchSchema, requiredDataSearch } from "./data-search";
 import { paperCache, searchPapers } from "./earthnano";
-import { paperCatalog } from "./paper-catalog";
+import { paperCatalogRoutes } from "./paper-catalog";
+import { paperCatalogAccess } from "./paper-catalog-access";
 import { productDatabase } from "./product-database";
 import { restoreDiscoveryPaperCache } from "./paper-cache-restore";
 import { registerPapers } from "../src/domain/datasets";
@@ -21,6 +22,8 @@ import {discoveryConfiguration} from "./discovery-config";
 import {discoveryInput, discoveryLegacyStore, sameModel} from "./discovery-input";
 import {discoveryA2aRouter} from "./discovery-a2a-server";
 import {discoveryA2aStore} from "./discovery-a2a-store";
+import {runSourceRead,type SourceReadJob} from "./discovery-material-operations";
+import {sourceReadKind} from "./discovery-materials-contract";
 
 const configuration = discoveryConfiguration();
 const state = process.env.ONEEARTH_STATE_DIR || path.resolve(".local/state");
@@ -39,9 +42,11 @@ const app = express();
 app.disable("x-powered-by");
 app.use(accessGuard());
 const prepare = discoveryInput(store,configuration,delegations);
-app.use(discoveryA2aRouter(delegations,prepare.a2a));
+const catalog = paperCatalogAccess(papers);
+const fetchAllowed = () => process.env.ONEEARTH_DEEPSEEK_FETCH === "true";
+app.use(discoveryA2aRouter(delegations,prepare.a2a,{catalog,fetchAllowed,haina}));
 app.use(express.json({limit:"384kb"}));
-app.use("/api/paper-records",paperCatalog(papers));
+app.use("/api/paper-records",paperCatalogRoutes(catalog));
 app.get("/api/health", (_req, res) => res.json({status:"ok", service:"discovery"}));
 app.post("/v1/discoveries", (_req,res,next) => {
   if (configuration.kind === "invalid") {res.status(503).json({error:configuration.issue});return;}
@@ -50,6 +55,9 @@ app.post("/v1/discoveries", (_req,res,next) => {
 taskRoutes(app, "/v1/discoveries", discoveryLegacyStore(store,delegations,configuration,prepare), prepare.legacy);
 await workTasks(store, async ({id,body: input}: {id:string;body: DiscoveryInput}, signal, emit) => {
   const a2a = await delegations.hasJob(id);
+  const sourceRead = input as unknown as SourceReadJob;
+  if (a2a && sourceRead.kind === sourceReadKind)
+    return runSourceRead(sourceRead,signal,emit,catalog,fetchAllowed());
   if (configuration.kind !== "configured" && (a2a || configuration.kind === "invalid"))
     return {error:configuration.issue,code:"discovery_configuration_unavailable"};
   if (a2a && !sameModel(input.config,configuration.kind === "configured" ? configuration.model : undefined))

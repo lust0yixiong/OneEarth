@@ -2,6 +2,7 @@ import {SourceReadClaimError} from "./source-read-provenance";
 import {verifyCalculationRequests,type CalculationReport} from "./verified-calculation";
 import type { AnswerReference, WebHit } from "../src/domain/types";
 import {sourceIdentityInstructions} from "./source-identity";
+import {parseSourceChanges} from "./source-read-comparison";
 
 export const synthesisInstructions = sourceIdentityInstructions+`回答原则是依据可追溯的事实作判断。介绍论文与研究用法的来源时统一称为“文献资料”。围绕用户当前问题，先核对文献资料及已接入数据集已提供的事实，结合发布方原始资料交叉核验；引用要支撑具体判断。researchQuestions、usage、researchCombinations、researchPaths、evidenceLinks 和 excerpts 可揭示作者研究什么、使用哪些变量与数据、怎样联合分析及其前提，应将相关信息用于本轮比较和解释，不能停在罗列候选名称。论文研究问题表示研究目标，数据共现表示联合使用线索；方法有效性、因果关系和当前时空适用性还需相应原文或记录支持。
 searchStatus.webChecks 是围绕本轮文献资料和数据目录提出的网页补充核查计划，不是已经核实的事实。结合实际读取的 webResults 回答哪些缺口补上、哪些仍未知。用户明确指定的资料，其他数据集或论文的读数、参数和文件不能替代它；相关资料只能另作比较。来源存在身份、版本、量纲或方法冲突时保留各自出处与适用条件，不能将文献资料或网页任一方自动视为最终正确，也不能静默修改源值。
@@ -124,7 +125,8 @@ export function parseSynthesis(raw:string, materials:AnswerReference[], web:WebH
       if(sources.some(s=>s.id===ref.id) && !researchNotes.some(n=>n.id===ref.id))researchNotes.push({id:ref.id,note:record.note.trim()});
     }
   }
-  return {message,limitation,followUp,references,sources,webSources,researchNotes};
+  const sourceChanges=parseSourceChanges(reply.sourceChanges);
+  return {message,limitation,followUp,references,sources,webSources,researchNotes,...(sourceChanges?{sourceChanges}:{})};
 }
 /** Detect actual worked examples; reported metrics and product versions are not calculations. */
 export function needsVerifiedCalculation(draft:{message?:string;sections?:Array<{text?:string}>}) {

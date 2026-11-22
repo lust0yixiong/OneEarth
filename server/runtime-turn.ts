@@ -4,8 +4,11 @@ import { requestPerformance } from "./request-performance";
 import type { TaskStore } from "./task-store";
 import type { researchRegions } from "./research-region";
 import type { spatialCoverageClient } from "./spatial-coverage-client";
-import type { runtimePaperEvidence } from "./runtime-paper-evidence";
-import type { hainaService } from "./haina-search";
+import {runtimeTurnPapers} from "./runtime-turn-papers";
+import {runtimeMaterialHistory,archivedReadEvidence,type RuntimeMaterialReceipt} from "./runtime-material-history";
+import {runtimeTurnHaina,type RuntimeHainaMaterials} from "./runtime-turn-haina";
+import type {CurrentAssertionReading} from "./runtime-assertion-evidence";
+import {paperId} from "../src/domain/paper-record";
 import type { constellationService } from "./constellations";
 import { assetById, registerObservations, registerPapers } from "../src/domain/datasets";
 import { modelReply } from "./research-answer";
@@ -17,7 +20,7 @@ import {prepareTurn,turnMetadata,turnPlanSchema,TurnPlanningFailure,type TurnPla
 import {randomUUID} from "node:crypto";
 import {researchExecutor,discoveryProtocol} from "./research-executor";
 import {discoveryConfirmation} from "./discovery-bindings";
-import {assertDiscoveryWaiting,type DiscoveryBinding,type DiscoveryA2AInput} from "./discovery-a2a-client";
+import {assertDiscoveryWaiting,queryPapers,type DiscoveryBinding,type DiscoveryA2AInput} from "./discovery-a2a-client";
 import {clarificationParent,guardClarification,clarificationGuardSchema,type ClarificationReply} from "./clarification-guard";
 import {continueResearch, evidenceDecisionSchema} from "./research-evidence";
 import type {DiscoveryInput} from "./discovery-contract";
@@ -34,15 +37,12 @@ import {chinaBoundary,chinaBoundaryEnabled} from "./china-boundaries";
 import {validResearchRegion} from "../src/domain/research-region";
 import type {ResearchRegion} from "../src/domain/research-region";
 import type { AnswerReference, DiscoveryResponse, RunTrace, ToolCall, SearchRun } from "../src/domain/types";
-import { cachedPaperIds } from "./paper-discovery";
 import { discoverObservations } from "./observation-query";
 import { resolveSceneQuery } from "./earth-search";
 import { discover } from "../src/domain/discovery";
 
 export interface RuntimeServices {
   tasks: TaskStore;
-  cachedPapers: ReturnType<typeof runtimePaperEvidence>;
-  haina: ReturnType<typeof hainaService>;
   push: ReturnType<typeof constellationService>;
   coverage: ReturnType<typeof spatialCoverageClient>;
   researchRegionService: ReturnType<typeof researchRegions>;
@@ -62,7 +62,10 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
   deepseekTools?: import("../src/domain/deepseek-tools").DeepSeekTools;
   clarificationReply?:ClarificationReply;
 }, signal: AbortSignal, publish: (payload:Record<string, unknown>) => void): Promise<Record<string, unknown>> {
-  const {tasks, cachedPapers, haina, push, coverage, researchRegionService, adminBoundaryDir, canonicalCache} = services;
+  const {tasks, push, coverage, researchRegionService, adminBoundaryDir, canonicalCache} = services;
+  const cachedPapers=runtimeTurnPapers();
+  const haina=runtimeTurnHaina();
+  const currentAssertionReadings:CurrentAssertionReading[]=[];
   let context=body.context;
   const controller = {signal};
   let activeExecutor:ReturnType<typeof researchExecutor>|undefined;
@@ -89,7 +92,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
   try {
     const clarification=body.clarificationReply?await clarificationParent(tasks,body):undefined;
     const query=clarification?.original.query??body.query;
-    const history=clarification?.original.history??body.history;
+    let history=clarification?.original.history??body.history;
     const decision=clarification?.original.questionDecision??body.questionDecision;
     if(clarification)context=clarification.context;
     const executor=activeExecutor=researchExecutor(body.config,clarification?clarification.original.deepseekTools:body.deepseekTools,signal);
@@ -120,15 +123,57 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         questionCheck:{originalQuestion:body.query,proposedQuestion:checked.proposedQuestion!},runtimeQuestionCheck:true,runTrace}};
       if(checked.action==="clarify")return {result:{message:checked.clarification!,clarification:true,runTrace}};
     }
-    cachedPapers.refresh();
-    const existing = cachedPaperIds(context).flatMap(id => cachedPapers.get(id) || []);
-    registerPapers(existing,false);
+    const prior = await priorResult(tasks,body.conversationId,body.previousTaskId);
+    const candidatePaperIds=[...(context.candidateIds||[]),...(context.attachedScope?.flatMap(s=>s.kind==="dataset"?[s.id]:[])||[]),
+      ...(prior?.answerNotes?.references?.flatMap(r=>r.kind==="asset"?[r.id]:[])||[])];
+    const archived=await runtimeMaterialHistory(tasks,body.conversationId,[body.previousTaskId,decision?.checkMessageId,body.clarificationReply?.parentTaskId],
+      {paperIds:candidatePaperIds.filter(paperId),includeSources:!prior});
+    cachedPapers.remember(archived.papers);
+    haina.remember(archived);
+    const savedReadings=prior?.conversationEvidence?.length?prior.conversationEvidence:archivedReadEvidence(archived);
+    if(savedReadings.length||prior?.conversationAssertionEvidence?.length){
+      let last=history.length-1;while(last>=0&&history[last].role!=="assistant")last--;
+      const original=last>=0?history[last]:{role:"assistant" as const,text:""};
+      const saved={...original,conversationEvidence:savedReadings,
+        conversationAssertionEvidence:prior?.conversationAssertionEvidence,
+        conversationReferences:prior?.answerNotes?.references||savedReadings.map(read=>({kind:"web" as const,url:read.url,title:read.title,sourceChannel:"web" as const,referenceType:read.referenceType}))};
+      history=last>=0?history.map((turn,index)=>index===last?saved:turn):[...history.slice(-7),saved];
+    }
+    async function retainMaterials(material:RuntimeMaterialReceipt){
+      // Persist full acquired content before synthesis; call logs contain identities only.
+      await tasks.append(taskId,{researchMaterials:material});
+      cachedPapers.remember(material.papers);
+      haina.remember(material);
+      for(const reading of material.paperEvidence||[])if(!currentAssertionReadings.some(old=>isDeepStrictEqual(old,reading)))currentAssertionReadings.push(reading);
+    }
+    async function retainDiscoveryMaterials(result:import("./data-search").DataSearchResult){
+      const material=result as typeof result&RuntimeHainaMaterials;
+      const selected=new Set(result.haina.flatMap(asset=>[asset.id,asset.datasetId]));
+      if(material.hainaRecords?.some(record=>!selected.has("haina:"+record.id)))throw Error("受托海纳记录不属于本次实得对象。");
+      await retainMaterials({papers:result.papers,searches:result.searches,issues:result.issues,
+        ...(material.hainaRecords?{hainaRecords:material.hainaRecords}:{}),...(material.hainaCatalog?{hainaCatalog:material.hainaCatalog}:{})});
+    }
+    async function loadPapers(ids:string[]){
+      const wanted=[...new Set(ids.filter(paperId))],missing=wanted.filter(id=>!cachedPapers.get(id));
+      for(let i=0;i<missing.length;i+=20){
+        try{
+          const papers=await queryPapers({operation:"records",ids:missing.slice(i,i+20)},signal);
+          await retainMaterials({papers,searches:[],issues:[]});
+          report({id:"paper-details-"+i,kind:"tool",name:"取得精确版本的已发布论文记录",status:"done",
+            input:JSON.stringify(missing.slice(i,i+20)),output:JSON.stringify({papers:papers.map(p=>p.id),level:"published-record"})});
+        }catch(error){
+          signal.throwIfAborted();report({id:"paper-details-"+i,kind:"tool",name:"取得精确版本的已发布论文记录",status:"failed",
+            input:JSON.stringify(missing.slice(i,i+20)),error:error instanceof Error?error.message:"发现服务未返回指定版本。"});
+        }
+      }
+      return wanted.flatMap(id=>cachedPapers.get(id)||[]);
+    }
     const conversationContext=validHistory(history)
       ?history.filter(t=>t.role==="assistant" && t.conversationContext!==undefined).at(-1)?.conversationContext:undefined;
-    const conversationEvidence=validHistory(history)
-      ?history.filter(t=>t.role==="assistant" && t.conversationEvidence!==undefined).at(-1)?.conversationEvidence:undefined;
-    const conversationAssertionEvidence=validHistory(history)
-      ?history.filter(t=>t.role==="assistant" && t.conversationAssertionEvidence!==undefined).at(-1)?.conversationAssertionEvidence:undefined;
+    const conversationEvidence=prior?.conversationEvidence??(validHistory(history)
+      ?history.filter(t=>t.role==="assistant" && t.conversationEvidence!==undefined).at(-1)?.conversationEvidence:undefined);
+    const conversationAssertionEvidence=prior?.conversationAssertionEvidence??(validHistory(history)
+      ?history.filter(t=>t.role==="assistant" && t.conversationAssertionEvidence!==undefined).at(-1)?.conversationAssertionEvidence:undefined);
     const priorIds=validHistory(history)
       ? history.filter(t=>t.role==="assistant").at(-1)?.assetIds || [] : [];
     const currentDatasets=[...new Set([...priorIds,...(context.candidateIds || [])])].slice(0,40)
@@ -153,7 +198,6 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       return {plan,retrieval:undefined};
     }
     const navigation = clarification?undefined:navigationTarget(query);
-    const prior = await priorResult(tasks,body.conversationId,body.previousTaskId);
     const selected=navigation?undefined:numberedReference(query,prior);
     const ref=selected?.reference;
     if(selected){
@@ -217,7 +261,10 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
             runTrace.findings=findings;
             event({finding,traceStarted:runTrace.started});
           }
-        },{onAccepted:saveBinding,onCheckpoint:saveBinding,...(!continuation?confirmation?.options:{})});
+        },{onAccepted:saveBinding,onCheckpoint:saveBinding,onEvent:async update=>{
+          if(update.result)await retainDiscoveryMaterials(update.result);
+        },...(!continuation?confirmation?.options:{})});
+        if(!a2a)await retainDiscoveryMaterials(result);
         if(!continuation)initialDiscoveryId=discoveryId;
         lastDiscoveryResult=result;
         report({...call,status:"done",output:JSON.stringify({messageId,discoveryId,channels:result.sourceStatus.map(({source,status,count})=>({source,status,count})),
@@ -236,7 +283,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       navigation ? navigationTurn(navigation) : await prepareTurn({
       question:decision?.dataQuestion||query, context, history, conversationContext,
       previousResearchIntent:planningIntent,confirmedQuestion:decision?.dataQuestion,numbered:selected,
-      numberedRead:ref?.kind==="web"?prior?.conversationEvidence?.find(read=>read.url===ref.url):undefined,
+      numberedRead:ref?.kind==="web"?savedReadings.find(read=>read.url===ref.url):undefined,
       numberedAssertion:ref?.kind==="asset"?prior?.conversationAssertionEvidence?.find(read=>read.assetId===ref.id):undefined,
     }, signal, {
       run: prompt => executor.model(prompt, {outputSchema:turnPlanSchema}),
@@ -247,6 +294,9 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     const turn=prepared.plan;
     let retrieved=prepared.retrieval;
     let readRuns:SearchRun[]=[];
+    const readTargets=(plan:TurnPlan,question:string,callPrefix?:string)=>executor.read(plan,question,{stage,report,callPrefix,
+      options:{onAccepted:async binding=>{await tasks.append(taskId,{sourceReadBinding:binding});},
+        onCheckpoint:async binding=>{await tasks.append(taskId,{sourceReadBinding:binding});}},onResult:retainMaterials});
     await regionTask;
     if(gridCoverage&&!gridCoverage.summary&&(turn.action==="search" || turn.action==="clarify")){
       return {result:literatureDisplay({message:gridCoverageSummary(gridCoverage),clarification:true,gridCoverage,runTrace,
@@ -254,14 +304,13 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     }
     if(!retrieved?.questionCheck&&!retrieved?.clarification&&(retrieved||turn.action==="read")){
       const targetQuery=decision?.dataQuestion||query;
-      if(turn.action==="read")readRuns=await executor.read(turn,targetQuery,{stage,report});
+      if(turn.action==="read")readRuns=await readTargets(turn,targetQuery);
       // Workspace and exact reference routing retain their existing scope. A review
       // receives actual results from each action, never a hypothetical tool result.
-      if(retrieved||readRuns.length){
-        const outcome=await continueResearch(targetQuery,turn,{retrieval:retrieved,reads:readRuns},signal,{
+      if(retrieved||readRuns.length||currentAssertionReadings.length){
+        const outcome=await continueResearch(targetQuery,turn,{retrieval:retrieved,reads:readRuns,assertionReadings:currentAssertionReadings},signal,{
           model:prompt=>executor.model(prompt,{outputSchema:evidenceDecisionSchema}),
-          read:(targets,focus,step)=>executor.read({...turn,action:"read",targets},targetQuery+"\n"+focus,
-            {stage,report,callPrefix:"research-read-"+step+"-"}),
+          read:(targets,focus,step)=>readTargets({...turn,action:"read",targets},targetQuery+"\n"+focus,"research-read-"+step+"-"),
           discover:focus=>{
             if(!initialDiscoveryId)throw Error("本轮发现没有已确认的服务任务身份，不能猜测补查父任务。");
             return find(turn,{previousId:initialDiscoveryId,focus});
@@ -290,6 +339,8 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       const complete=(reply:DiscoveryResponse)=>{
         reply.runTrace=literatureDisplay(runTrace);
         if(gridCoverage)reply.gridCoverage=gridCoverage;
+        if(haina.records().length)reply.hainaRecords=haina.records();
+        if(haina.status())reply.hainaCatalog=haina.status();
         return {result:literatureDisplay(reply)};
       };
       const continuity={researchIntent:turn.researchIntent,conversationContext:turn.conversationContext,conversationEvidence,conversationAssertionEvidence};
@@ -297,7 +348,9 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         return complete({message:turn.clarification!,clarification:true,...continuity});
       }
       const targetQuery=decision?.dataQuestion||query;
-      const pinnedIds=turn.targets.flatMap(t=>t.id?[t.id]:[]),pinnedPapers=pinnedIds.flatMap(id=>cachedPapers.get(id)||[]);
+      const pinnedIds=turn.targets.flatMap(t=>t.id?[t.id]:[]);
+      const pinnedPapers=turn.action==="workspace"?await loadPapers(pinnedIds.length?pinnedIds:context.candidateIds||[]):
+        pinnedIds.flatMap(id=>cachedPapers.get(id)||[]);
       if(pinnedPapers.length)registerPapers(pinnedPapers,false);
       const chinaBoundaryDirectory=path.join(adminBoundaryDir,"datav");
       const administrativeLevel=(place:string,photon?:PlaceHit):"city"|"district"|null=>{
@@ -369,8 +422,8 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       if(turn.action==="workspace"){
         const operationContext={...context,...(pinnedIds.length?{candidateIds:pinnedIds,inCandidateScope:true}:{})};
         let operation=discoverConversation(targetQuery,operationContext);
-        if(pinnedIds.length===1 && assetById.has(pinnedIds[0]) && /^(?:请|帮我)?(?:打开|预览|查看)/.test(targetQuery))
-          operation={message:"已打开「"+assetById.get(pinnedIds[0])!.title+"」的数据速览。",inspectId:pinnedIds[0]};
+        if(pinnedIds.length===1 && (assetById.has(pinnedIds[0])||/^haina:\d+$/.test(pinnedIds[0])) && /^(?:请|帮我)?(?:打开|预览|查看)/.test(targetQuery))
+          operation={message:"已打开「"+(assetById.get(pinnedIds[0])?.title||turn.targets.find(t=>t.id===pinnedIds[0])?.title||pinnedIds[0])+"」的数据速览。",inspectId:pinnedIds[0]};
         const operationKeys=["camera","gridSystem","filters","clearSelection","view","selectCenter","previewNeed","inspectId","dataView","visualization","catalogQuery","mesh","layer","researchRegion"];
         const isActionable=()=>operationKeys.some(key=>Object.hasOwn(operation,key));
         let actionable=isActionable(),navigationHandled=false;
@@ -402,7 +455,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       if(pinnedIds.length)report({id:"referenced-material",kind:"tool",name:"采用所引资料的已存内容",input:pinnedIds.join("、"),
         status:pinnedIds.every(id=>assetById.has(id))?"done":"partial",output:"已存资料身份 "+pinnedIds.filter(id=>assetById.has(id)).length+" 项；没有重新检索文献库或海纳。"});
       const reply=await modelReply(targetQuery,context,{message:summary,gridCoverage},history,executor,signal,
-        stage,pinnedPapers,"",undefined,undefined,report,{plan:turn,searches:readRuns,priorEvidence});
+        stage,pinnedPapers,"",undefined,undefined,report,{plan:turn,searches:readRuns,priorEvidence},currentAssertionReadings,{record:prior,searches:archived.searches});
       if(pinnedPapers.length)reply.paperRecords=literatureDisplay(pinnedPapers);
       reply.hainaRecords=pinnedIds.flatMap(id=>id.startsWith("haina:")?haina.records().filter(r=>String(r.id)===id.slice(6)):[]);
       if(reply.answerNotes)reply.answerNotes.elapsedMs=Date.now()-runTrace.started;
@@ -433,19 +486,19 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     registerObservations(constellationFeed.records,!observation);
     const localResult=()=>retrieved?discoverConversation(decision?.dataQuestion || query,scopedContext,retrieved.plan.conversationContext):discover(query,scopedContext);
     const result=gridCoverage?{message:gridCoverageSummary(gridCoverage),gridCoverage}:
-      scopedReply(observation || await resolveSceneQuery(lookupQuery,localResult()),scopedContext,retrieved?.plan);
+      scopedReply(observation || await resolveSceneQuery(lookupQuery,localResult(),signal),scopedContext,retrieved?.plan);
     report({...catalogCall,status:gridCoverage?.status==="unknown"?"partial":"done",output:result.message});
     {
       const paperTrace=retrieved!.sourceStatus.map(s=>s.source+" "+(s.status==="done"?"完成":s.status==="partial"?"部分完成":"未完成")+" · "+s.count+" 项").join("；");
       const reply:DiscoveryResponse=await modelReply(decision?.dataQuestion||query,scopedContext,result,history,executor,signal,
         stage,retrieved!.papers,paperTrace,
-        !context.filters.source || context.filters.source==="constellation"?constellationFeed:undefined,retrieved,report);
+        !context.filters.source || context.filters.source==="constellation"?constellationFeed:undefined,retrieved,report,undefined,currentAssertionReadings,{record:prior,searches:archived.searches});
       if(retrieved!.papers.length)reply.paperRecords=literatureDisplay(retrieved!.papers);
       reply.hainaRecords=retrieved!.haina.flatMap(asset=>{
         const recordId=Number(asset.datasetId.slice(6));
         return haina.records().filter(r=>r.id===recordId);
       });
-      reply.hainaCatalog=haina.status();
+      if(haina.status())reply.hainaCatalog=haina.status();
       if(reply.answerNotes){
         reply.answerNotes.paperTrace=paperTrace;
         reply.answerNotes.elapsedMs=Date.now()-runTrace.started;
@@ -464,5 +517,5 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     if(err instanceof AnswerReferenceError)runTrace.calls.push({id:"synthesis-validation",kind:"tool",name:"回答引用校验",input:"核对本轮来源编号与正文引用",status:"failed",error,output:JSON.stringify(synthesisFailureDiagnostic(err))});
     for(const call of runTrace.calls) if(call.status==="running") {call.status="failed";call.error=error;}
     return {error,code,executorDiagnostic,runTrace};
-  } finally { await activeExecutor?.close(); }
+  } finally {try{await activeExecutor?.close();}finally{cachedPapers.close();haina.close();}}
 }

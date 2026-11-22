@@ -84,8 +84,7 @@ async function fixture(t:TestContext,action:"supplement"|"new_goal"|"clarify"="s
   });
   const server=app.listen(0,"127.0.0.1");await once(server,"listening");const address=server.address();assert.ok(address&&typeof address!=="string");
   process.env.ONEEARTH_DISCOVERY_URL="http://127.0.0.1:"+address.port;
-  const remembered:PaperRecord[]=[];
-  const services={tasks,cachedPapers:{refresh(){},get(){return[];},remember(records:PaperRecord[]){remembered.push(...records);}},haina:{records(){return[];}},push:{latest(){return{records:[]};}},
+  const services={tasks,push:{latest(){return{records:[]};}},
     coverage:async({cell}:any)=>({cellId:cell.id,gridKey:cell.grid.key,status:"unknown",reason:"expired"}),researchRegionService:{locate:async()=>null},adminBoundaryDir:directory,canonicalCache:new Map()} as unknown as RuntimeServices;
   t.after(async()=>{server.closeAllConnections();await new Promise<void>(done=>server.close(()=>done()));tasks.close();rmSync(directory,{recursive:true,force:true});
     if(previousPath===undefined)delete process.env.PATH;else process.env.PATH=previousPath;
@@ -98,7 +97,7 @@ async function fixture(t:TestContext,action:"supplement"|"new_goal"|"clarify"="s
     const outcome=await executeTurn(services,id,value,new AbortController().signal,event=>{tasks.append(id,event);});
     tasks.finish(id,outcome.error?"failed":"complete",outcome);return{id,outcome};
   };
-  return{tasks,parentId,conversationId,body,run,remote,remotes,posts,requests,services,promptFile,remembered,
+  return{tasks,parentId,conversationId,body,run,remote,remotes,posts,requests,services,promptFile,
     completeReplies(){completeReplies=true;},
     supplement(){writeFileSync(guardFile,JSON.stringify({action:"supplement",reason:"supplements original conditions",proposedQuestion:null,clarification:null}));},
     stale(){remote.artifacts.push(artifact(++sequence,dataResult("新的等待条件")));},
@@ -185,7 +184,7 @@ test("confirmed new-goal supplemental discovery retains the new input and binds 
   assert.equal(s.remotes.get(waiting)?.status.state,"TASK_STATE_INPUT_REQUIRED");
   const saved=s.tasks.terminal(completed.id)?.result as any;
   assert.deepEqual(saved.paperRecords,[acquiredPaper]);assert.deepEqual(saved.runTrace.searches,[acquiredSearch]);
-  assert.deepEqual(s.remembered,[acquiredPaper]);
+  assert.deepEqual(s.tasks.events(completed.id,0).flatMap(e=>(e.researchMaterials as {papers?:PaperRecord[]}|undefined)?.papers||[]),[acquiredPaper]);
   const before=JSON.stringify(s.tasks.terminal(completed.id));s.supplement();s.completeReplies();
   const followup={...next,query:"补充原定区域内的观测站条件。",questionDecision:undefined,clarificationReply:{parentTaskId:completed.id},turnId:randomUUID()};
   const resumed=await s.run(followup);assert.equal(resumed.outcome.error,undefined);

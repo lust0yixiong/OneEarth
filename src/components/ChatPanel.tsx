@@ -157,6 +157,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
   const home=useChatHome();
   const {
     state: s,
+    historyIds,
     patch,
     flyToResearchRegion,
     send,
@@ -169,9 +170,8 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     inspectAsset,
   } = useWorkspace();
   const sourceHits=useMemo(()=>new Map(s.messages.map(m=>[m.id,m.answerNotes?.webSources])),[s.messages]);
-  const previewWeb=useWebPreview(s.messages.flatMap(m=>m.answerNotes?.webSources || []),undefined,[],
+  const previewWeb=useWebPreview(s.messages.flatMap(m=>historyIds.has(m.id)?[]:m.answerNotes?.webSources || []),undefined,[],
     link=>sourceHits.get(link.closest<HTMLElement>(".message[data-message-id]")?.dataset.messageId || ""));
-  const historyIds=useMemo(()=>new Set(s.messages.map(m=>m.id)),[s.sessionId]);
   const revision=useCatalogRevision();
   const [readyAnswers,setReadyAnswers]=useState<ReadonlySet<string>>(()=>new Set());
   const answerReady=useCallback((id:string)=>setReadyAnswers(ids=>ids.has(id)?ids:new Set(ids).add(id)),[]);
@@ -307,7 +307,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                 closed={s.messages.find(next=>next.role==="user" && next.time>m.time)?.questionDecision ||
                   (s.messages.some(next=>next.role==="user" && next.time>m.time)?"superseded":undefined)}
                 onChoose={(choice,edited)=>void confirmQuestion(m.id,choice,edited)}/>}
-              {m.role==="assistant" && !m.questionCheck && <AnswerBody message={m} animate={!historyIds.has(m.id) && Date.now()-m.time<3000} onReady={answerReady}
+              {m.role==="assistant" && !m.questionCheck && <AnswerBody message={m} archived={historyIds.has(m.id)} animate={!historyIds.has(m.id) && Date.now()-m.time<3000} onReady={answerReady}
                 clarificationAction={replyTargets.has(m.id) && <button type="button" className="activity-link"
                   aria-controls="chat-question-input" aria-pressed={clarificationTarget?.id===m.id}
                   disabled={s.pending} onClick={()=>selectClarification(m.id)}>回复此问题</button>}
@@ -546,7 +546,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
         </div>
         
       </div>
-      {composerSources && <SourceDrawer refs={sourcesFor(literatureDisplay(composerSources)).refs} message={composerSources}
+      {composerSources && <SourceDrawer refs={sourcesFor(literatureDisplay(composerSources)).refs} message={composerSources} archived={historyIds.has(composerSources.id)}
         title="本条回答的来源与依据" question={questions.get(composerSources.id)?.text} close={()=>setComposerSources(null)}/>}
     </aside>
   );

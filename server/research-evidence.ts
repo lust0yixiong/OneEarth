@@ -2,9 +2,10 @@ import type {QuestionDecision, SearchRun, ToolCall} from "../src/domain/types";
 import type {DataSearchResult} from "./data-search";
 import type {TurnPlan, TurnTarget} from "./turn-planning";
 import {mergeWebEvidence} from "./merge-web-evidence";
+import {currentAssertionView,type CurrentAssertionReading} from "./runtime-assertion-evidence";
 
 type Decision={action:"answer"|"read"|"discover"|"clarify";reason:string;gap:string|null;targets:string[];clarification:string|null};
-type Materials={retrieval?:DataSearchResult;reads:SearchRun[]};
+type Materials={retrieval?:DataSearchResult;reads:SearchRun[];assertionReadings?:CurrentAssertionReading[]};
 type Dependencies={
   model:(prompt:string)=>Promise<string>;
   read:(targets:TurnTarget[],focus:string,step:number)=>Promise<SearchRun[]>;
@@ -30,7 +31,7 @@ const instructions=`你负责决定同一轮研究任务的下一步。原问题
 - clarify：仅在现有目标缺少关键对象或用户必须决定研究范围时，请用户补充一项关键信息；仅仅资料或上游不可用时，说明证据界限后用 answer。
 按给出的可用动作选一个。只输出 JSON。只有 read/discover 填 gap（具体证据缺口），只有 read 填 targets（候选编号），只有 clarify 填 clarification（给用户的问题）。`;
 
-function materialView({retrieval,reads}:Materials,targets:TurnTarget[]){
+function materialView({retrieval,reads,assertionReadings}:Materials,targets:TurnTarget[],question:string){
   const runs=[...(retrieval?.searches||[]),...reads];
   const web=mergeWebEvidence(runs).slice(0,24);
   const readAttempts=new Set(reads.map(run=>run.query));
@@ -49,6 +50,7 @@ function materialView({retrieval,reads}:Materials,targets:TurnTarget[]){
   const allowed=new Map(indexed.map(({label,source})=>[label,source]));
   const references=new Map(indexed.map(({label,source})=>[source.url,label]));
   const view={
+    assertionReadings:currentAssertionView(assertionReadings||[],question),
     pinned:targets.map(({key,title,id,url,alreadyRead})=>({key,title,id,url,alreadyRead})),
     papers:(retrieval?.papers||[]).slice(0,16).map(p=>({id:p.id,title:p.paperTitle,data:p.need.product,
       context:p.studyContext?.slice(0,280),coverage:p.need.profile?.coverage,
@@ -103,7 +105,7 @@ export async function continueResearch(question:string,plan:TurnPlan,material:Ma
   const limit=2;
   for(let step=1;step<=limit+1;step++){
     signal.throwIfAborted();
-    const {view,allowed}=materialView({retrieval,reads},plan.targets);
+    const {view,allowed}=materialView({retrieval,reads,assertionReadings:material.assertionReadings},plan.targets,question);
     const actions=confirmation?["answer"]:["answer","clarify"];
     if(step<=limit){
       if(allowed.size)actions.push("read");
@@ -112,7 +114,7 @@ export async function continueResearch(question:string,plan:TurnPlan,material:Ma
     const call={id:"research-decision-"+step,name:"根据真实材料决定下一步",kind:"tool" as const,
       input:JSON.stringify({step,actions,papers:view.papers.map(p=>p.id),haina:view.haina.map(a=>a.id),
         web:view.web.map(({url,stage,label})=>({url,stage,label})),channels:view.channels?.map(({source,status,count})=>({source,status,count})),
-        exactReads:view.exactReads})};
+        exactReads:view.exactReads,assertionReadings:view.assertionReadings.map(r=>({id:r.id,readAt:r.readAt,blocks:r.excerpts.map(e=>e.block)}))})};
     deps.stage("正在根据已取得的材料决定下一步");
     deps.report({...call,status:"running"});
     let decision:Decision;

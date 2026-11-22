@@ -48,6 +48,7 @@ import {
   useReducer,
   useRef,
   useEffect,
+  useMemo,
   useState,
   useCallback,
   type ReactNode,
@@ -547,6 +548,7 @@ const Context = createContext<ReturnType<typeof useWorkspaceValue> | null>(
 );
 function useWorkspaceValue(initialState: State) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const historyIds=useMemo(()=>new Set(state.messages.map(m=>m.id)),[state.sessionId]);
   const latest = useRef(state);
   latest.current = state;
   const request = useRef<AbortController | null>(null);
@@ -696,7 +698,11 @@ function useWorkspaceValue(initialState: State) {
   },[patch]);
   useEffect(() => {
     const s = latest.current;
-    const ids = [...(s.mapResult?.ids || []), ...(s.search.result?.ids || []), ...s.messages.flatMap(m => [...(m.candidates?.ids || []), ...(m.answerNotes?.sources.map(s=>s.id) || [])])];
+    const ids = [...(s.mapResult?.ids || []), ...(s.search.result?.ids || [])];
+    for (const message of s.messages) {
+      const referenced=[...(message.candidates?.ids || []), ...(message.answerNotes?.sources.map(source=>source.id) || [])];
+      ids.push(...(historyIds.has(message.id)?referenced.filter(id=>!paperId(id)):referenced));
+    }
     for (const value of s.saved) {
       try { const savedId = JSON.parse(value)?.[2]; if (typeof savedId==="string" && paperId(savedId)) ids.push(savedId); } catch { /* Older favorites can be plain identifiers. */ }
     }
@@ -710,7 +716,7 @@ function useWorkspaceValue(initialState: State) {
         if (latest.current.sessionId === s.sessionId) dispatch({ type: "patch", value: {} });
       }).catch(() => {});
     }
-  }, [state.sessionId, state.messages, state.saved]);
+  }, [state.sessionId, state.messages, state.saved, historyIds]);
   const channel = useRef<BroadcastChannel | null>(null);
   const writes = useRef(new Set<Promise<void>>());
   const failedMessages = useRef(new Map<string, Message>());
@@ -1465,7 +1471,7 @@ function useWorkspaceValue(initialState: State) {
             point: s.camera.center,
           };
         }
-        if (r.paperRecords) registerPapers(r.paperRecords);
+        if (r.paperRecords) registerPapers(r.paperRecords,false);
         if (r.paperOnly) next.fieldLayer=null;
         if(r.pushFeed) registerObservations(r.pushFeed.records);
         const match = r.catalogMatch;
@@ -2465,6 +2471,7 @@ function useWorkspaceValue(initialState: State) {
   const resultLink = useResultLink(state, patch);
   return {
     state,
+    historyIds,
     switchSession,
     retrySessionSave,
     sessionSummaries,

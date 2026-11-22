@@ -26,6 +26,8 @@ import {materialAccessEvidence,publicMaterialUrl,validateAnswerMaterialClaims} f
 import {webMaterial} from "../src/domain/web-material";
 import type { TurnHistoryEntry as Turn } from "./turn-history";
 import type { ParentResearchEvidence } from "./parent-research-evidence";
+import {withCurrentAssertionReadings,rememberCurrentAssertionReadings,type CurrentAssertionReading} from "./runtime-assertion-evidence";
+import {compareSourceReadings,validateSourceChanges,sourceChangeInstructions,sourceChangeSchema,type SourceReadHistory} from "./source-read-comparison";
 
 // Only bundled public catalogue entries may authorize a structured file URL.
 const publishedFileUrls=new Set(cases.flatMap(c=>c.needs.flatMap(n=>
@@ -232,7 +234,7 @@ export function shouldReviewAnswerEvidence(answer:{message:string;limitation?:st
   if(verifiedExample&&explicitMathExample&&text.length<500&&!sourceClaim)return false;
   return answer.message.length>=300 || /论文|清单|版本|\d/.test(answer.message);
 }
-export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[];priorEvidence?:ParentResearchEvidence}) {
+export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[];priorEvidence?:ParentResearchEvidence},assertionReadings:CurrentAssertionReading[]=[],sourceHistory:SourceReadHistory={}) {
     if(retrieval?.questionCheck || retrieval?.clarification || retrieval?.plan.questionMode==="reframe")
       throw Error("转换后的问题尚未得到用户确认，不能生成答复。");
     const start=Date.now();
@@ -255,7 +257,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     const searchPhrases=[...(retrieval?.plan.paper.facets.flatMap(f=>f.queries)||[]),...(retrieval?.plan.web.map(q=>q.web)||[]),...(retrieval?.plan.hainaQueries||[])];
     const previousAssertions=history.filter(t=>t.role==="assistant" && t.conversationAssertionEvidence!==undefined).at(-1)?.conversationAssertionEvidence || [];
     const priorAssertions=turn?.priorEvidence?.assertions??(selectedOnly?previousAssertions.filter(r=>selectedOnly.has(r.assetId)):previousAssertions);
-    const rows=withAssertionMemory(catalogueRows(target,context,base,history,papers,retrieval?.haina,source,retrieval?.plan.questionMode==="confirmed"?retrieval.plan.dataQuestion:query,searchPhrases,selectedOnly),priorAssertions,query,source||context.filters.source,!!turn?.priorEvidence);
+    const rows=withCurrentAssertionReadings(withAssertionMemory(catalogueRows(target,context,base,history,papers,retrieval?.haina,source,retrieval?.plan.questionMode==="confirmed"?retrieval.plan.dataQuestion:query,searchPhrases,selectedOnly),priorAssertions,query,source||context.filters.source,!!turn?.priorEvidence),assertionReadings,query);
     const previousReadings=history.filter(t=>t.role==="assistant" && t.conversationEvidence!==undefined).at(-1)?.conversationEvidence || [];
     const priorReadings=turn?.priorEvidence?.readings??(selectedUrls?previousReadings.filter(r=>selectedUrls.has(r.url)):previousReadings);
     const modelHistory=synthesisHistory(history.map(({conversationEvidence:_,conversationAssertionEvidence:__,...turn})=>turn));
@@ -269,6 +271,9 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       .map(h=>userSources.has(h.url)?{...h,discoveredBy:"user" as const}:h);
     const memoryOptions={query:target,focusUrls:[...userSources,...(/刚才|此前|这份|前面|继续|你提到|这个|该/.test(query)?history.filter(t=>t.role==="assistant").at(-1)?.conversationReferences?.flatMap(r=>r.kind==="web"?[r.url]:[])||[]:[])]};
     const webHits=source?[]:withPreviousReadings(fresh,priorReadings,memoryOptions);
+    const sourceReadComparisons=compareSourceReadings(webHits,sourceHistory,priorReadings,rows.length);
+    const answerSchema=sourceReadComparisons.length?{...synthesisResponseSchema,required:[...synthesisResponseSchema.required,"sourceChanges"],
+      properties:{...synthesisResponseSchema.properties,sourceChanges:sourceChangeSchema}}:synthesisResponseSchema;
     const catalogueFileUrls=rows.filter(row=>row.evidenceSelection?.detail==="bounded-excerpts").flatMap(row=>
       (assetById.get(row.id)?.dataEntities ?? []).map(entity=>publicMaterialUrl(entity.url))
         .filter((url):url is string=>!!url && publishedFileUrls.has(url)));
@@ -290,6 +295,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       ?reference.kind==="asset"&&reference.id===ref.id:reference.kind==="web"&&reference.url===ref.url));
     function verifyExecutionAndReferences(answer:SynthesisAnswer){
       validateSourceReadClaim(answer,readReceipts,!!retrieval);
+      validateSourceChanges(answer,sourceReadComparisons);
       validateAnswerMaterialClaims(answer,accessLinks);
       if(exactReadRefs.length&&!answer.references.some(ref=>ref.kind==="web"&&exactReadRefs.some(source=>source.url===ref.url)))
         throw new SourceReadClaimError("定向读取已经返回材料，为核查结论或证据限制加上实际所读原站引用 "+
@@ -298,16 +304,17 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         throw new SourceReadClaimError("本轮根据已保存材料作答，请对实际采用的证据添加相应引用 "+
           parentCitations.map(ref=>ref.token).join("、")+"。同名材料可能是不同对象，不能把文献记录当作文件或目录原页。");
     }
-    const prompt=synthesisInstructions+"\n"+JSON.stringify({question:query,questionMode:retrieval?.plan.questionMode,
+    const prompt=synthesisInstructions+(sourceReadComparisons.length?"\n"+sourceChangeInstructions:"")+"\n"+JSON.stringify({question:query,questionMode:retrieval?.plan.questionMode,
       turnAction:turn&&{action:turn.plan.action,goal:turn.plan.goal,evidenceNeed:turn.plan.evidenceNeed,targets:turn.plan.targets.map(({excerpt,...t})=>t),
         rule:"本轮没有执行数据发现检索。只围绕指定对象、已提供摘录和相关历史证据回答；通用原理可解释，但不能伪称本轮查获。未读来源不能说已读，缺少具体事实时明确边界，不补造数据集、论文事实或观测数。不要把本轮问题重新改成找数据。"},
       sourceConstraint:source?{source,rule:"用户明确限定本轮仅使用此来源。正文、引用和结论只能依据本轮提供的该来源记录；不能沿用历史回答或其他渠道的结论代替证据。没有匹配材料时明确说明缺项。"}:undefined,
       researchIntent:retrieval?.plan.researchIntent||turn?.plan.researchIntent,conversationContext:retrieval?.plan.conversationContext||turn?.plan.conversationContext,
       dataQuestion:retrieval?.plan.dataQuestion,dataNeed:retrieval?.plan.dataNeed,mandatorySearches:retrieval?.sourceStatus,history:modelHistory,
       referenceProvenance:conversationReferenceProvenance(history),
-      executionScope:{externalCommunicationAvailable:false,permissionsRequestedByPlatform:false,currentSourceReads:readReceipts,discoveryDelegated:!!retrieval,requiredExactSourceReferences:exactReadRefs,
+      sourceReadComparisons,
+      executionScope:{externalCommunicationAvailable:false,permissionsRequestedByPlatform:false,currentSourceReads:readReceipts,currentAssertionReads:rows.flatMap(row=>row.currentAssertionReadings||[]),discoveryDelegated:!!retrieval,requiredExactSourceReferences:exactReadRefs,
         authorizedParentEvidence:parentCitations.length?{citations:parentCitations,rule:"这些编号来自可追溯的父研究记录。回答所用的事实应逐项引用实际支持它的历史摘录，区分文献资产、目录和实际文件。即便名相同，也必须按具体来源和取得层级判断。不得声称本轮执行了读取，也不得从正文补猜链接。"}:undefined,
-        sourceReadRule:"本轮动作以 currentSourceReads 为准。历史摘录标明是以前取得，不能称本轮已打开；搜索摘要也不是读取。没有读取回执不描述本轮打开网页。失败只能说尝试未取得正文；节选不证明完整原文已读。discoveryDelegated 为 false 时不得声称发过定向检索或补充检索。定向读取有返回时，以 requiredExactSourceReferences 的编号注明来源，即使正文不足也可用它说明核对边界。",
+        sourceReadRule:"currentAssertionReads是本轮新取得的断言节选，独立保留readAt与论文/数据集/block身份；不表示打开网页、PDF或完整论文，引用只能据实际提供的窗口。本轮网页动作以 currentSourceReads 为准。历史摘录标明是以前取得，不能称本轮已打开；搜索摘要也不是读取。没有读取回执不描述本轮打开网页。失败只能说尝试未取得正文；节选不证明完整原文已读。discoveryDelegated 为 false 时不得声称发过定向检索或补充检索。定向读取有返回时，以 requiredExactSourceReferences 的编号注明来源，即使正文不足也可用它说明核对边界。",
         notice:"本请求的工具链只含目录/网页/文献资料读取及显式记录的本地核算，不含联系人员、发邮件或取得社群许可。用户提供或论文记载的许可不能说成平台取得。"},
       materialSelection:{considered:papers.length+(retrieval?.haina.length||0),included:rows.length,
         notice:"身份行与有界节选分别标记；未装入原文不代表来源不存在，候选有论文记录不等于与本题相关。"},workspace:{
@@ -332,7 +339,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     let repaired=false,repairFailed=false,repairInput="";
     const actualCalculations:CalculationReport[]=[];
     let answer:SynthesisAnswer;
-    try{answer=await synthesizeAnswer(prompt,references,webHits,p=>executor.model(p,{outputSchema:synthesisResponseSchema}),signal,
+    try{answer=await synthesizeAnswer(prompt,references,webHits,p=>executor.model(p,{outputSchema:answerSchema}),signal,
       diagnostic=>{repaired=true;repairInput=JSON.stringify(diagnostic);onStage?.("正在重新核对回答中的资料引用",searches);onTool?.({id:"synthesis-repair",kind:"tool",name:"回答引用与结构核对",status:"running",input:repairInput});},
       calculation=>{actualCalculations.push(calculation);onStage?.(calculation.status==="completed"?"已完成受控数值核算，正在核对解释":"数值核算条件未通过，保留待核边界",searches);
         onTool?.({id:"calculation-"+crypto.randomUUID(),kind:"tool",name:"受控数值核算",input:calculation.arguments||"未提供有效参数",status:calculation.status==="completed"?"done":"failed",output:JSON.stringify(calculation),...(calculation.error?{error:calculation.error}:{})});},
@@ -354,9 +361,9 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     // reliable enough to add its latency and incomplete-review notices to every answer.
     if(process.env.ONEEARTH_ANSWER_EVIDENCE_AUDIT==="1" && shouldReviewAnswerEvidence(answer,query,actualCalculations)){
       onStage?.("正在对照具体陈述与已取得的来源",searches);
-      const reviewed=await reviewAnswerEvidence({parsedAnswer:answer,catalogue:rows,references,webHits,question:query,originalSynthesisPrompt:prompt,
+      const reviewed=await reviewAnswerEvidence({parsedAnswer:answer,catalogue:rows,references,webHits,sourceReadComparisons,question:query,originalSynthesisPrompt:prompt,
         calculations:actualCalculations,parentSignal:signal,
-        run:(p,schema,reviewSignal)=>executor.model(p,{outputSchema:schema},reviewSignal),onTool});
+        run:(p,schema,reviewSignal)=>executor.model(p,{outputSchema:schema===synthesisResponseSchema?answerSchema:schema},reviewSignal),onTool});
       signal.throwIfAborted();
       try{verifyExecutionAndReferences(reviewed.answer);answer=reviewed.answer;}
       catch(error){onTool?.({id:"source-read-provenance",kind:"tool",name:"核对来源访问记录",input:"核对模型审读生成的动作描述",
@@ -365,7 +372,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     const {message,sources,webSources}=answer;
     return {...base,message,researchIntent:retrieval?.plan.researchIntent||turn?.plan.researchIntent,conversationContext:retrieval?.plan.conversationContext||turn?.plan.conversationContext,
       conversationEvidence:rememberReadEvidence(previousReadings,searches,memoryOptions),modelExecutor:executor.name,modelIds:sources.map(s=>s.id),
-      conversationAssertionEvidence:rememberAssertionEvidence(previousAssertions,rows,sources.map(s=>s.id),{query:target,assetIds:sources.map(s=>s.id)}),
+      conversationAssertionEvidence:rememberCurrentAssertionReadings(previousAssertions,rows,sources.map(s=>s.id),target),
       answerNotes:{researchNotes:answer.researchNotes,references:answer.references,sources,searches,webSources,limitation:[answer.limitation,webIssue].filter(Boolean).join("\n"),followUp:answer.followUp,reviewed:rows.length,
         elapsedMs:Date.now()-start,executor:executor.name==="codex"?"Codex":"Claude Code"}};
 

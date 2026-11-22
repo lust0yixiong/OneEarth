@@ -100,14 +100,19 @@ export function openTaskStore(file: string) {
       return (db.prepare("SELECT seq,at,payload FROM task_events WHERE id=? AND seq>? ORDER BY seq LIMIT 128")
         .all(id, after) as EventRow[]).map(row => ({...JSON.parse(row.payload), seq:row.seq, at:row.at, taskId:id}));
     },
+    materialEvents(id:string) {
+      return (db.prepare(`SELECT seq,at,payload FROM task_events WHERE id=? AND
+        json_type(payload,'$.researchMaterials')='object' ORDER BY seq`)
+        .all(id) as EventRow[]).map(row=>({...JSON.parse(row.payload),seq:row.seq,at:row.at,taskId:id}));
+    },
     close: () => db.close(),
   };
 }
 type LocalTaskStore = ReturnType<typeof openTaskStore>;
 export type TaskStore = {
-  [Method in keyof LocalTaskStore]: (...args: Parameters<LocalTaskStore[Method]>) =>
+  [Method in Exclude<keyof LocalTaskStore,"materialEvents">]: (...args: Parameters<LocalTaskStore[Method]>) =>
     ReturnType<LocalTaskStore[Method]> | Promise<ReturnType<LocalTaskStore[Method]>>;
-};
+}&{materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>};
 
 export function taskRoutes(router: Router, base: string, store: TaskStore, validate: (body: unknown) => string | undefined | Promise<string | undefined>, options:{researchRecords?:boolean}={}) {
   router.param("taskId", (_req, res, next, id) => {
