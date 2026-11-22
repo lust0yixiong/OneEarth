@@ -21,6 +21,7 @@ import { caseById, sourceLabels } from "../src/domain/catalog";
 import type { DiscoveryContext, DiscoveryResponse } from "../src/domain/types";
 
 import type { researchExecutor } from "./research-executor";
+import {sourceReadReceipts,validateSourceReadClaim} from "./source-read-provenance";
 import type { TurnHistoryEntry as Turn } from "./turn-history";
 
 const segmenter = new Intl.Segmenter("zh", {granularity:"word"});
@@ -252,6 +253,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     const priorReadings=selectedUrls?previousReadings.filter(r=>selectedUrls.has(r.url)):previousReadings;
     const modelHistory=synthesisHistory(history.map(({conversationEvidence:_,conversationAssertionEvidence:__,...turn})=>turn));
     const searches:SearchRun[]=retrieval?.searches || turn?.searches || [];
+    const readReceipts=sourceReadReceipts(searches);
     const webIssue=retrieval?.issues.join("\n") || turn?.searches.filter(r=>r.status==="failed").map(r=>"指定来源未能读取："+(r.error||"尚未取得正文")).join("；") || "";
     const selectedWeb:WebHit[]=turn?turn.plan.targets.flatMap(t=>t.url&&t.kind!=="asset"?[{title:t.title,url:t.url,discoveredBy:t.discoveredBy,snippet:t.kind==="excerpt"?"用户本轮提供的摘录见 workspace.citation；本轮未独立回读完整来源。":"本轮指定的来源身份；身份本身不代表已读正文。"}]:[]):context.attachedScope?.flatMap(i=>i.kind==="reference" && i.reference.kind==="web"?
       [{title:i.reference.title,url:i.reference.url,snippet:"用户主动引用的来源，引用本身不代表已读正文。",referenceType:i.reference.referenceType,discoveredBy:"user" as const}]:[]) || [];
@@ -272,7 +274,8 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       researchIntent:retrieval?.plan.researchIntent||turn?.plan.researchIntent,conversationContext:retrieval?.plan.conversationContext||turn?.plan.conversationContext,
       dataQuestion:retrieval?.plan.dataQuestion,dataNeed:retrieval?.plan.dataNeed,mandatorySearches:retrieval?.sourceStatus,history:modelHistory,
       referenceProvenance:conversationReferenceProvenance(history),
-      executionScope:{externalCommunicationAvailable:false,permissionsRequestedByPlatform:false,
+      executionScope:{externalCommunicationAvailable:false,permissionsRequestedByPlatform:false,currentSourceReads:readReceipts,
+        sourceReadRule:"本轮动作以 currentSourceReads 为准。历史摘录标明是以前取得，不能称本轮已打开；搜索摘要也不是读取。没有读取回执不描述本轮打开网页。失败只能说尝试未取得正文；节选不证明完整原文已读。",
         notice:"本请求的工具链只含目录/网页/文献资料读取及显式记录的本地核算，不含联系人员、发邮件或取得社群许可。用户提供或论文记载的许可不能说成平台取得。"},
       materialSelection:{considered:papers.length+(retrieval?.haina.length||0),included:rows.length,
         notice:"身份行与有界节选分别标记；未装入原文不代表来源不存在，候选有论文记录不等于与本题相关。"},workspace:{
@@ -296,7 +299,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       diagnostic=>{repaired=true;repairInput=JSON.stringify(diagnostic);onStage?.("正在重新核对回答中的资料引用",searches);onTool?.({id:"synthesis-repair",kind:"tool",name:"回答引用与结构核对",status:"running",input:repairInput});},
       calculation=>{actualCalculations.push(calculation);onStage?.(calculation.status==="completed"?"已完成受控数值核算，正在核对解释":"数值核算条件未通过，保留待核边界",searches);
         onTool?.({id:"calculation-"+crypto.randomUUID(),kind:"tool",name:"受控数值核算",input:calculation.arguments||"未提供有效参数",status:calculation.status==="completed"?"done":"failed",output:JSON.stringify(calculation),...(calculation.error?{error:calculation.error}:{})});},
-      {enforceCalculations:true,onCalculationPlan:status=>{onStage?.(status==="running"?"正在核对具体演算的计算参数":status==="failed"?"核算参数准备未完成，正在保留已有内容":status==="done"?"已形成核算请求，继续处理答复":"未形成新增演算请求，继续整理答复",searches);onTool?.({id:"calculation-plan",kind:"tool",name:"核对数值演算参数",input:"草稿含具体演算，先形成有界计算请求",status:status==="running"?"running":status==="done"?"done":status==="failed"?"failed":"partial",...(status!=="running"?{output:status==="done"?"已形成计算请求；计算状态见受控数值核算记录。":status==="failed"?"核算参数准备未完成，保留已有内容。":"未形成新增演算请求；继续回答原问题，来源报告的指标仍按原出处保留。"}:{})});},
+      {validateAnswer:answer=>validateSourceReadClaim(answer,readReceipts),enforceCalculations:true,onCalculationPlan:status=>{onStage?.(status==="running"?"正在核对具体演算的计算参数":status==="failed"?"核算参数准备未完成，正在保留已有内容":status==="done"?"已形成核算请求，继续处理答复":"未形成新增演算请求，继续整理答复",searches);onTool?.({id:"calculation-plan",kind:"tool",name:"核对数值演算参数",input:"草稿含具体演算，先形成有界计算请求",status:status==="running"?"running":status==="done"?"done":status==="failed"?"failed":"partial",...(status!=="running"?{output:status==="done"?"已形成计算请求；计算状态见受控数值核算记录。":status==="failed"?"核算参数准备未完成，保留已有内容。":"未形成新增演算请求；继续回答原问题，来源报告的指标仍按原出处保留。"}:{})});},
       onNodeFailure:({node,error,retained})=>{
         if(node==="answer-repair")repairFailed=true;
         const id=node==="answer-repair"?"synthesis-repair":node==="calculation-plan"?"calculation-plan":"answer-generation";
@@ -317,7 +320,10 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       const reviewed=await reviewAnswerEvidence({parsedAnswer:answer,catalogue:rows,references,webHits,question:query,originalSynthesisPrompt:prompt,
         calculations:actualCalculations,parentSignal:signal,
         run:(p,schema,reviewSignal)=>executor.model(p,{outputSchema:schema},reviewSignal),onTool});
-      signal.throwIfAborted();answer=reviewed.answer;
+      signal.throwIfAborted();
+      try{validateSourceReadClaim(reviewed.answer,readReceipts);answer=reviewed.answer;}
+      catch(error){onTool?.({id:"source-read-provenance",kind:"tool",name:"核对来源访问记录",input:"核对模型审读生成的动作描述",
+        status:"failed",error:error instanceof Error?error.message:"来源访问记录不相符。"});}
     }
     const {message,sources,webSources}=answer;
     return {...base,message,researchIntent:retrieval?.plan.researchIntent||turn?.plan.researchIntent,conversationContext:retrieval?.plan.conversationContext||turn?.plan.conversationContext,

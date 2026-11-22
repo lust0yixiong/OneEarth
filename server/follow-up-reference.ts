@@ -1,6 +1,6 @@
 import type { AnswerReference, DiscoveryResponse } from "../src/domain/types";
 
-type Selection = {
+export type NumberedReference = {
   ordinal:number;
   scope:"literature"|"citations";
   reference:AnswerReference | undefined;
@@ -18,12 +18,10 @@ function positiveOrdinal(raw:string) {
 }
 
 /** Resolve a single explicit reference against the server's stored answer. */
-export function numberedFollowUp(question:string,prior?:DiscoveryResponse):Selection|undefined{
+export function numberedReference(question:string,prior?:DiscoveryResponse):NumberedReference|undefined{
   const refs=prior?.answerNotes?.references;
   if(!refs)return;
   const q=question.normalize("NFKC");
-  const additionalSearch=/(?:另找|再找|再查|补找|继续检索|搜索新的|检索更多|与.{0,30}(?:对比|比较)|compare|more (?:papers|sources)|additional (?:papers|sources))/i;
-  if(additionalSearch.test(q))return;
   const markers=/第\s*([零一二两三四五六七八九十\d]{1,3})\s*(?:(篇|条|个|项|号)\s*)?(论文|文献|文章|引用|来源|依据)|(?:引用|来源|依据)\s*(?:编号\s*)?(?:#\s*)?(\d{1,3})|〔(\d{1,3})〕|\b(?:reference|citation|source)\s*#\s*(\d{1,3})\b/giu;
   const matches=[...q.matchAll(markers)];
   if(matches.length!==1)return;

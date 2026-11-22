@@ -1,3 +1,4 @@
+import {SourceReadClaimError} from "./source-read-provenance";
 import {verifyCalculationRequests,type CalculationReport} from "./verified-calculation";
 import type { AnswerReference, WebHit } from "../src/domain/types";
 import {sourceIdentityInstructions} from "./source-identity";
@@ -42,8 +43,9 @@ export class AnswerReferenceError extends Error {
 /** An official document year is literal text, not a citation number. Require
  * both an issuing-prefix and a serial-number suffix; naked 〔1〕 stays invalid. */
 const documentNumber = /[\p{Script=Han}A-Za-z]{1,30}〔(?:19|20)\d{2}〕\s*\d{1,6}\s*号/gu;
-export type SynthesisRepairDiagnostic={code:"invalid_answer_references"|"invalid_answer_structure";kind:"reference"|"structure";token?:string;problem?:"format"|"out-of-range";available?:number};
+export type SynthesisRepairDiagnostic={code:"invalid_answer_references"|"invalid_answer_structure"|"unsupported_source_read_claim";kind:"reference"|"structure"|"source-read";token?:string;problem?:"format"|"out-of-range";available?:number};
 export function synthesisFailureDiagnostic(error:unknown):SynthesisRepairDiagnostic {
+  if(error instanceof SourceReadClaimError)return {code:"unsupported_source_read_claim",kind:"source-read"};
   return error instanceof AnswerReferenceError
     ? {code:error.code,kind:"reference",token:error.token.slice(0,160),problem:error.problem,available:error.available}
     : {code:"invalid_answer_structure",kind:"structure"};
@@ -140,7 +142,7 @@ export function needsVerifiedCalculation(draft:{message?:string;sections?:Array<
 
 type SynthesisNode="calculation-plan"|"final-answer"|"answer-repair";
 export type SynthesisAnswer=ReturnType<typeof parseSynthesis>&{recovery?:{failedNodes:SynthesisNode[]}};
-type SynthesisOptions={enforceCalculations?:boolean;onCalculationPlan?:(status:"running"|"done"|"partial"|"failed")=>void;
+type SynthesisOptions={validateAnswer?:(answer:SynthesisAnswer)=>void;enforceCalculations?:boolean;onCalculationPlan?:(status:"running"|"done"|"partial"|"failed")=>void;
  onNodeFailure?:(failure:{node:SynthesisNode;error:unknown;retained:boolean})=>void};
 const decodeDraft=(raw:string)=>JSON.parse(raw.trim().replace(/^```(?:json)?\s*|\s*```$/gi,""));
 function intermediateCalculationReply(raw:string){
@@ -185,12 +187,15 @@ export async function synthesizeAnswer(prompt:string,materials:AnswerReference[]
  const parseFinal=(value:string)=>{
   if(finalized&&intermediateCalculationReply(value))throw Error("核算节点的内部说明不能替代用户答复。");
   if(finalized&&!completedCalculations&&needsVerifiedCalculation(decodeDraft(value)))throw Error("没有成功的受控核算，不能发布新演算的具体结果。");
-  return parseSynthesis(value,materials,web);
+  const answer=parseSynthesis(value,materials,web);
+  options?.validateAnswer?.(answer);
+  return answer;
  };
  try{
   const original=decodeDraft(raw),originalRaw=raw;
   calculationRequired=needsVerifiedCalculation(original)||original?.calculationRequests!==undefined&&(!Array.isArray(original.calculationRequests)||original.calculationRequests.length>0);
   checkpoint=answerCheckpoint(original,materials,web);
+  if(checkpoint)try{options?.validateAnswer?.(checkpoint);}catch{checkpoint=undefined;}
   let requests=original?.calculationRequests;
   const needsPlan=options?.enforceCalculations&&(!requests||Array.isArray(requests)&&!requests.length)&&needsVerifiedCalculation(original);
   if(needsPlan){
@@ -223,7 +228,9 @@ export async function synthesizeAnswer(prompt:string,materials:AnswerReference[]
   const correction={
    issue:error instanceof AnswerReferenceError
     ?{kind:error.problem,token:error.token.slice(0,160),available:error.available,explanation:error.problem==="format"?"请使用本轮 [S编号]，不要沿用历史显示编号。":"该编号不在本轮材料中。"}
-    :{kind:"structure",explanation:"请回答用户原问题，正文及分段须符合 JSON 结构；内部参数说明不能替代答复；核算最多一轮，最终回复不再提出请求。"},
+    :error instanceof SourceReadClaimError
+      ?{kind:"source-read",explanation:error.message+"请说明所用的是历史材料或本轮已见摘要，去掉对未执行动作的描述。"}
+      :{kind:"structure",explanation:"请回答用户原问题，正文及分段须符合 JSON 结构；内部参数说明不能替代答复；核算最多一轮，最终回复不再提出请求。"},
    allowedReferences:materials.map((_,i)=>"S"+(i+1)),previousReply:raw.slice(0,24000),
   };
   try{

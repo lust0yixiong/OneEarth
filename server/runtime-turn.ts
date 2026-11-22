@@ -21,7 +21,7 @@ import {rememberConversationReferences} from "../src/domain/reference-memory";
 import {conversationScope,scopedReply} from "./conversation-scope";
 import {discoverConversation} from "./conversation-discovery";
 import { priorResult } from "./runtime-input";
-import { numberedFollowUp } from "./follow-up-reference";
+import { numberedReference } from "./follow-up-reference";
 import {AnswerReferenceError,synthesisFailureDiagnostic} from "./scientific-answer";
 import {scopeLabel} from "../src/domain/question-scope";
 import {navigationTarget,parseCoordinates,photonLookup,wikipediaLookup,placeVariants,canonicalPlaceNames,placeLookupSchema,geocoderEnabled,type NavigationTarget,type PlaceHit} from "./place-lookup";
@@ -110,27 +110,17 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     }
     const navigation = navigationTarget(query);
     const prior = await priorResult(tasks,body.conversationId,body.previousTaskId);
-    const selected = !navigation && numberedFollowUp(query,prior);
-    let ordinalPlan:TurnPlan | undefined;
-    if(selected) {
-      const meta=turnMetadata(query,{previousResearchIntent:planningIntent,history,conversationContext});
-      const ref=selected.reference;
-      const label=selected.scope==="literature"?"文献":"引用";
-      if(ref){
-        const target:TurnPlan["targets"][number]=ref.kind==="asset"
-          ? {key:"asset:"+ref.id,id:ref.id,kind:"asset",title:ref.title,basis:"history",alreadyRead:true}
-          : {key:"web:"+ref.url,url:ref.url,kind:"web",title:ref.title,basis:"history",discoveredBy:"assistant",
-            alreadyRead:conversationEvidence?.some(read=>read.url===ref.url && read.stage!=="search-snippet")};
-        ordinalPlan={...meta,action:target.kind==="web"&&!target.alreadyRead?"read":"respond",
-          evidenceNeed:target.kind==="web"&&!target.alreadyRead?"read":"existing",goal:query,targets:[target],
-          reason:"按上条回答的"+label+"顺序定位。",clarification:null,searchPlan:undefined};
-        report({id:"citation-ordinal",name:"定位上一回答的"+label,kind:"tool",status:"done",
-          input:JSON.stringify({previousTaskId:body.previousTaskId,ordinal:selected.ordinal,scope:selected.scope}),
-          output:JSON.stringify({sourceId:ref.kind==="asset"?ref.id:ref.url})});
-      }else{
-        ordinalPlan={...meta,action:"clarify",evidenceNeed:"unclear",goal:query,targets:[],
-          reason:"上条回答没有该编号。",clarification:"上一条回答里没有第 "+selected.ordinal+" 条"+label+"。你可以点击原引用，或告诉我标题。",searchPlan:undefined};
-      }
+    const selected=navigation?undefined:numberedReference(query,prior);
+    const ref=selected?.reference;
+    if(selected){
+      const label=selected.scope==="literature"?"文献":"来源";
+      report({id:"citation-ordinal",name:"定位上一回答的"+label,kind:"tool",status:ref?"done":"failed",
+        input:JSON.stringify({previousTaskId:body.previousTaskId,ordinal:selected.ordinal,scope:selected.scope}),
+        ...(ref?{output:JSON.stringify({sourceId:ref.kind==="asset"?ref.id:ref.url})}:{error:"该编号不在原回答中。"})});
+      if(!ref)return {result:literatureDisplay({message:"上一条回答里没有第 "+selected.ordinal+" 条"+label+"。你可以点击原引用，或告诉我标题。",
+        clarification:true,runTrace,conversationEvidence,conversationAssertionEvidence,...turnMetadata(query,{
+          previousResearchIntent:planningIntent,history,conversationContext,
+        })})};
     }
     async function find(turn:TurnPlan,continuation?:DiscoveryInput["continuation"]){
       const discoveryId=continuation?randomUUID():taskId;
@@ -174,9 +164,11 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         throw error;
       }
     }
-    const prepared = navigation ? navigationTurn(navigation) : ordinalPlan ? {plan:ordinalPlan,retrieval:undefined} : await prepareTurn({
+    const prepared = navigation ? navigationTurn(navigation) : await prepareTurn({
       question:query, context, history, conversationContext,
-      previousResearchIntent:planningIntent, confirmedQuestion:decision?.dataQuestion,
+      previousResearchIntent:planningIntent,confirmedQuestion:decision?.dataQuestion,numbered:selected,
+      numberedRead:ref?.kind==="web"?prior?.conversationEvidence?.find(read=>read.url===ref.url):undefined,
+      numberedAssertion:ref?.kind==="asset"?prior?.conversationAssertionEvidence?.find(read=>read.assetId===ref.id):undefined,
     }, signal, {
       run: prompt => executor.model(prompt, {outputSchema:turnPlanSchema}),
       stage, report,

@@ -1,6 +1,6 @@
 {
   "name": "oneearth-next",
-  "version": "0.2.0-rc.1",
+  "version": "0.2.0-rc.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -57,6 +57,7 @@
     "test:performance": "node scripts/compare-browser.mjs",
     "test:natural": "node scripts/accept-natural-questions.mjs",
     "access:import": "node scripts/import-access-once.mjs",
+    "test:numbered-research": "node scripts/accept-numbered-research.mjs",
     "test:research-decisions": "node scripts/accept-research-decisions.mjs",
     "test:managed-release": "node scripts/accept-supervised-release.mjs",
     "test:product-restore": "node scripts/accept-product-restore.mjs",
