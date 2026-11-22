@@ -5,7 +5,7 @@ import {once} from "node:events";
 import {randomUUID} from "node:crypto";
 import {setTimeout as delay} from "node:timers/promises";
 import {openTaskStore,taskRoutes,workTasks,type TaskStore} from "./task-store";
-import {initialObservationCheckpoint,recoverObservationRecord,type RuntimeObservationEngine} from "./runtime-observation";
+import {initialObservationCheckpoint,prepareObservationInput,hasObservationCheck,recoverObservationRecord,type RuntimeObservationEngine} from "./runtime-observation";
 import {runtimeWorkerRunner} from "./runtime-worker-runner";
 import type {RuntimeServices} from "./runtime-turn";
 import {observationDiscoveryClient} from "./observation-discovery-client";
@@ -20,9 +20,10 @@ const result:ObservationCheckResult={status:"verified",matches:true,evidence:{ar
 const body=()=>({query:"核对明确指定的已授权观测资料",observationCheck:check,conversationId:randomUUID(),turnId:randomUUID(),history:[],config:{executor:"codex",model:""},
   context:{filters:emptyFilters(),caseId:null,citation:null,selection:null,gridSystem:"h3",layer:"all",camera:{center:[0,0],zoom:1,reason:"controlled"}}});
 async function until(read:()=>boolean|Promise<boolean>,timeout=5000){const start=Date.now();while(!await read()){if(Date.now()-start>timeout)assert.fail("condition did not become true");await delay(20);}}
-async function fixture(t:TestContext,options:{lostInitial?:boolean;lostResult?:boolean;wrongDemand?:boolean;wrongContext?:boolean;pendingFinal?:boolean}={}){
+async function fixture(t:TestContext,options:{lostInitial?:boolean;lostResult?:boolean;wrongDemand?:boolean;wrongContext?:boolean;pendingFinal?:boolean;authorize?:(check:ObservationCheck)=>Promise<string|undefined>}={}){
   const store=openTaskStore(":memory:"),app=express(),requests:any[]=[],submitted=new Map<string,{input:any;task:any}>(),deliveries=new Map<string,any>();
   const jobs=new Map<string,SkillExecutionRequest>(),results=new Map<string,ObservationCheckResult>();let executions=0,cancels=0,acceptances=0,finalRelease=!options.pendingFinal;
+  let digest:string|undefined="a".repeat(64),grantReads=0;
   const engine:RuntimeObservationEngine={submit:async request=>{const old=jobs.get(request.requestId);if(old)assert.deepEqual(request,old);else{jobs.set(request.requestId,structuredClone(request));executions++;}},
     result:async requestId=>results.get(requestId),cancel:async requestId=>{if(jobs.has(requestId)&&!results.has(requestId))results.set(requestId,{status:"cancelled",reason:"user_cancelled"});}};
   app.use(express.json({type:["application/json","application/a2a+json"]}));
@@ -60,8 +61,8 @@ async function fixture(t:TestContext,options:{lostInitial?:boolean;lostResult?:b
     if(finalRelease&&deliveries.size)saved.task.status.state="TASK_STATE_COMPLETED";res.json(saved.task);
   });
   app.post(/^\/tasks\/([^/]+):cancel$/,(req,res)=>{cancels++;const saved=[...submitted.values()].find(s=>s.task.id===req.params[0]);assert.ok(saved);saved.task.status.state="TASK_STATE_CANCELED";res.json(saved.task);});
-  taskRoutes(app,"/api/tasks",store,value=>validateTurn(store,value,{observationCheck:async()=>true}),
-    {researchRecords:true,initialCheckpoint:initialObservationCheckpoint,recoverRecord:task=>recoverObservationRecord(store,task)});
+  taskRoutes(app,"/api/tasks",store,value=>validateTurn(store,value),
+    {researchRecords:true,prepareWhen:hasObservationCheck,prepare:(id,input)=>prepareObservationInput(store,id,input,async check=>{grantReads++;return options.authorize?options.authorize(check):digest;}),recoverRecord:task=>recoverObservationRecord(store,task)});
   const server=app.listen(0,"127.0.0.1");await once(server,"listening");const address=server.address();assert.ok(address&&typeof address!=="string");const origin="http://127.0.0.1:"+address.port;
   const client=observationDiscoveryClient({base:origin,token,timeoutMs:300});
   const services={tasks:store,push:{latest:()=>({records:[]})},coverage:async()=>assert.fail("no grid attached"),researchRegionService:{locate:async()=>null},adminBoundaryDir:"/tmp",canonicalCache:new Map()} as unknown as RuntimeServices;
@@ -71,7 +72,7 @@ async function fixture(t:TestContext,options:{lostInitial?:boolean;lostResult?:b
   t.after(async()=>{await stop?.();server.closeAllConnections();await new Promise<void>(done=>server.close(()=>done()));store.close();});
   const submit=async(input=body(),id=randomUUID())=>{const response=await fetch(origin+"/api/tasks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id,input})});return{id,response};};
   return {store,origin,start,submit,requests,jobs,results,engine,client,coordinator,stop:async()=>{await stop?.();stop=undefined;},executions:()=>executions,cancels:()=>cancels,acceptances:()=>acceptances,
-    deliveries:()=>deliveries.size,releaseFinal:()=>{finalRelease=true;}};
+    deliveries:()=>deliveries.size,releaseFinal:()=>{finalRelease=true;},setDigest:(value:string|undefined)=>{digest=value;},grantReads:()=>grantReads};
 }
 
 test("real task route/worker parks the parent, runs an ordinary queued task, and archives one exact result",async t=>{
@@ -87,6 +88,7 @@ test("real task route/worker parks the parent, runs an ordinary queued task, and
   assert.equal(ref.evidenceLevel,"observation-file");assert.equal(ref.referenceType,"data");assert.deepEqual(ref.observationEvidence,result.evidence);assert.equal(ref.url,undefined);
   assert.deepEqual(record.result.answerNotes.sources.map((s:any)=>s.id),[ref.id]);assert.equal(sourcesFor({answerNotes:record.result.answerNotes} as any).refs.length,1);assert.match(record.result.message,/〔1〕/);
   assert.match(record.result.message,/符合本次/);assert.ok(f.store.events(id,0).some(e=>e.workerReleased));
+  assert.ok(record.result.answerNotes.elapsedMs>0);assert.equal(record.result.answerNotes.elapsedMs,((f.store.step(id)?.completedResult as any).answerNotes.elapsedMs));
   assert.ok(!JSON.stringify(f.store.events(id,0)).includes(token));assert.ok(f.requests.every(r=>!JSON.stringify(r).includes(token)));
 });
 for(const lost of ["lostInitial","lostResult"] as const)test("lost acknowledgement reconciles one discovery Task and one engine execution: "+lost,async t=>{
@@ -140,10 +142,51 @@ test("a returned result waits for the original discovery terminal acknowledgemen
 test("cancelled research reopens actual saved engine material without claiming discovery completion",async t=>{
   const f=await fixture(t,{pendingFinal:true}),{id}=await f.submit();await f.start();await until(()=>f.jobs.size===1);
   f.results.set([...f.jobs.keys()][0],result);await until(()=>f.deliveries()===1);
+  const frozenElapsed=(f.store.step(id)?.cancelledResult as any).answerNotes.elapsedMs;await delay(60);
   assert.equal((await fetch(f.origin+"/api/tasks/"+id,{method:"DELETE"})).status,204);await until(()=>!!(f.store.step(id)?.cancellation as any)?.reconciled);
   const record=await (await fetch(f.origin+"/api/tasks/"+id+"/record")).json();assert.deepEqual(record.result.observationCheckResult,result);
   assert.match(record.result.message,/研究已取消/);assert.match(record.result.message,/不代表原发现委托已完成/);assert.match(record.result.answerNotes.limitation,/不代表时段内连续有效/);
   assert.equal(record.result.answerNotes.references.length,1);assert.deepEqual(record.result.answerNotes.references[0].observationEvidence,result.evidence);
+  assert.equal(record.result.answerNotes.elapsedMs,frozenElapsed);
+});
+
+test("first acceptance freezes the trusted digest; same-id replay after remap/revocation never reauthorizes or resets it",async t=>{
+  const f=await fixture(t),input=body(),id=randomUUID();assert.equal((await f.submit(input,id)).response.status,202);assert.equal(f.grantReads(),1);
+  const original=f.store.step(id)!;assert.equal(original.expectedSha256,"a".repeat(64));
+  f.setDigest("b".repeat(64));assert.equal((await f.submit(input,id)).response.status,202);f.setDigest(undefined);assert.equal((await f.submit(input,id)).response.status,202);
+  assert.equal(f.grantReads(),1);assert.deepEqual(f.store.step(id),original);assert.equal((await f.submit({...input,query:"different"},id)).response.status,409);
+  assert.equal((await f.submit({...input,expectedSha256:"b".repeat(64)} as any)).response.status,400);assert.equal(f.grantReads(),1);
+  await f.start();await until(()=>f.jobs.size===1);assert.equal([...f.jobs.values()][0].expectedSha256,"a".repeat(64));
+  f.results.set([...f.jobs.keys()][0],{status:"not_started",reason:"artifact_not_authorized"});await until(()=>f.store.get(id)?.status==="complete");
+  const saved=await (await fetch(f.origin+"/api/tasks/"+id+"/record")).json();assert.match(saved.result.message,/现已无授权，未启动读取/);assert.deepEqual(saved.result.answerNotes.references,[]);
+  assert.equal((await f.submit(input,id)).response.status,202);const repeated=await (await fetch(f.origin+"/api/tasks/"+id+"/record")).json();assert.deepEqual(repeated,saved);assert.equal(f.grantReads(),1);
+  assert.ok(f.requests.every(req=>!JSON.stringify(req).includes("expectedSha256")),"the expected digest is internal, never part of A2A");
+});
+test("a verified engine result with a different SHA is rejected before archive, citation or result delivery",async t=>{
+  const f=await fixture(t),{id}=await f.submit();await f.start();await until(()=>f.jobs.size===1);
+  f.results.set([...f.jobs.keys()][0],{...result,evidence:{...result.evidence,sha256:"b".repeat(64)}});await until(()=>f.store.get(id)?.status==="failed");
+  assert.equal(f.deliveries(),0);assert.equal(f.store.step(id)?.result,undefined);assert.equal(f.store.terminal(id)?.result,undefined);
+});
+test("an unbound legacy checkpoint stops without authorizing or copying the current digest",async t=>{
+  const f=await fixture(t),input=body(),id=randomUUID(),legacy=initialObservationCheckpoint(id,input,"a".repeat(64)) as any;delete legacy.expectedSha256;
+  f.store.submit(id,input,legacy);await f.start();await until(()=>f.store.get(id)?.status==="failed");
+  assert.equal(f.grantReads(),0);assert.equal(f.requests.length,0);assert.equal(f.jobs.size,0);assert.equal(f.store.step(id)?.expectedSha256,undefined);
+  const record=await (await fetch(f.origin+"/api/tasks/"+id+"/record")).json();assert.match(record.result.message,/请重新提交/);assert.deepEqual(record.result.answerNotes.references,[]);
+});
+test("concurrent preparation rejected after another request commits still replays that original acceptance",async t=>{
+  let first!:(v:string|undefined)=>void,second!:(v:string|undefined)=>void,calls=0;
+  const one=new Promise<string|undefined>(r=>{first=r;}),two=new Promise<string|undefined>(r=>{second=r;});
+  const f=await fixture(t,{authorize:async()=>++calls===1?one:two}),input=body(),id=randomUUID();
+  const p=f.submit(input,id);await until(()=>calls===1);const q=f.submit(input,id);await until(()=>calls===2);
+  first("a".repeat(64));assert.equal((await p).response.status,202);second(undefined);assert.equal((await q).response.status,202);
+  assert.equal(f.store.step(id)?.expectedSha256,"a".repeat(64));assert.equal(f.grantReads(),2);
+});
+test("a completed response checkpoint preserves its first generated elapsed time across restart before finish",async t=>{
+  const f=await fixture(t),{id}=await f.submit();await f.start();await until(()=>f.jobs.size===1);await f.stop();
+  f.results.set([...f.jobs.keys()][0],result);await delay(20);let task=f.store.claim();assert.equal(task?.id,id);await f.coordinator.run(task!,new AbortController().signal,()=>{});
+  task=f.store.claim();assert.equal(task?.id,id);const generated=await f.coordinator.run(task!,new AbortController().signal,()=>{});assert.ok("result" in generated);
+  const snapshot=structuredClone(f.store.step(id)?.completedResult);assert.ok((snapshot as any).answerNotes.elapsedMs>0);await delay(80);
+  const sent=f.requests.length;await f.start();await until(()=>f.store.get(id)?.status==="complete");assert.deepEqual(f.store.terminal(id)?.result,snapshot);assert.equal(f.requests.length,sent);
 });
 test("a no-read capability refusal remains a saved answer with zero file citations",async t=>{
   const f=await fixture(t),{id}=await f.submit();await f.start();await until(()=>f.jobs.size===1);f.results.set([...f.jobs.keys()][0],{status:"not_started",reason:"capacity_not_reserved"});

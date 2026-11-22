@@ -15,7 +15,7 @@ export async function priorResult(tasks: TaskStore, conversationId: string | und
   if (!parent || JSON.parse(parent.body).conversationId !== conversationId) return;
   return (await tasks.terminal(parentId))?.result as DiscoveryResponse | undefined;
 }
-export async function validateTurn(tasks: TaskStore, value: unknown,capabilities:{observationCheck?:(check:ObservationCheck)=>Promise<boolean>}={}): Promise<string | undefined> {
+export async function validateTurnStructure(tasks: TaskStore, value: unknown): Promise<string | undefined> {
   const body = value as Record<string, unknown> | null;
   if (!body || typeof body.query !== "string" || !body.query.trim() || body.query.length > 4000 || !validContext(body.context))
     return "请输入有效问题，并附带当前查询上下文。";
@@ -29,8 +29,7 @@ export async function validateTurn(tasks: TaskStore, value: unknown,capabilities
     const check=parseObservationCheck(body.observationCheck);
     if(!check)return "观测核对的能力版本、资料版本、变量、单位或时段无效。";
     if(body.questionDecision!==undefined||body.clarificationReply!==undefined)return "观测核对不能代替原研究的问题确认或澄清。";
-    try{if(!await capabilities.observationCheck?.(check))return "当前未获准对该资料版本执行观测核对。";}
-    catch{return "观测核对授权暂时无法确认。";}
+    if(body.expectedSha256!==undefined)return "观测文件摘要由服务端授权登记确定，不能由客户端指定。";
   }
   if (body.questionDecision !== undefined) {
     if (!validQuestionDecision(body.questionDecision, body.query)) return "问题确认与原请求不一致，请重新确认。";
@@ -44,6 +43,15 @@ export async function validateTurn(tasks: TaskStore, value: unknown,capabilities
   if(body.clarificationReply!==undefined){
     try{await clarificationParent(tasks,body as Parameters<typeof clarificationParent>[1]);}
     catch(error){return error instanceof Error?error.message:"原澄清无法继续。";}
+  }
+}
+
+export async function validateTurn(tasks:TaskStore,value:unknown,capabilities:{observationCheck?:(check:ObservationCheck)=>Promise<boolean>}={}):Promise<string|undefined>{
+  const issue=await validateTurnStructure(tasks,value);if(issue)return issue;
+  const check=parseObservationCheck((value as {observationCheck?:unknown}).observationCheck);
+  if(check){
+    try{if(!await capabilities.observationCheck?.(check))return "当前未获准对该资料版本执行观测核对。";}
+    catch{return "观测核对授权暂时无法确认。";}
   }
 }
 

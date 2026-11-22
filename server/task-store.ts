@@ -55,7 +55,7 @@ export function openTaskStore(file: string) {
       const now = Date.now();
       if (!db.prepare("UPDATE tasks SET status=?,updated=? WHERE id=? AND status IN ('running','queued')").run(status, now, id).changes) return false;
       const step=db.prepare("SELECT checkpoint FROM task_steps WHERE id=?").get(id) as {checkpoint:string}|undefined;
-      const retained=step&&status!=="complete"?JSON.parse(step.checkpoint)[status==="cancelled"?"cancelledResult":"failedResult"]:undefined;
+      const retained=payload.result===undefined&&step&&status!=="complete"?JSON.parse(step.checkpoint)[status==="cancelled"?"cancelledResult":"failedResult"]:undefined;
       write(id,retained?{...payload,result:retained}:payload,now);
       return true;
     });
@@ -153,7 +153,9 @@ export type TaskStore = {
   [Method in "step"|"saveStep"|"park"|"cancelStep"|"cancelledSteps"]?:(...args:Parameters<LocalTaskStore[Method]>)=>ReturnType<LocalTaskStore[Method]>|Promise<ReturnType<LocalTaskStore[Method]>>;
 };
 
-export function taskRoutes(router: Router, base: string, store: TaskStore, validate: (body: unknown) => string | undefined | Promise<string | undefined>, options:{researchRecords?:boolean;initialCheckpoint?:(id:string,input:unknown)=>Payload|undefined;recoverRecord?:(task:Task)=>Promise<unknown>}={}) {
+export type TaskPreparation={checkpoint?:Payload;error?:string};
+export function taskRoutes(router: Router, base: string, store: TaskStore, validate: (body: unknown) => string | undefined | Promise<string | undefined>, options:{researchRecords?:boolean;initialCheckpoint?:(id:string,input:unknown)=>Payload|undefined;recoverRecord?:(task:Task)=>Promise<unknown>;
+  prepareWhen?:(input:unknown)=>boolean;prepare?:(id:string,input:unknown)=>Promise<TaskPreparation>}={}) {
   router.param("taskId", (_req, res, next, id) => {
     if (!taskIdPattern.test(id)) { res.status(400).json({error:"无效的任务编号。"}); return; }
     next();
@@ -161,10 +163,19 @@ export function taskRoutes(router: Router, base: string, store: TaskStore, valid
   router.post(base, async (req, res) => {
     const {id, input} = req.body ?? {};
     if (typeof id !== "string" || !taskIdPattern.test(id)) { res.status(400).json({error:"无效的任务编号。"}); return; }
-    const issue = await validate(input);
-    if (issue) { res.status(400).json({error:issue}); return; }
+    const prepare=options.prepare&&(!options.prepareWhen||options.prepareWhen(input))?options.prepare:undefined;
+    if(!prepare){const issue=await validate(input);if(issue){res.status(400).json({error:issue});return;}}
     try {
-      const task = await store.submit(id, input,options.initialCheckpoint?.(id,input));
+      let checkpoint:Payload|undefined;
+      if(prepare&&!await store.get(id)){
+        const prepared=await prepare(id,input);
+        if(prepared.error){
+          // A concurrent first acceptance wins even if authorization was revoked
+          // while this request was preparing. submit still checks the input hash.
+          if(!await store.get(id)){res.status(400).json({error:prepared.error});return;}
+        }else checkpoint=prepared.checkpoint;
+      }
+      const task = await store.submit(id, input,prepare?checkpoint:options.initialCheckpoint?.(id,input));
       res.status(202).set("Cache-Control", "no-store").json({id, status:task.status, created:task.created});
     } catch (error) {
       if (!(error instanceof TaskConflict)) throw error;

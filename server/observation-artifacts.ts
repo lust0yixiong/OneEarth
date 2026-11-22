@@ -53,10 +53,10 @@ export async function observationArtifact(
   return {file,sha256:match.sha256};
 }
 
-export async function authorizeObservationCheck(check: ObservationCheck): Promise<boolean> {
-  if(!process.env.ONEEARTH_SKILL_SERVICE_TOKEN||process.env.ONEEARTH_SKILL_SERVICE_TOKEN.length<32)return false;
-  try {return !!await observationArtifact(check);}
-  catch {return false;}
+export async function authorizeObservationDigest(check: ObservationCheck): Promise<string|undefined> {
+  if(!process.env.ONEEARTH_SKILL_SERVICE_TOKEN||process.env.ONEEARTH_SKILL_SERVICE_TOKEN.length<32)return;
+  try {return (await observationArtifact(check))?.sha256;}
+  catch {return undefined;}
 }
 
 export async function readObservationArtifact(

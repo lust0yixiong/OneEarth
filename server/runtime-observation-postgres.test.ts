@@ -36,13 +36,13 @@ test("isolated PostgreSQL preserves parked research, releases the production wor
   const client:ReturnType<typeof observationDiscoveryClient>={submit:async message=>{if(!messages.has(message)){messages.add(message);accepted++;}return structuredClone(remote);},
     snapshot:async()=>structuredClone(remote),deliver:async(_binding,_message,input)=>{assert.equal(input.afterSeq,7);assert.equal(input.requestId,demand.requestId);assert.deepEqual(input.result,result);delivered++;
       remote.state="TASK_STATE_COMPLETED";remote.events.push({seq:8,artifactId:"result",result});return structuredClone(remote);},cancel:async()=>"TASK_STATE_CANCELED"};
-  const engine:RuntimeObservationEngine={submit:async request=>{assert.equal(request.requestId,demand.requestId);assert.equal(request.discoveryTaskId,remote.taskId);if(!submitted)submitted++;},result:async()=>obtained,cancel:async()=>{}};
+  const engine:RuntimeObservationEngine={submit:async request=>{assert.equal(request.requestId,demand.requestId);assert.equal(request.discoveryTaskId,remote.taskId);assert.equal(request.expectedSha256,"b".repeat(64));if(!submitted)submitted++;},result:async()=>obtained,cancel:async()=>{}};
   async function start(){const services={tasks:store!,push:{latest:()=>({records:[]})},coverage:async()=>assert.fail(),researchRegionService:{locate:async()=>null},adminBoundaryDir:dir,canonicalCache:new Map()} as unknown as RuntimeServices;
     const runner=runtimeWorkerRunner(services,engine,{client,pollMs:20});stop=await workTasks(store!,runner.run,{maintenance:runner.maintenance});}
   async function until(read:()=>Promise<boolean>){const start=Date.now();while(!await read()){if(Date.now()-start>6000)assert.fail("persistent worker did not advance");await delay(20);}}
-  const checkpoint=initialObservationCheckpoint(id,body)!;await store.submit(id,body,checkpoint);await start();await until(async()=>submitted===1);
+  const checkpoint=initialObservationCheckpoint(id,body,"b".repeat(64))!;await store.submit(id,body,checkpoint);await start();await until(async()=>submitted===1);
   const originalMessage=(await store.step!(id))!.initialMessageId;
-  assert.equal((await store.submit(id,body,initialObservationCheckpoint(id,body))).status,"running");assert.equal((await store.step!(id))!.initialMessageId,originalMessage);
+  assert.equal((await store.submit(id,body,initialObservationCheckpoint(id,body,"c".repeat(64)))).status,"running");assert.equal((await store.step!(id))!.initialMessageId,originalMessage);assert.equal((await store.step!(id))!.expectedSha256,"b".repeat(64));
   await assert.rejects(async()=>{await store!.submit(id,{...body,query:"conflicting"});},TaskConflict);
   const ordinary=randomUUID(),normal={...body,query:"把地图移动到 120.2E, 30.3N"};delete (normal as any).observationCheck;await store.submit(ordinary,normal);
   await until(async()=>(await store!.get(ordinary))?.status==="complete");assert.equal((await store.get(id))?.status,"running");
@@ -56,7 +56,7 @@ test("isolated PostgreSQL preserves parked research, releases the production wor
   }finally{await audit.end();}
   assert.ok((await store.events(id,0)).some(row=>row.stepRecovered));assert.equal((await store.step!(id))!.initialMessageId,originalMessage);
   await stop!();stop=undefined;const savedCheckpoint=(await store.step!(id))!;
-  const stoppedId=randomUUID();await store.submit(stoppedId,body,initialObservationCheckpoint(stoppedId,body));
+  const stoppedId=randomUUID();await store.submit(stoppedId,body,initialObservationCheckpoint(stoppedId,body,"b".repeat(64)));
   // The cancellation and checkpoint updates share the parent row lock.
   const picked=await store.claim();assert.equal(picked?.id,stoppedId);
   await store.park!(stoppedId,savedCheckpoint,Date.now()+10000);await store.finish(stoppedId,"cancelled",{code:"cancelled"});
@@ -66,7 +66,7 @@ test("isolated PostgreSQL preserves parked research, releases the production wor
   const indexed=productDatabase("RUNTIME");try{
     const rows=(await indexed.query("SELECT reference FROM runtime_references WHERE task_id=$1",[stoppedId])).rows;assert.equal(rows.length,1);assert.deepEqual(rows[0].reference.observationEvidence,result.evidence);
     assert.match(((await store.terminal(stoppedId))!.result as any).message,/研究已取消/);
-    const emptyId=randomUUID();await store.submit(emptyId,body,initialObservationCheckpoint(emptyId,body));assert.equal((await store.claim())?.id,emptyId);await store.finish(emptyId,"cancelled",{code:"cancelled"});
+    const emptyId=randomUUID();await store.submit(emptyId,body,initialObservationCheckpoint(emptyId,body,"b".repeat(64)));assert.equal((await store.claim())?.id,emptyId);await store.finish(emptyId,"cancelled",{code:"cancelled"});
     assert.equal(await store.saveStep!(emptyId,savedCheckpoint),false);await store.cancelStep!(emptyId,{reconciled:true},{result:savedCheckpoint.cancelledResult});
     assert.equal((await store.terminal(emptyId))!.result,undefined);assert.equal((await indexed.query("SELECT 1 FROM runtime_references WHERE task_id=$1",[emptyId])).rowCount,0);
   }finally{await indexed.end();}

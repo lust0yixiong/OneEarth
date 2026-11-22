@@ -21,7 +21,7 @@ export type ObservationCheckResult =
   | {status: "not_started"|"failed"|"cancelled"|"unknown"; reason: string};
 
 export type SkillDemand = {requestId: string; researchTaskId: string; check: ObservationCheck};
-export type SkillExecutionRequest = SkillDemand & {discoveryTaskId: string};
+export type SkillExecutionRequest = SkillDemand & {discoveryTaskId: string; expectedSha256: string};
 export type SkillResultSubmission = {requestId: string; afterSeq: number; result: ObservationCheckResult};
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -65,12 +65,16 @@ export function parseObservationReadTarget(value: unknown): ObservationReadTarge
     return {artifactId,version,variable};
 }
 
+export function observationSha256(value: unknown): value is string {
+  return typeof value==="string" && /^[0-9a-f]{64}$/.test(value);
+}
+
 export function validObservationEvidence(value: unknown): value is ObservationEvidence {
   if (!object(value) || !hasKeys(value, ["artifactId","version","sha256","variable","unit","count","first","last"]))
     return false;
   const {artifactId,version,sha256,variable,unit,count,first,last} = value;
   if (!observationId(artifactId) || !observationId(version) || !observationId(variable) || !observationUnit(unit) ||
-      typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256) || typeof count !== "number" ||
+      !observationSha256(sha256) || typeof count !== "number" ||
       !Number.isSafeInteger(count) || count < 0) return false;
   return count === 0 ? first === null && last === null
     : observationDate(first) && observationDate(last) && first <= last;

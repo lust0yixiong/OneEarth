@@ -10,8 +10,8 @@ import { postgresTaskStore } from "./postgres-task-store";
 import {runtimePaperRoutes} from "./runtime-paper-routes";
 import { queryHainaCatalog, queryPapers } from "./discovery-a2a-client";
 import { runtimeWorkbenchQueries } from "./runtime-workbench-queries";
-import {authorizeObservationCheck} from "./observation-execution";
-import {initialObservationCheckpoint,recoverObservationRecord} from "./runtime-observation";
+import {authorizeObservationDigest} from "./observation-execution";
+import {prepareObservationInput,hasObservationCheck,recoverObservationRecord} from "./runtime-observation";
 
 const state=process.env.ONEEARTH_STATE_DIR || path.resolve(".local/state");
 mkdirSync(state,{recursive:true,mode:0o700});
@@ -25,8 +25,9 @@ app.use("/api/results",await resultSnapshots());
 app.use(express.json({limit:"256kb"}));
 app.use("/api/paper-records",runtimePaperRoutes());
 app.get("/api/health",(_req,res)=>res.json({status:"ok",service:"runtime",version:releaseVersion}));
-taskRoutes(app,"/api/tasks",tasks,input=>validateTurn(tasks,input,{observationCheck:authorizeObservationCheck}),
-  {researchRecords:true,initialCheckpoint:initialObservationCheckpoint,recoverRecord:task=>recoverObservationRecord(tasks,task)});
+taskRoutes(app,"/api/tasks",tasks,input=>validateTurn(tasks,input),
+  {researchRecords:true,prepareWhen:hasObservationCheck,prepare:(id,input)=>prepareObservationInput(tasks,id,input,authorizeObservationDigest),
+    recoverRecord:task=>recoverObservationRecord(tasks,task)});
 app.use((_error:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{
   res.status(400).json({error:"运行时任务请求无效。"});
 });
