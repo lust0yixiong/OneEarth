@@ -1,4 +1,13 @@
-# OneEarth Next
+# OneEarth
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="public/brand/OneEarth-lockup-dark-transparent@1x.png">
+  <img alt="OneEarth" width="224" src="public/brand/OneEarth-lockup-light-transparent@1x.png">
+</picture>
+
+让地球可被理解和计算。
+
+新成员从[开发协作规范](CONTRIBUTING.md)开始。产品边界见[目标与架构](docs/spec/01-目标与架构.md)，当前接口及待拆依赖见[架构与接口审查](docs/架构与接口现状.md)，正式图标见[品牌素材说明](public/brand/README.md)。
 
 OneEarth 用于提出研究问题、核对数据和文献来源，并在球体上查看数据的空间范围与时相。Mac mini 是首个部署环境。历史开发基线保存在 `v0.1.0`，Mac mini 存储与恢复基线为 `v0.2.0-dev.1`，后续候选版本见验收记录。本机入口和实测证据见 [产品验收记录](evidence/product/ACCEPTANCE.md)。开发基线的截图、故障与隔离复测见 [历史验收记录](evidence/ACCEPTANCE.md)。
 

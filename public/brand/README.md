@@ -1,13 +1,15 @@
-# OneEarth A02 品牌资源
+# OneEarth 品牌素材
 
-源目录为用户指定的 `素材/视觉VI/OneEarth-A02-VI-System-v1.2-2026-11-03`。
+本仓库使用设计主目录 `OneEarth/素材/视觉VI/` 中的正式包 `OneEarth-A02-VI-System-v1.3-2026-11-06`。该版保留 A02 定稿图形与字标，增加 v15 线稿。下表中的组合、字标、线稿和 ICO 均已和母版逐字节核对。GitHub 深色与浅色主题分别使用对应的官方透明底主组合。
 
-- 页头采用 `02-Brand-Assets/02-Lockups/PNG/OneEarth-lockup-light-transparent@1x.png`，直接复制原文件，保留 A02 彩色图形、黑色字标与红色 R 竖笔，按原比例显示。
-- 浏览器图标采用 `02-Brand-Assets/04-App-Icons/OneEarth.ico`；页面使用从该文件直接提取的 16 / 32 px PNG 图形，默认 `/favicon.ico` 同样保留原版图标。Safari 的 `apple-touch-icon` 直接提取原文件的 256 px PNG，各图标引用附带版本，避免沿用旧地址的缓存。
-- 当前软件界面使用浅色背景，选择浅底正式主组合。依据包内《README-使用说明》和可选副标题说明，软件导航采用无副标题组合，品牌核心表达放在产品文案中。
+| 场景 | 仓库资源 | 母版内位置 |
+| --- | --- | --- |
+| 浅色页头、关于、设置及 README | [浅色主组合](OneEarth-lockup-light-transparent@1x.png) | `02-Brand-Assets/02-Lockups/PNG/` |
+| GitHub 深色主题 | [深色主组合](OneEarth-lockup-dark-transparent@1x.png) | 同上 |
+| Chat 答复署名 | [黑字红笔字标](OneEarth-wordmark-black-red.svg) | `02-Brand-Assets/03-Wordmarks/SVG/` |
+| 小尺寸应用图标 | [OneEarth.ico](OneEarth.ico)、[网站 ICO](../favicon.ico)、[16 px](OneEarth-favicon-16.png)、[32 px](OneEarth-favicon-32.png)、[触屏图标](../apple-touch-icon.png) | `02-Brand-Assets/04-App-Icons/OneEarth.ico`。两个 ICO 内容相同，三个 PNG 分别是该 ICO 内的 16、32 和 256 px 原始帧 |
+| 缺图的数据卡片、大尺寸线稿展示 | [512 px 黑线稿](OneEarth-A02-line-refine-v15-black-512.png)、[横排线稿](OneEarth-v15-horizontal-light.svg) | `02-Brand-Assets/06-Line-Art-v15/{PNG,Lockups}/` |
 
-产品定位参照 http://127.0.0.1:5173/#research 的“地球科学国际科技公共产品”“让地球可被理解和计算”以及 DataX“有依据的数据发现”的使用描述。当前工作区呈现数据发现、内容查看与来源追溯，案例服务与模拟数据的状态说明沿用实际实现。
+使用原比例与配套背景。小图标使用实心 A02，v15 线稿独立图形用于 128 px 及以上场景。产品标语为「让地球可被理解和计算」。目录中的历史动效文件不作为静态标识母版。
 
-v1.3 的 `02-Brand-Assets/06-Line-Art-v15/Lockups/OneEarth-v15-horizontal-light.svg` 用于「关于 OneEarth」中的较大展示。页头的小尺寸组合沿用实心图形，符合该版线稿的屏显尺寸说明。
-
-数据触达卡片缺图时使用同版 VI 提供的 `PNG/OneEarth-A02-line-refine-v15-black-512.png`，浅底居中按 144 CSS px 显示。
+从仓库根目录运行 `shasum -a 256 -c public/brand/SHA256SUMS` 可复核十个发布文件。品牌升级时，在同一 PR 提供正式包名称、版本、使用场景以及新旧视觉对照，更新引用及[校验清单](SHA256SUMS)。
