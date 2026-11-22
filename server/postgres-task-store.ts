@@ -108,6 +108,11 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   let workerConnection:PoolClient|undefined;
   return {
     get,
+    ...(namespace==="runtime"?{async materialEvents(id:string){
+      const result=await pool.query<{seq:string;at:string;payload:Payload}>(`SELECT seq,at,payload FROM runtime_events
+        WHERE id=$1 AND jsonb_typeof(payload->'researchMaterials')='object' ORDER BY seq`,[id]);
+      return result.rows.map(({seq,at,payload})=>({...payload,seq:Number(seq),at:Number(at),taskId:id}));
+    }}:{}),
     async terminal(id){
       const result=await pool.query<{payload:Payload}>(`SELECT e.payload FROM ${events} e JOIN ${tasks} t ON t.id=e.id
         WHERE e.id=$1 AND t.status NOT IN ('queued','running') ORDER BY e.seq DESC LIMIT 1`,[id]);

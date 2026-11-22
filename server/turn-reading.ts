@@ -6,8 +6,9 @@ import {deepSeekFetch} from "./deepseek-web";
 
 /** Exact public identities only. The existing transport pins DNS and redirects.
  * No keyword lookup, library discovery or alternate-source substitution here. */
+type ReadTarget = Pick<TurnTarget,"title"|"url"|"discoveredBy">;
 type SourceRead={engine:"原站读取"|"PDF 原文"|"DeepSeek Fetch";hits:WebHit[];requestUrl:string;warning:string;fetchIssue?:string};
-export async function readTurnSource(target:TurnTarget,question:string,signal:AbortSignal,configuredFetch=false):Promise<SourceRead>{
+export async function readTurnSource(target:ReadTarget,question:string,signal:AbortSignal,configuredFetch=false):Promise<SourceRead>{
   const hit:WebHit={title:target.title,url:target.url!,snippet:"本轮指定的来源身份，尚未读取正文。"};
   const pdf=/\.pdf(?:\/content)?$/i.test(new URL(target.url!).pathname)||/\.pdf(?:$|[?#])/i.test(target.title);
   const page=new URL(target.url!).hash.match(/^#page=(\d+)$/)?.[1],focus=page?question+" 第 "+page+" 页":question;
@@ -35,7 +36,7 @@ export async function readTurnSource(target:TurnTarget,question:string,signal:Ab
   }
 }
 
-export async function readPlannedSources(plan:TurnPlan,question:string,signal:AbortSignal,deps:{
+export async function readPlannedSources(plan:{action:TurnPlan["action"];targets:ReadTarget[]},question:string,signal:AbortSignal,deps:{
   read?:typeof readTurnSource;configuredFetch?:boolean;callPrefix?:string;stage:(text:string,searches?:SearchRun[])=>void;report:(call:ToolCall)=>void;
 }){
   if(plan.action!=="read")return [];

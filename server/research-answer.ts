@@ -26,6 +26,7 @@ import {materialAccessEvidence,publicMaterialUrl,validateAnswerMaterialClaims} f
 import {webMaterial} from "../src/domain/web-material";
 import type { TurnHistoryEntry as Turn } from "./turn-history";
 import type { ParentResearchEvidence } from "./parent-research-evidence";
+import {withCurrentAssertionReadings,rememberCurrentAssertionReadings,type CurrentAssertionReading} from "./runtime-assertion-evidence";
 
 // Only bundled public catalogue entries may authorize a structured file URL.
 const publishedFileUrls=new Set(cases.flatMap(c=>c.needs.flatMap(n=>
@@ -232,7 +233,7 @@ export function shouldReviewAnswerEvidence(answer:{message:string;limitation?:st
   if(verifiedExample&&explicitMathExample&&text.length<500&&!sourceClaim)return false;
   return answer.message.length>=300 || /论文|清单|版本|\d/.test(answer.message);
 }
-export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[];priorEvidence?:ParentResearchEvidence}) {
+export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[];priorEvidence?:ParentResearchEvidence},assertionReadings:CurrentAssertionReading[]=[]) {
     if(retrieval?.questionCheck || retrieval?.clarification || retrieval?.plan.questionMode==="reframe")
       throw Error("转换后的问题尚未得到用户确认，不能生成答复。");
     const start=Date.now();
@@ -255,7 +256,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     const searchPhrases=[...(retrieval?.plan.paper.facets.flatMap(f=>f.queries)||[]),...(retrieval?.plan.web.map(q=>q.web)||[]),...(retrieval?.plan.hainaQueries||[])];
     const previousAssertions=history.filter(t=>t.role==="assistant" && t.conversationAssertionEvidence!==undefined).at(-1)?.conversationAssertionEvidence || [];
     const priorAssertions=turn?.priorEvidence?.assertions??(selectedOnly?previousAssertions.filter(r=>selectedOnly.has(r.assetId)):previousAssertions);
-    const rows=withAssertionMemory(catalogueRows(target,context,base,history,papers,retrieval?.haina,source,retrieval?.plan.questionMode==="confirmed"?retrieval.plan.dataQuestion:query,searchPhrases,selectedOnly),priorAssertions,query,source||context.filters.source,!!turn?.priorEvidence);
+    const rows=withCurrentAssertionReadings(withAssertionMemory(catalogueRows(target,context,base,history,papers,retrieval?.haina,source,retrieval?.plan.questionMode==="confirmed"?retrieval.plan.dataQuestion:query,searchPhrases,selectedOnly),priorAssertions,query,source||context.filters.source,!!turn?.priorEvidence),assertionReadings,query);
     const previousReadings=history.filter(t=>t.role==="assistant" && t.conversationEvidence!==undefined).at(-1)?.conversationEvidence || [];
     const priorReadings=turn?.priorEvidence?.readings??(selectedUrls?previousReadings.filter(r=>selectedUrls.has(r.url)):previousReadings);
     const modelHistory=synthesisHistory(history.map(({conversationEvidence:_,conversationAssertionEvidence:__,...turn})=>turn));
@@ -305,9 +306,9 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       researchIntent:retrieval?.plan.researchIntent||turn?.plan.researchIntent,conversationContext:retrieval?.plan.conversationContext||turn?.plan.conversationContext,
       dataQuestion:retrieval?.plan.dataQuestion,dataNeed:retrieval?.plan.dataNeed,mandatorySearches:retrieval?.sourceStatus,history:modelHistory,
       referenceProvenance:conversationReferenceProvenance(history),
-      executionScope:{externalCommunicationAvailable:false,permissionsRequestedByPlatform:false,currentSourceReads:readReceipts,discoveryDelegated:!!retrieval,requiredExactSourceReferences:exactReadRefs,
+      executionScope:{externalCommunicationAvailable:false,permissionsRequestedByPlatform:false,currentSourceReads:readReceipts,currentAssertionReads:rows.flatMap(row=>row.currentAssertionReadings||[]),discoveryDelegated:!!retrieval,requiredExactSourceReferences:exactReadRefs,
         authorizedParentEvidence:parentCitations.length?{citations:parentCitations,rule:"这些编号来自可追溯的父研究记录。回答所用的事实应逐项引用实际支持它的历史摘录，区分文献资产、目录和实际文件。即便名相同，也必须按具体来源和取得层级判断。不得声称本轮执行了读取，也不得从正文补猜链接。"}:undefined,
-        sourceReadRule:"本轮动作以 currentSourceReads 为准。历史摘录标明是以前取得，不能称本轮已打开；搜索摘要也不是读取。没有读取回执不描述本轮打开网页。失败只能说尝试未取得正文；节选不证明完整原文已读。discoveryDelegated 为 false 时不得声称发过定向检索或补充检索。定向读取有返回时，以 requiredExactSourceReferences 的编号注明来源，即使正文不足也可用它说明核对边界。",
+        sourceReadRule:"currentAssertionReads是本轮新取得的断言节选，独立保留readAt与论文/数据集/block身份；不表示打开网页、PDF或完整论文，引用只能据实际提供的窗口。本轮网页动作以 currentSourceReads 为准。历史摘录标明是以前取得，不能称本轮已打开；搜索摘要也不是读取。没有读取回执不描述本轮打开网页。失败只能说尝试未取得正文；节选不证明完整原文已读。discoveryDelegated 为 false 时不得声称发过定向检索或补充检索。定向读取有返回时，以 requiredExactSourceReferences 的编号注明来源，即使正文不足也可用它说明核对边界。",
         notice:"本请求的工具链只含目录/网页/文献资料读取及显式记录的本地核算，不含联系人员、发邮件或取得社群许可。用户提供或论文记载的许可不能说成平台取得。"},
       materialSelection:{considered:papers.length+(retrieval?.haina.length||0),included:rows.length,
         notice:"身份行与有界节选分别标记；未装入原文不代表来源不存在，候选有论文记录不等于与本题相关。"},workspace:{
@@ -365,7 +366,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     const {message,sources,webSources}=answer;
     return {...base,message,researchIntent:retrieval?.plan.researchIntent||turn?.plan.researchIntent,conversationContext:retrieval?.plan.conversationContext||turn?.plan.conversationContext,
       conversationEvidence:rememberReadEvidence(previousReadings,searches,memoryOptions),modelExecutor:executor.name,modelIds:sources.map(s=>s.id),
-      conversationAssertionEvidence:rememberAssertionEvidence(previousAssertions,rows,sources.map(s=>s.id),{query:target,assetIds:sources.map(s=>s.id)}),
+      conversationAssertionEvidence:rememberCurrentAssertionReadings(previousAssertions,rows,sources.map(s=>s.id),target),
       answerNotes:{researchNotes:answer.researchNotes,references:answer.references,sources,searches,webSources,limitation:[answer.limitation,webIssue].filter(Boolean).join("\n"),followUp:answer.followUp,reviewed:rows.length,
         elapsedMs:Date.now()-start,executor:executor.name==="codex"?"Codex":"Claude Code"}};
 

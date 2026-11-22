@@ -12,6 +12,7 @@ import {regionalForDataset} from "../domain/regional-cases";
 import {useWorkspace} from "../domain/store";
 import {emptyFilters} from "../domain/spatial";
 import {PaperEvidenceCard} from "./PaperEvidenceCard";
+import {paperId} from "../domain/paper-record";
 import {CitationIcon} from "./CitationIcon";
 import {citationTypeLabels} from "../domain/citation-types";
 import {useSourcePreviewHost,usePreviewPosition} from "./SourcePreviewHost";
@@ -26,7 +27,26 @@ function safeUrl(raw:string|undefined) {
 
 const categories:{type:CitationType;name:string}[]=(['data','paper','web'] as const).map(type=>({type,name:citationTypeLabels[type]}));
 
-export function SourceDrawer({refs,title,message,question,close}:{refs:AnswerReference[];title:string;message:Message;question?:string;close:()=>void}) {
+function SavedPaperEvidence({assetId,entries}:{assetId:string;entries:Message["conversationAssertionEvidence"]}) {
+  const saved=(Array.isArray(entries)?entries:[]).filter(entry=>entry?.stage==="assertion-excerpt" && entry.assetId===assetId &&
+    typeof entry.quote==="string" && entry.quote.trim());
+  if (!saved.length) return <small>此研究记录未保存这条来源的文献摘录。</small>;
+  return <details className="oe-paper" aria-label="已保存文献依据">
+    <summary>查看已保存依据</summary>
+    {saved.map(entry=><article className="oe-paper-study"
+      key={JSON.stringify([entry.paperId,entry.rqId,entry.datasetId,entry.block,entry.start,entry.end])}>
+      <h3>{entry.label}</h3>
+      {entry.block && <small>{entry.block}</small>}
+      <blockquote><p>{entry.quote}</p></blockquote>
+      <small>保存时间 {Number.isFinite(Date.parse(entry.recordedAt))?entry.recordedAt:"未记录"}
+        {entry.sourceTurn!==undefined && " · 第 "+entry.sourceTurn+" 轮"}
+        {entry.excerptTruncated?" · 保存时截断":entry.partial?" · 原文有省略":""}
+      </small>
+    </article>)}
+  </details>;
+}
+
+export function SourceDrawer({refs,title,message,archived,question,close}:{refs:AnswerReference[];title:string;message:Message;archived:boolean;question?:string;close:()=>void}) {
   const previewHost=useRef<HTMLDivElement>(null);
   const {setHost,frame}=useSourcePreviewHost();
   const previewPosition=usePreviewPosition();
@@ -37,8 +57,11 @@ export function SourceDrawer({refs,title,message,question,close}:{refs:AnswerRef
     "--source-preview-height":previewPosition.height+"px",
     "--source-preview-bottom":(innerHeight-Number(previewPosition.top)-Number(previewPosition.height))+"px",
   } as CSSProperties:undefined;
-  const targetUrls=refs.flatMap(r=>r.kind==="web"?[r.url]:assetById.get(r.id)?.url?[assetById.get(r.id)!.url!]:[]);
-  const previewWeb=useWebPreview(message.answerNotes?.webSources,()=>{patch({inspector:null});setHost(previewHost.current);},targetUrls);
+  const targetUrls=archived?[]:refs.flatMap(r=>r.kind==="web"?[r.url]:assetById.get(r.id)?.url?[assetById.get(r.id)!.url!]:[]);
+  const webSources=message.answerNotes?.webSources;
+  const previewWeb=useWebPreview(archived?undefined:webSources,()=>{
+    patch({inspector:null});setHost(previewHost.current);
+  },targetUrls,()=>webSources);
   const revision=useCatalogRevision();
   const locations=useMemo(()=>{
     const batch=answerMapBatch(message);
@@ -130,7 +153,8 @@ export function SourceDrawer({refs,title,message,question,close}:{refs:AnswerRef
       const hasPaperEvidence=details.type==="paper";
       const layer=a && (regionalForDataset(a.datasetId)||(a.datasetId==="gfs-wind"?"gfs-wind":undefined));
       return <section className="oe-network-dataset" data-reference-type={details.type} key={r.id}>
-        {hasPaperEvidence?<PaperEvidenceCard reference={r}/>:<button className="oe-source-card" onClick={()=>inspect(r)}>
+        {archived && paperId(r.id) && <SavedPaperEvidence assetId={r.id} entries={message.conversationAssertionEvidence}/>}
+        {hasPaperEvidence?<PaperEvidenceCard reference={r} deferCurrentEvidence={archived}/>:<button className="oe-source-card" onClick={()=>inspect(r)}>
           <b><CitationIcon type={details.type}/><span>{r.title} <ArrowUpRight size={13}/></span></b>
           <small>{details.channel} · {a?.source || r.source}</small>
           {a?.description && <p>{a.description}</p>}

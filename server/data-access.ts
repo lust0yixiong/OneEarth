@@ -94,9 +94,9 @@ export function dataAccessIndex(file:string){
   }
   return {replace,search,close:()=>db.close()};
 }
-export function dataAccessRouter(index:ReturnType<typeof dataAccessIndex>,refresh:()=>void,streamStatus?:()=>{configured:number;sources:{id:string;name:string}[]}){
+export function dataAccessRouter(index:ReturnType<typeof dataAccessIndex>,refresh:()=>void|Promise<void>,streamStatus?:()=>{configured:number;sources:{id:string;name:string}[]}){
   const router=Router();
-  router.post("/search",(req,res)=>{
+  router.post("/search",async(req,res)=>{
     const q=req.body;
     if(!q||!validAccessSection(q.section)||![q.query,q.type,q.source].every(s=>typeof s==="string"&&s.length<=1000)||
       !Number.isSafeInteger(q.page)||q.page<0||!Number.isSafeInteger(q.limit)||q.limit<1||q.limit>60||
@@ -105,7 +105,7 @@ export function dataAccessRouter(index:ReturnType<typeof dataAccessIndex>,refres
       q.scope?.period&&(!Array.isArray(q.scope.period)||q.scope.period.length!==2||!q.scope.period.every(Number.isFinite))||
       q.scope?.utcWindow&&(!Array.isArray(q.scope.utcWindow)||q.scope.utcWindow.length!==2||!q.scope.utcWindow.every(Number.isFinite)))
       {res.status(400).json({error:"数据触达查询条件无效。"});return;}
-    try{refresh();const page=index.search(q);registerObservations(page.rows.flatMap(r=>r.observation?[r.observation]:[]));
+    try{await refresh();if(res.destroyed)return;const page=index.search(q);registerObservations(page.rows.flatMap(r=>r.observation?[r.observation]:[]));
       res.set("Cache-Control","no-store").json({...page,stream:streamStatus?.()});}
     catch{res.status(503).json({error:"数据索引暂时无法读取，请重试。"});}
   });

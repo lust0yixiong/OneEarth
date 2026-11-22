@@ -56,7 +56,8 @@ export function paperCache(file: string) {
   const get = db.prepare("SELECT payload FROM evidence WHERE id = ?");
   const all = db.prepare("SELECT payload FROM evidence ORDER BY rowid DESC");
   db.exec("CREATE TABLE IF NOT EXISTS dataset_catalog (ds_key TEXT PRIMARY KEY, id TEXT NOT NULL); CREATE TABLE IF NOT EXISTS dataset_catalog_state (key TEXT PRIMARY KEY, payload TEXT NOT NULL)");
-  const publish = db.prepare("INSERT INTO dataset_catalog VALUES (?,?) ON CONFLICT(ds_key) DO UPDATE SET id=excluded.id");
+  const publish = db.prepare("INSERT INTO dataset_catalog VALUES (?,?) ON CONFLICT(ds_key) DO UPDATE SET id=excluded.id WHERE dataset_catalog.id<>excluded.id");
+  let publicationRevision = 0;
   const state = db.prepare("SELECT payload FROM dataset_catalog_state WHERE key='current'");
   const setState = db.prepare("INSERT INTO dataset_catalog_state VALUES ('current',?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload");
   const dataVersion = db.prepare("PRAGMA data_version");
@@ -98,19 +99,20 @@ export function paperCache(file: string) {
     const prior=readState();
     const exists=prior.complete&&includeInCatalog
       ? db.prepare("SELECT 1 FROM dataset_catalog WHERE ds_key=?") : undefined;
-    let added=false;
+    let added=false, changed=false;
     for (const record of records) {
       put.run(record.id,JSON.stringify(record));
       if (includeInCatalog) {
         if (exists&&!added) added=!exists.get(record.dsKey);
-        publish.run(record.dsKey,record.id);
+        if (publish.run(record.dsKey,record.id).changes) changed=true;
       }
     }
     if (added) setState.run(JSON.stringify({...prior,complete:false}));
+    return changed;
   };
   const saveBatch = (records: readonly PaperRecord[], includeInCatalog = true) => {
     if (!records.every(validPaperRecord)) throw Error("论文记录缺少文献资料用法依据。");
-    if (records.length) transaction(()=>writeRecords(records,includeInCatalog));
+    if (records.length && transaction(()=>writeRecords(records,includeInCatalog)))publicationRevision++;
   };
   return {
     save(record: PaperRecord, includeInCatalog = true) {
@@ -119,12 +121,14 @@ export function paperCache(file: string) {
     saveBatch,
     needsCatalogRecovery,
     restoreFromDiscovery(history: readonly PaperRecord[], terminalRecords: readonly PaperRecord[]) {
-      transaction(()=>{
+      const rebuilt = transaction(()=>{
         const rebuild=terminalRecords.length>0 && needsCatalogRecovery();
         writeRecords(history,false);
         writeRecords(terminalRecords,rebuild);
         if (rebuild) setState.run(JSON.stringify({...defaultState,source:"已完成发现任务恢复记录"}));
+        return rebuild;
       });
+      if (rebuilt)publicationRevision++;
     },
     get(id: string): PaperRecord | undefined {
       const record = get.get(id);
@@ -140,6 +144,7 @@ export function paperCache(file: string) {
       });
     },
     dataVersion: () => Number(dataVersion.get()!.data_version),
+    publicationRevision: () => publicationRevision,
     publishedIds: () => publishedIds.all().map(row => [String(row.ds_key), String(row.id)]),
     page(cursor = "", limit = 250) {
       const rows=db.prepare("SELECT c.ds_key,e.payload FROM dataset_catalog c JOIN evidence e ON e.id=c.id WHERE c.ds_key>? ORDER BY c.ds_key LIMIT ?").all(cursor,limit+1);
@@ -155,6 +160,7 @@ export function paperCache(file: string) {
         for (const record of records) {put.run(record.id,JSON.stringify(record));publish.run(record.dsKey,record.id);}
         setState.run(JSON.stringify({...info,complete:true}));
       });
+      publicationRevision++;
     },
     close() { db.close(); },
   };

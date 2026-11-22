@@ -42,8 +42,8 @@ function metadataText(raw:string|null|undefined) {
   return raw;
 }
 const cache=new Map<string,PaperDatasetEvidence>();
-function AssertionPaperEvidence({reference:r}:{reference:AssetReference}) {
-  const [expanded,setExpanded]=useState(true);
+function AssertionPaperEvidence({reference:r,deferCurrentEvidence}:{reference:AssetReference;deferCurrentEvidence:boolean}) {
+  const [expanded,setExpanded]=useState(!deferCurrentEvidence);
   const [data,setData]=useState(()=>cache.get(r.id));
   const [status,setStatus]=useState<"loading"|"ready"|"failed">(data?"ready":"loading");
   const [attempt,retry]=useState(0);
@@ -74,7 +74,8 @@ function AssertionPaperEvidence({reference:r}:{reference:AssetReference}) {
     return ()=>controller.abort();
   },[r.id,expanded,attempt]);
   return <details className="oe-paper" open={expanded} onToggle={e=>setExpanded(e.currentTarget.open)}>
-    <summary><CitationIcon type={citationDetails(r).type}/> <span>{dataset?.title || r.title}</span></summary>
+    <summary><CitationIcon type={citationDetails(r).type}/> <span>{deferCurrentEvidence?"查看当前论文详情 · "+r.title:dataset?.title || r.title}</span></summary>
+    {(!deferCurrentEvidence || expanded) && <>
     <section className="oe-dataset-overview" aria-label="数据集说明">
       {dataset?.description && <EvidenceText text={dataset.description}/>}
       <dl>
@@ -112,6 +113,7 @@ function AssertionPaperEvidence({reference:r}:{reference:AssetReference}) {
         </details>
       </article>;
     })}
+    </>}
   </details>;
 }
 
@@ -167,6 +169,6 @@ function CuratedPaperEvidence({reference:r}:{reference:AssetReference}) {
   </details>;
 }
 
-export function PaperEvidenceCard({reference}:{reference:AssetReference}) {
-  return paperId(reference.id)?<AssertionPaperEvidence reference={reference}/>:<CuratedPaperEvidence reference={reference}/>;
+export function PaperEvidenceCard({reference,deferCurrentEvidence=false}:{reference:AssetReference;deferCurrentEvidence?:boolean}) {
+  return paperId(reference.id)?<AssertionPaperEvidence reference={reference} deferCurrentEvidence={deferCurrentEvidence}/>:<CuratedPaperEvidence reference={reference}/>;
 }

@@ -1,10 +1,15 @@
-import {createHash} from "node:crypto";
+import {createHash,randomUUID} from "node:crypto";
 import {once} from "node:events";
 import {setTimeout as delay} from "node:timers/promises";
 import express, {type Request, type Response} from "express";
 import {TaskConflict, taskIdPattern} from "./task-store";
 import {DiscoveryContinuationConflict, type DiscoveryA2aStore, type DiscoveryContinuation, type DiscoveryProgress, type StoredDiscoveryEvent} from "./discovery-a2a-store";
 import type {DiscoveryInput} from "./discovery-contract";
+import {hainaCatalogQueryKind,hainaCatalogResultKind,paperQueryKind,sceneCatalogQueryKind,sceneCatalogResultKind,sourceReadKind,type HainaCatalogPage} from "./discovery-materials-contract";
+import {prepareSourceRead, queryPaperCatalog} from "./discovery-material-operations";
+import {PaperCatalogError,type PaperCatalogAccess} from "./paper-catalog-access";
+import type {hainaService} from "./haina-search";
+import {parseSceneCatalogQuery,querySceneCatalog} from "./earth-search-source";
 
 const media = "application/a2a+json";
 const protocol = "1.0";
@@ -64,7 +69,10 @@ function operationId(req: Request) {
 }
 
 type Prepare = (input: Record<string,unknown>, continuation?: DiscoveryContinuation) => Promise<{body: DiscoveryInput} | {issue: string; unavailable?: boolean}>;
-export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prepare) {
+export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prepare,
+  materials?: {catalog?:PaperCatalogAccess;fetchAllowed?:()=>boolean;haina?:Pick<ReturnType<typeof hainaService>,"page">;
+    sceneFetcher?:typeof fetch}) {
+  const {catalog,haina} = materials ?? {};
   const router = express.Router();
   const parse = express.json({type:media,limit:"384kb"});
   router.get("/.well-known/agent-card.json", (req,res) => res.set("Cache-Control","no-store").json({
@@ -75,7 +83,17 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
     capabilities:{streaming:true,pushNotifications:false,extendedAgentCard:false},
     defaultInputModes:["application/json"],defaultOutputModes:["application/json"],
     skills:[{id:"oneearth.discovery",name:"Data discovery",description:"Find and investigate research materials and report their sources and limitations.",
-      tags:["discovery","research","provenance"]}],
+      tags:["discovery","research","provenance"]},
+      {id:"oneearth.scene.catalog",name:"Earth Search scenes",description:"Read scene metadata for a specified point and time from the supported Earth Search collections.",
+        tags:["earth-search","scene","catalog"]}, ...(catalog ? [
+        {id:"oneearth.paper.query",name:"Paper catalog",description:"Return exact paper records and catalog views as a synchronous Message.",
+          tags:["paper","catalog"]},
+        {id:"oneearth.source.read",name:"Read specified sources",description:"Read specified paper or public web and PDF sources in a recoverable Task.",
+          tags:["paper","web","provenance"]},
+      ] : []), ...(haina ? [
+        {id:"oneearth.haina.catalog",name:"Haina catalog",description:"Return a page from the published Haina catalog as a synchronous Message.",
+          tags:["data","catalog"]},
+      ] : [])],
   }));
 
   // Only deployed A2A paths enter this parser and error handler. Legacy routes retain their wire format.
@@ -88,7 +106,7 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
     next();
   }, parse);
 
-  async function submit(req: Request) {
+  function decode(req: Request) {
     const envelope = record(req.body);
     only(envelope, ["message","configuration"]);
     const message = record(envelope.message);
@@ -106,7 +124,11 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
     only(part, ["data"]);
     const data = record(part.data);
     only(data, ["kind","input"]);
-    if (data.kind !== "oneearth.discovery.request.v1") throw invalid("不支持此发现委托类型。","CONTENT_TYPE_NOT_SUPPORTED");
+    const available = data.kind === "oneearth.discovery.request.v1" ||
+      (catalog && (data.kind === paperQueryKind || data.kind === sourceReadKind)) ||
+      (haina && data.kind === hainaCatalogQueryKind) || data.kind === sceneCatalogQueryKind;
+    if (!available)
+      throw invalid("不支持此发现委托类型。","CONTENT_TYPE_NOT_SUPPORTED");
     const input = record(data.input);
     const config = envelope.configuration === undefined ? {} : record(envelope.configuration);
     if ("taskPushNotificationConfig" in config)
@@ -119,30 +141,40 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
       !config.acceptedOutputModes.some(mode => ["application/json","*/*","application/*"].includes(mode))))
       throw invalid("发现成果以 JSON 数据 part 返回。","CONTENT_TYPE_NOT_SUPPORTED");
     checkHistoryLength(config.historyLength);
+    if (data.kind !== "oneearth.discovery.request.v1" && taskId)
+      throw invalid("目录查询和精确读取不能绑定到已有发现任务。");
+    return {kind:data.kind,input,messageId:message.messageId,taskId,immediately:config.returnImmediately === true};
+  }
 
+  async function submit({kind,input,messageId,taskId,immediately}: ReturnType<typeof decode>) {
     // Transport preferences may change when resuming. The authorization-bearing input may not.
-    const digest = fingerprint({taskId,input});
-    const previous = await delegations.find(message.messageId, digest);
-    if (previous) return {id:previous, immediately:config.returnImmediately === true};
+    const digest = fingerprint(kind === sourceReadKind ? {kind,input} : {taskId,input});
+    const previous = await delegations.find(messageId,digest);
+    if (previous) return {id:previous,immediately};
+    if (kind === sourceReadKind) {
+      const prepared = prepareSourceRead(input,materials?.fetchAllowed?.() === true);
+      if ("issue" in prepared) throw invalid(prepared.issue);
+      return {id:await delegations.submit(messageId,digest,prepared.body),immediately};
+    }
     let continuation: DiscoveryContinuation | undefined;
     if (taskId) {
       const task = await delegations.progress(taskId);
       if (!task) throw notFound();
       if (task.waitingSeq === undefined) {
-        const accepted = await delegations.find(message.messageId,digest);
-        if (accepted) return {id:accepted,immediately:config.returnImmediately === true};
+        const accepted = await delegations.find(messageId,digest);
+        if (accepted) return {id:accepted,immediately};
         throw precondition("UNSUPPORTED_OPERATION","只有等待研究者输入的发现任务可以续行。");
       }
       continuation = {id:task.id,jobId:task.jobId,waitingSeq:task.waitingSeq};
     }
     const prepared = await prepare(input,continuation);
     if ("issue" in prepared) {
-      const accepted = await delegations.find(message.messageId,digest);
-      if (accepted) return {id:accepted,immediately:config.returnImmediately === true};
+      const accepted = await delegations.find(messageId,digest);
+      if (accepted) return {id:accepted,immediately};
       throw prepared.unavailable ? unavailable(prepared.issue) : invalid(prepared.issue);
     }
-    const id = await delegations.submit(message.messageId,digest,prepared.body,continuation);
-    return {id,immediately:config.returnImmediately === true};
+    const id = await delegations.submit(messageId,digest,prepared.body,continuation);
+    return {id,immediately};
   }
 
   async function read(id: string) {
@@ -150,8 +182,44 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
     if (!snapshot) throw notFound();
     return snapshot;
   }
+  async function queryHaina(input:Record<string,unknown>,signal:AbortSignal) {
+    only(input,["cursor","limit"]);
+    const {cursor,limit} = input;
+    if (typeof cursor !== "number" || !Number.isSafeInteger(cursor) || cursor < 0 ||
+      typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 250)
+      throw invalid("海纳目录分页参数无效。");
+    try {
+      const value:HainaCatalogPage = await haina!.page(cursor,limit,signal);
+      return {kind:hainaCatalogResultKind,value};
+    } catch (error) {
+      signal.throwIfAborted();
+      throw unavailable(error instanceof Error ? error.message : "海纳目录读取失败。");
+    }
+  }
+  async function queryScenes(input:Record<string,unknown>,signal:AbortSignal) {
+    const query = parseSceneCatalogQuery(input);
+    if (!query) throw invalid("逐景查询须指定允许的影像集合、有效坐标和一致的时段。");
+    return {kind:sceneCatalogResultKind,value:await querySceneCatalog(query,signal,materials?.sceneFetcher)};
+  }
+  function directQuery(kind: unknown) {
+    if (kind === paperQueryKind && catalog) return (input:Record<string,unknown>,signal:AbortSignal) => queryPaperCatalog(catalog,input,signal);
+    if (kind === hainaCatalogQueryKind && haina) return queryHaina;
+    if (kind === sceneCatalogQueryKind) return queryScenes;
+  }
   router.post(/^\/message:send$/, async (req,res) => {
-    const {id,immediately} = await submit(req);
+    const request = decode(req);
+    const query = directQuery(request.kind);
+    if (query) {
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      res.once("close",abort);
+      try {
+        const data = await query(request.input,controller.signal);
+        if (!res.destroyed) res.json({message:{role:"ROLE_AGENT",messageId:randomUUID(),parts:[{data}]}});
+      } finally {res.off("close",abort);}
+      return;
+    }
+    const {id,immediately} = await submit(request);
     while (!res.destroyed) {
       const progress = immediately ? undefined : await delegations.progress(id);
       if (!immediately && !progress) throw notFound();
@@ -233,7 +301,9 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
     await stream(res,id,true);
   });
   router.post(/^\/message:stream$/, async (req,res) => {
-    const {id} = await submit(req);
+    const request = decode(req);
+    if (directQuery(request.kind)) throw precondition("UNSUPPORTED_OPERATION","目录查询请使用同步 Send Message。");
+    const {id} = await submit(request);
     await stream(res,id,false);
   });
   router.all(a2aPath, () => {
@@ -242,6 +312,9 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
   const handleError: express.ErrorRequestHandler = (error, _req, res, _next) => {
     if (res.headersSent || res.destroyed) { if (!res.destroyed) res.destroy(); return; }
     const failure = error instanceof A2aError ? error
+      : error instanceof PaperCatalogError ? new A2aError(error.status,
+        error.status === 503 ? "UNAVAILABLE" : error.status === 404 ? "NOT_FOUND" : "INVALID_ARGUMENT",
+        error.message || (error.status === 404 ? "指定文献资料不存在。" : "论文目录操作或参数无效。"))
       : error instanceof TaskConflict ? new A2aError(409,"ALREADY_EXISTS",error.message)
       : error instanceof DiscoveryContinuationConflict ? new A2aError(409,"FAILED_PRECONDITION",error.message)
       : error.type === "entity.parse.failed" ? invalid("A2A 请求 JSON 无效。")

@@ -6,9 +6,10 @@ import type {PaperPlan} from "./earthnano";
 import {readPaperPlan} from "./earthnano";
 import {parseSearchPlan} from "./web-search";
 import type {PaperRecord} from "../src/domain/paper-record";
+import type {HainaRecord} from "../src/domain/haina-record";
 import type {AnswerReference,QuestionCheck,QuestionDecision,SearchQuery,SearchRun,SearchFinding,ToolCall} from "../src/domain/types";
 import {validQuestionDecision} from "../src/domain/question-confirmation";
-import type {HainaSearchResult} from "./haina-search";
+import type {HainaCatalogStatus,HainaSearchResult} from "./haina-search";
 import {validWindow,windowFilters,type UtcWindow} from "../src/domain/time-window";
 import {sourceIdentityInstructions} from "./source-identity";
 import {complementInput,complementPlan,type WebComplementInput,type WebComplementPlan} from "./web-complement";
@@ -34,6 +35,8 @@ export interface DataSearchResult {
   plan:DataSearchPlan;
   papers:PaperRecord[];
   haina:Asset[];
+  hainaRecords?:HainaRecord[];
+  hainaCatalog?:HainaCatalogStatus;
   searches:SearchRun[];
   webChecks?:WebComplementPlan;
   issues:string[];
@@ -364,5 +367,7 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
     r=>[...new Set(r.filter(s=>s.status==="failed").map(s=>s.engine+" "+(s.error||"请求失败")))].join("；"));
   const [paper,haina,web]=await Promise.all([paperTask,hainaTask,webTask]);
   signal.throwIfAborted();
-  return {plan,papers:paper?.records||[],paperNotices:paper?.notices,haina:haina?.assets||[],searches:web||[],webChecks,issues,sourceStatus};
+  return {plan,papers:paper?.records||[],paperNotices:paper?.notices,haina:haina?.assets||[],
+    ...(haina?.records && haina.catalog ? {hainaRecords:haina.records,hainaCatalog:haina.catalog} : {}),
+    searches:web||[],webChecks,issues,sourceStatus};
 }

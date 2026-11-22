@@ -24,7 +24,7 @@ import { emptyFilters } from "../domain/spatial";
 import { useWorkspace } from "../domain/store";
 import type { AnswerReference, Message } from "../domain/types";
 
-export function AnswerBody({message,question,animate,children,clarificationAction,onQuote,onReady,showLiveMembership=true}:{message:Message;question:string;animate:boolean;children?:ReactNode;clarificationAction?:ReactNode;onQuote?:(reference:AnswerReference,number:number)=>void;onReady?:(id:string)=>void;showLiveMembership?:boolean}){
+export function AnswerBody({message,question,animate,archived,children,clarificationAction,onQuote,onReady,showLiveMembership=true}:{message:Message;question:string;animate:boolean;archived:boolean;children?:ReactNode;clarificationAction?:ReactNode;onQuote?:(reference:AnswerReference,number:number)=>void;onReady?:(id:string)=>void;showLiveMembership?:boolean}){
   const m=useMemo(()=>literatureDisplay(message),[message]);
   const {state:s,inspectAsset,openVisualization,patch,focusAnswerEvidence}=useWorkspace();
   const revision=useCatalogRevision();
@@ -94,6 +94,6 @@ export function AnswerBody({message,question,animate,children,clarificationActio
     {m.activity && <button className="activity-link" onClick={()=>patch({evidence:m.activity!,previewKind:"trace"})}>查看完整执行记录 <ArrowUpRight size={12}/></button>}
     {!m.failed && <AnswerFooter message={m} question={question} refs={references} open={()=>setDrawer({refs:references,title:"本条回答的来源与依据"})}/>}
     </>}
-    {drawer && <SourceDrawer {...drawer} message={message} question={question} close={()=>setDrawer(null)}/>}
+    {drawer && <SourceDrawer {...drawer} message={message} archived={archived} question={question} close={()=>setDrawer(null)}/>}
   </>;
 }
