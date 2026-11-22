@@ -61,32 +61,70 @@ export function paperCache(file: string) {
   const setState = db.prepare("INSERT INTO dataset_catalog_state VALUES ('current',?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload");
   const dataVersion = db.prepare("PRAGMA data_version");
   const publishedIds = db.prepare("SELECT ds_key,id FROM dataset_catalog ORDER BY ds_key");
-  if (!state.get()) {
-    const seen = new Set<string>();
+  const total = () => Number(db.prepare("SELECT count(*) AS n FROM dataset_catalog").get()!.n);
+  const readState = () => {
+    const row=state.get();
+    return row ? JSON.parse(String(row.payload)) : undefined;
+  };
+  const defaultState = {complete:false,source:"文献资料已查询记录",sourceTotal:null,filteredOut:0,updatedAt:null};
+  const needsCatalogRecovery = () => !readState()?.complete && total()===0;
+  const transaction = <T>(work:()=>T):T => {
     db.exec("BEGIN IMMEDIATE");
     try {
-      for (const row of all.all()) {
-        try {
-          const record = JSON.parse(String(row.payload));
-          if (validPaperRecord(record) && !seen.has(record.dsKey)) {publish.run(record.dsKey,record.id);seen.add(record.dsKey);}
-        } catch { /* Invalid historical entries do not become catalogue records. */ }
-      }
-      setState.run(JSON.stringify({complete:false,source:"文献资料已查询记录",sourceTotal:null,filteredOut:0,updatedAt:null}));
+      const result=work();
       db.exec("COMMIT");
-    } catch (error) {db.exec("ROLLBACK");throw error;}
-  }
-  const total = () => Number(db.prepare("SELECT count(*) AS n FROM dataset_catalog").get()!.n);
-  const status = () => ({...JSON.parse(String(state.get()!.payload)),total:total()});
+      return result;
+    } catch(error) {db.exec("ROLLBACK");throw error;}
+  };
+  if (!state.get()) transaction(()=>{
+    // Another role can create or publish the catalogue while this process waits for the lock.
+    if (state.get()) return;
+    if (!total()) {
+      const seen = new Set<string>();
+      for (const row of all.all()) {
+        let record: unknown;
+        try {record=JSON.parse(String(row.payload));}
+        catch {continue;}
+        if (validPaperRecord(record) && !seen.has(record.dsKey)) {
+          publish.run(record.dsKey,record.id);
+          seen.add(record.dsKey);
+        }
+      }
+    }
+    setState.run(JSON.stringify(defaultState));
+  });
+  const status = () => ({...readState(),total:total()});
+  const writeRecords = (records: readonly PaperRecord[], includeInCatalog: boolean) => {
+    const prior=readState();
+    const exists=prior.complete&&includeInCatalog
+      ? db.prepare("SELECT 1 FROM dataset_catalog WHERE ds_key=?") : undefined;
+    let added=false;
+    for (const record of records) {
+      put.run(record.id,JSON.stringify(record));
+      if (includeInCatalog) {
+        if (exists&&!added) added=!exists.get(record.dsKey);
+        publish.run(record.dsKey,record.id);
+      }
+    }
+    if (added) setState.run(JSON.stringify({...prior,complete:false}));
+  };
+  const saveBatch = (records: readonly PaperRecord[], includeInCatalog = true) => {
+    if (!records.every(validPaperRecord)) throw Error("论文记录缺少文献资料用法依据。");
+    if (records.length) transaction(()=>writeRecords(records,includeInCatalog));
+  };
   return {
     save(record: PaperRecord, includeInCatalog = true) {
-      if (!validPaperRecord(record)) throw Error("论文记录缺少文献资料用法依据。");
-      put.run(record.id, JSON.stringify(record));
-      if (includeInCatalog) {
-        const existed=db.prepare("SELECT 1 FROM dataset_catalog WHERE ds_key=?").get(record.dsKey);
-        publish.run(record.dsKey,record.id);
-        const prior=status();
-        if(!existed && prior.complete)setState.run(JSON.stringify({...prior,complete:false}));
-      }
+      saveBatch([record],includeInCatalog);
+    },
+    saveBatch,
+    needsCatalogRecovery,
+    restoreFromDiscovery(history: readonly PaperRecord[], terminalRecords: readonly PaperRecord[]) {
+      transaction(()=>{
+        const rebuild=terminalRecords.length>0 && needsCatalogRecovery();
+        writeRecords(history,false);
+        writeRecords(terminalRecords,rebuild);
+        if (rebuild) setState.run(JSON.stringify({...defaultState,source:"已完成发现任务恢复记录"}));
+      });
     },
     get(id: string): PaperRecord | undefined {
       const record = get.get(id);
@@ -112,13 +150,11 @@ export function paperCache(file: string) {
     replaceCatalog(records: PaperRecord[], info: {source:string;sourceTotal:number;filteredOut:number;updatedAt:string}) {
       if (!records.every(validPaperRecord) || new Set(records.map(r=>r.dsKey)).size!==records.length || records.length+info.filteredOut!==info.sourceTotal)
         throw Error("全量目录的记录数、去重或证据校验未通过。");
-      db.exec("BEGIN IMMEDIATE");
-      try {
+      transaction(()=>{
         db.exec("DELETE FROM dataset_catalog");
         for (const record of records) {put.run(record.id,JSON.stringify(record));publish.run(record.dsKey,record.id);}
         setState.run(JSON.stringify({...info,complete:true}));
-        db.exec("COMMIT");
-      } catch(error) {db.exec("ROLLBACK");throw error;}
+      });
     },
     close() { db.close(); },
   };

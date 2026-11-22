@@ -1,5 +1,6 @@
 import {literatureDisplay} from "./literature-label";
 import test from "node:test";
+import { gunzipSync } from "node:zlib";
 import assert from "node:assert/strict";
 import express from "express";
 import { IncomingMessage, ServerResponse } from "node:http";
@@ -28,19 +29,22 @@ const record: PaperRecord = {
 };
 const search: SearchState = {query:"",type:"",source:"",savedOnly:false,kind:"all",result:null,compare:[]};
 
-async function request(app: express.Express, url: string, body?: unknown) {
+async function request(app: express.Express, url: string, body?: unknown, acceptsGzip = false) {
   const chunks: Buffer[]=[];
   const wire=new Duplex({read(){},write(chunk,_encoding,callback){chunks.push(Buffer.from(chunk));callback();}});
   const req=new IncomingMessage(wire as Socket);
   req.method=body===undefined?"GET":"POST";req.url=url;
   const payload=body===undefined?null:JSON.stringify(body);
-  req.headers={host:"localhost",...(payload?{"content-type":"application/json","content-length":String(Buffer.byteLength(payload))}:{})};
+  req.headers={host:"localhost",...(acceptsGzip?{"accept-encoding":"gzip"}:{}),
+    ...(payload?{"content-type":"application/json","content-length":String(Buffer.byteLength(payload))}:{})};
   Object.assign(req,{body});
   const res=new ServerResponse(req);res.assignSocket(wire as Socket);
   await new Promise<void>((resolve,reject)=>{res.once("finish",resolve);res.once("error",reject);app(req,res);});
-  const bytes=Buffer.concat(chunks), text=bytes.subarray(bytes.indexOf("\r\n\r\n")+4).toString();
+  const bytes=Buffer.concat(chunks), payloadBytes=bytes.subarray(bytes.indexOf("\r\n\r\n")+4);
+  const contentEncoding=res.getHeader("content-encoding");
+  const text=(contentEncoding==="gzip"?gunzipSync(payloadBytes):payloadBytes).toString();
   wire.destroy();
-  return {status:res.statusCode,body:text.startsWith("{")||text.startsWith("[")?JSON.parse(text):text};
+  return {status:res.statusCode,contentEncoding,body:text.startsWith("{")||text.startsWith("[")?JSON.parse(text):text};
 }
 
 test("data discovery includes only actual records; static cases cannot impersonate assertion-library paper clues", () => {
@@ -86,6 +90,36 @@ test("assertion catalog separates cached records, live misses, failed queries an
     assert.deepEqual((await request(app,"/papers?ids="+record.id)).body,literatureDisplay([record]));
     assert.equal(validPaperRecord({...record,need:{...record.need,tabs:[]}}),false);
   } finally {cache.close();}
+});
+
+test("gzip paper pages refresh when another SQLite connection publishes to the same catalogue", async () => {
+  const dir=mkdtempSync(path.join(tmpdir(),"oneearth-paper-gzip-"));
+  const file=path.join(dir,"papers.sqlite");
+  const cache=paperCache(file),writer=paperCache(file);
+  const app=express();
+  app.use("/papers",paperCatalog(cache));
+  const url="/papers?view=catalog&limit=2";
+  const updated={...record,id:"earthnano:"+"c".repeat(64)};
+  try {
+    cache.save(record);
+    const before=await request(app,url,undefined,true);
+    assert.equal(before.contentEncoding,"gzip");
+    assert.deepEqual(before.body.records.map((r:PaperRecord)=>r.id),[record.id]);
+
+    writer.replaceCatalog([updated],{source:"other connection",sourceTotal:1,filteredOut:0,updatedAt:"2026-11-22T00:00:00Z"});
+    const after=await request(app,url,undefined,true);
+    assert.equal(after.contentEncoding,"gzip");
+    assert.deepEqual(after.body.records.map((r:PaperRecord)=>r.id),[updated.id]);
+    assert.equal(after.body.catalog.complete,true);
+    assert.equal(after.body.catalog.source,"other connection");
+
+    writer.replaceCatalog([],{source:"empty publication",sourceTotal:0,filteredOut:0,updatedAt:"2026-11-22T01:00:00Z"});
+    const empty=await request(app,url,undefined,true);
+    assert.equal(empty.contentEncoding,"gzip");
+    assert.deepEqual(empty.body.records,[]);
+    assert.equal(empty.body.catalog.complete,true);
+    assert.equal(empty.body.total,0);
+  } finally {writer.close();cache.close();rmSync(dir,{recursive:true,force:true});}
 });
 
 test("production constellation feed, satellite names and configured counts exclude test sources and records", () => {

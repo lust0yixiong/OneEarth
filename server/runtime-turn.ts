@@ -3,7 +3,7 @@ import { requestPerformance } from "./request-performance";
 import type { TaskStore } from "./task-store";
 import type { researchRegions } from "./research-region";
 import type { spatialCoverageClient } from "./spatial-coverage-client";
-import type { paperCache } from "./earthnano";
+import type { runtimePaperEvidence } from "./runtime-paper-evidence";
 import type { hainaService } from "./haina-search";
 import type { constellationService } from "./constellations";
 import { assetById, registerObservations, registerPapers } from "../src/domain/datasets";
@@ -37,7 +37,7 @@ import { discover } from "../src/domain/discovery";
 
 export interface RuntimeServices {
   tasks: TaskStore;
-  cachedPapers: ReturnType<typeof paperCache>;
+  cachedPapers: ReturnType<typeof runtimePaperEvidence>;
   haina: ReturnType<typeof hainaService>;
   push: ReturnType<typeof constellationService>;
   coverage: ReturnType<typeof spatialCoverageClient>;
@@ -96,6 +96,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       context=verifiedGridContext(context,gridCoverage);
     }
     const scopeUnverified=!!gridCoverage&&!gridCoverage.summary;
+    cachedPapers.refresh();
     const existing = cachedPaperIds(context).flatMap(id => cachedPapers.get(id) || []);
     registerPapers(existing,false);
     const conversationContext=validHistory(history)
@@ -356,8 +357,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       return {result:reply};
     }
     if(retrieved&&readRuns.length)retrieved={...retrieved,searches:[...retrieved.searches,...readRuns]};
-    for(const record of retrieved?.papers||[])cachedPapers.save(record);
-    if(retrieved?.papers.length)registerPapers(retrieved.papers);
+    if(retrieved?.papers.length)cachedPapers.remember(retrieved.papers);
     // Auxiliary data framing must not replace the user's operation or scope.
     const lookupQuery=[decision?.dataQuestion || query,retrieved?.plan.conversationContext].filter(Boolean).join("\n");
     const catalogCall={id:"catalog",kind:"tool" as const,name:"OneEarth 数据目录",input:lookupQuery};

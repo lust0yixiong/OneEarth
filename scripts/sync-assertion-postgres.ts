@@ -5,12 +5,14 @@ import { assertionReader, assertionPgConfig } from "../server/assertion-postgres
 import { assertionDataset } from "../server/assertion-dataset";
 import { paperCache } from "../server/earthnano";
 import { validPaperRecord, type PaperRecord } from "../src/domain/paper-record";
+import { productPath } from "./product-path.mjs";
 
 const root=fileURLToPath(new URL("..",import.meta.url));
 try{process.loadEnvFile(path.join(root,".env"));}catch{/* Environment variables may provide the configuration. */}
 const config=assertionPgConfig();if(!config)throw Error("尚未配置论文研究数据只读连接。");
 const reader=assertionReader(config),records=new Map<string,PaperRecord>(),issues=new Map<string,number>();
 const local=path.join(root,".local");mkdirSync(local,{recursive:true});
+const file=productPath(root,path.join(process.env.ONEEARTH_STATE_DIR || ".local","paper-evidence.sqlite"));
 try {
   const result=await reader.snapshot((rows,loaded,total)=>{
     for(const row of rows) {
@@ -20,7 +22,7 @@ try {
     }
     if(loaded===total || loaded%2500===0)console.log(`Read-only PostgreSQL snapshot: ${loaded}/${total} dataset metadata records.`);
   });
-  const file=path.join(local,"paper-evidence.sqlite");
+  mkdirSync(path.dirname(file),{recursive:true,mode:0o700});
   // Back up through SQLite so committed WAL pages are included, without touching the source database.
   if(existsSync(file)) {
     const {DatabaseSync}=await import("node:sqlite");const db=new DatabaseSync(file);

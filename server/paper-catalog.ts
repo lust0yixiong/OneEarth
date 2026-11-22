@@ -2,7 +2,7 @@ import {literatureDisplay} from "../src/domain/literature-label";
 import { registerPapers, catalogRevision } from "../src/domain/datasets";
 import { gzipSync } from "node:zlib";
 import { Router } from "express";
-import { paperId, validPaperRecord, paperCatalogSummary, paperMapSummary } from "../src/domain/paper-record";
+import { paperId, paperCatalogSummary, paperMapSummary } from "../src/domain/paper-record";
 import { searchPapers, type paperCache } from "./earthnano";
 import { configuredAssertionReader } from "./assertion-postgres";
 
@@ -43,7 +43,7 @@ export function paperCatalog(cache: ReturnType<typeof paperCache>, lookup = sear
       const view=req.query.view==="map"?"map":req.query.view==="catalog"?"catalog":"full";
       const page=()=>{const value=cache.page(cursor,limit);return view==="full"?value:{...value,records:value.records.map(view==="map"?paperMapSummary:paperCatalogSummary)};};
       if(req.acceptsEncodings("gzip")) {
-        const key=JSON.stringify([catalogRevision(),cursor,limit,view]);
+        const key=JSON.stringify([catalogRevision(),cache.dataVersion(),cursor,limit,view]);
         let compressed=pages.get(key);
         if(!compressed){compressed=gzipSync(JSON.stringify(literatureDisplay(page())),{level:1});pages.set(key,compressed);if(pages.size>128)pages.delete(pages.keys().next().value!);}
         res.vary("Accept-Encoding").type("application/json").set("Content-Encoding","gzip").send(compressed);
@@ -62,8 +62,7 @@ export function paperCatalog(cache: ReturnType<typeof paperCache>, lookup = sear
     res.once("close", () => {if (!res.writableEnded) controller.abort();});
     try {
       const hit = await lookup({name:query.trim(), facets:[], region:[]},controller.signal,()=>{});
-      if (!hit.records.every(validPaperRecord)) throw Error("文献资料返回的记录缺少有效用法依据。");
-      for (const record of hit.records) cache.save(record);
+      cache.saveBatch(hit.records);
       registerPapers(hit.records);
       res.set("Cache-Control","no-store").json({records:literatureDisplay(hit.records),cached:false,incomplete:hit.incomplete});
     } catch (error) {

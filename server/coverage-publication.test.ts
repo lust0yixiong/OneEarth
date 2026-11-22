@@ -11,6 +11,7 @@ import { coverageIndex } from "./coverage-index";
 import { coveragePublication } from "./coverage-publication";
 import { coverageRouter } from "./coverage-router";
 import { paperCache } from "./earthnano";
+import { runtimePaperEvidence } from "./runtime-paper-evidence";
 import { assetById, assets } from "../src/domain/datasets";
 import type { PaperRecord } from "../src/domain/paper-record";
 import { cellAt, cellShape, emptyFilters, gridSpec } from "../src/domain/spatial";
@@ -48,6 +49,8 @@ test("coverage publishes committed inputs, binds the exact scope, and never reus
   const file = path.join(directory, "paper.sqlite");
   const writer = paperCache(file);
   const reader = paperCache(file);
+  const runtimeCache = paperCache(file);
+  const runtime = runtimePaperEvidence(runtimeCache);
   const index = coverageIndex(path.join(directory, "coverage.sqlite"));
   let indexClosed = false;
   const anchor = record("anchor", filters.type, point);
@@ -186,6 +189,11 @@ test("coverage publishes committed inputs, binds the exact scope, and never reus
     assert.equal((await request("revision")).body.revision, original.revision);
     assert.deepEqual([scans,loads], [2,1], "a historical record must not rebuild the published view");
     writer.save(moved);
+    // An earlier turn finishes with the old version after discovery publishes the new one.
+    runtime.remember([moving]);
+    assert.deepEqual(runtime.get(moving.id),moving);
+    assert.equal(writer.list().find(record=>record.dsKey===moving.dsKey)?.id,moved.id);
+    assert.deepEqual(assets.filter(asset=>asset.datasetId===moving.dsKey).map(asset=>asset.id),[moved.id]);
     const expired = await read(original);
     assert.equal(expired.status, 410);
     assert.equal(expired.body.code, "coverage_scope_expired");
@@ -216,6 +224,7 @@ test("coverage publishes committed inputs, binds the exact scope, and never reus
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     if (!indexClosed) await index.close();
     reader.close();
+    runtimeCache.close();
     writer.close();
     await rm(directory, { recursive: true, force: true });
   }

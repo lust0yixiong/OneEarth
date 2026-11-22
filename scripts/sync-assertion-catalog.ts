@@ -5,10 +5,12 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { paperCache } from "../server/earthnano";
 import { validPaperRecord, type PaperRecord } from "../src/domain/paper-record";
+import { productPath } from "./product-path.mjs";
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..");
 const local=path.join(root,".local");mkdirSync(local,{recursive:true});
 try {process.loadEnvFile(path.join(root,".env"));}catch { /* Environment variables may supply the endpoint. */ }
+const file=productPath(root,path.join(process.env.ONEEARTH_STATE_DIR || ".local","paper-evidence.sqlite"));
 const args=process.argv.slice(2),value=(flag:string)=>{const i=args.indexOf(flag);return i>=0?args[i+1]:undefined;};
 const schema="oneearth-assertion-dataset-catalog-v1";
 
@@ -25,7 +27,8 @@ function ingest(raw:unknown) {
     if(accepted.has(item.dsKey))duplicates++;
     accepted.set(item.dsKey,item);
   }
-  const cache=paperCache(path.join(local,"paper-evidence.sqlite"));
+  mkdirSync(path.dirname(file),{recursive:true,mode:0o700});
+  const cache=paperCache(file);
   try {
     cache.replaceCatalog([...accepted.values()],{source:source.source,sourceTotal:source.totalDatasets!,filteredOut:invalid+duplicates,updatedAt:source.exportedAt});
     const report={...cache.status(),invalid,duplicates};
@@ -38,7 +41,8 @@ async function main(){
   const input=value("--import");
   if(input){ingest(JSON.parse(readFileSync(path.resolve(input),"utf8")));return;}
   if(args.includes("--audit")){
-    const cache=paperCache(path.join(local,"paper-evidence.sqlite"));
+    mkdirSync(path.dirname(file),{recursive:true,mode:0o700});
+    const cache=paperCache(file);
     try {console.log(JSON.stringify(cache.status(),null,2));}finally{cache.close();}
     return;
   }

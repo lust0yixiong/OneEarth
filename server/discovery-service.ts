@@ -16,7 +16,7 @@ import { dataSearchInstructions, dataSearchSchema, requiredDataSearch } from "./
 import { paperCache, searchPapers } from "./earthnano";
 import { paperCatalog } from "./paper-catalog";
 import { productDatabase } from "./product-database";
-import { validPaperRecord } from "../src/domain/paper-record";
+import { restoreDiscoveryPaperCache } from "./paper-cache-restore";
 import { registerPapers } from "../src/domain/datasets";
 import { hainaService } from "./haina-search";
 import { searchSources } from "./web-search";
@@ -30,8 +30,7 @@ const store = await postgresTaskStore("discovery");
 const papers = paperCache(path.join(state,"paper-evidence.sqlite"));
 const records=productDatabase("DISCOVERY");
 try{
-  const saved=await records.query("SELECT record FROM discovery_papers ORDER BY id");
-  for(const {record} of saved.rows)if(validPaperRecord(record))papers.save(record);
+  await restoreDiscoveryPaperCache(papers,sql=>records.query(sql));
 }finally{await records.end();}
 registerPapers(papers.list());
 const haina = hainaService(path.join(state, "haina-catalog.json"));
@@ -118,7 +117,7 @@ await workTasks(store, async ({body: input}: {body: DiscoveryInput}, signal, emi
       }), signal, {outputSchema:dataSearchSchema}),
     paper: async plan => {
       const batch = await searchPapers(plan, signal, stage, call => emit({call}));
-      for (const record of batch.records) papers.save(record);
+      papers.saveBatch(batch.records);
       registerPapers(batch.records);
       return batch;
     },
