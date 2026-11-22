@@ -1,5 +1,27 @@
 # Mac mini 产品验收
 
+## Mac mini 论文发布与时空投影 v0.2.0-rc.8
+
+**Mac mini 隔离阶段通过独立验收。** 签收源码 `0254e5352572d2b7fbd070757562c92e8ad98e9b`，构建清单 SHA-256 `8c4c1c82450f7426e53c7b784544c0f9f61a12908acff258dedcd718cd89e254`。隔离入口 [5924](http://127.0.0.1:5924)，rc.7 只读对照 [5914](http://127.0.0.1:5914)，新格式恢复 [6094](http://127.0.0.1:6094)。类型检查、693 项测试和构建全通过，包含真实隔离 PostgreSQL 测试。最终候选相对前一实测版 `04bcf02` 的产品差异为三处候选枚举逻辑。
+
+| 验收项 | 实测结果 |
+| --- | --- |
+| 迁移与稳定 ID | 真实 primary 停写的格式 2 旧包保留 196 项当前发布和 216 个精确版本，迁移与回退导出逐项吻合。同源重试幂等。旧格式 1 控制恢复按已归档发现有限重建，得 191 项当前线索和 209 个可读版本，不能恢复原发布集合。零字节 WAL 与非空 WAL 走不同校验。 |
+| 版本变化和失败 | 在原目录加一条受控 A，同格同年、UTC、错年和公开 RGI 结果与旧版一致。正式换 B 后 A 仍可在明确历史子集中定位。发现投影中断、时空重启后仍读上一完整代，恢复后旧范围返回 410。晚到 A 不改当前，新增历史版本只推进同步代。撤下后 A、B 仍可按 ID 读取。 |
+| 实际空间读与增量 | `04bcf02` 的正式加入、替换、撤下分别传 1、2、1 条记录，同一候选观察器响应正文 881、1,305、882 字节。最终 Chrome 拖球、滚轮和选格窗口完成 8 个覆盖响应，发现线只有一次周期性 head。实际 SQL 执行空间 GiST 与年份/UTC 条件。513 条论文受控检查中，SQL 命中 1 只查该 ID，命中 0 时纸本 ID 查找和全表枚举均为 0。 |
+| 恢复与回退 | 格式 3 备份恢复三库、5,950 个对象和同一代投影。6094 在发现尚未启动时已经从本地索引返回 B 当前视图与旧 A 精确范围。复验原研究记录、论文依据和森林图层。隔离回退把新库当前发布导出为 SQLite 并启动 rc.7，两个版本和旧档仍可读。 |
+| 真浏览器范围 | `04bcf02` 一笔真实地图问答 `e52cb271-b3fb-4334-94de-0726be4b857f` 保存了与地图同版的范围、成员和源 ID。最终候选沿同一 A 和原任务重开，并用真实同源 API 和 Chrome 验证热点改动。答复缺可点出处。两版覆盖接口及归档仍保留同一来源 ID，运行时消费缺口另登记。 |
+
+证据根为 `~/Library/Application Support/OneEarth Next/iterations/paper-catalog-ownership/evidence/`。`migration-proof.json`、`export-b-v3.log`、`restore-b-v3.log` 与 `rollback-verification.json` 对应数据操作。`candidate-a-0254e53.json`、`wire-and-index-0254e53.json`、`final-0254e53-actual-index.json`、`hot-path-focused.log` 和 `rc8-hot-path-fingerprint.json` 对应最终代码复验。`scope-answer-missing-clickable-ref.json` 保存问答引用缺口和新旧服务对照。复跑沿相同的隔离端口另取空库或新输出名。发布或制造故障只用隔离夹具。
+
+独立测试记录位于 `~/Library/Application Support/OneEarth Next/iterations/paper-publication-no-sqlite-acceptance/evidence/`，从 `rc8-0254e53-acceptance-index.json` 进入。
+
+### 日常入口切换
+
+2026-11-22 18:36（上海时间），[5474](http://127.0.0.1:5474) 切至同一签收代码与构建。停止受理后，两套队列均无进行中任务。沿用原 primary 和两个存储进程。停写备份恢复三库与 5,950 个对象，逐一核对 197 个当前映射、217 个历史版本及发布元数据。发现和时空先建立完整本地投影，再启动常驻入口。五个应用进程均未打开或重建论文 SQLite。旧文件、原发布和回退启动配置已留存。
+
+迁移前后，原两笔研究、论文依据、森林对象及 rc.7 新写入的 RGI 问答均可读。用现有 RGI 2003 和一条有坐标的精确论文在主库重新签范围，查询修订及成员相同。上线证据位于 `~/Library/Application Support/OneEarth Next/iterations/primary-rc8-final-20261122/`，主要是 `cutover.ndjson`、`publication-and-history-verified.json`、`real-coverage-after.json`、`live-sqlite-ownership.json` 和 `rc7-new-archive-retained.json`。独立上线复核位于相邻 `paper-publication-no-sqlite-acceptance/primary-rc8/`。
+
 ## Mac mini 日常入口 v0.2.0-rc.7
 
 2026-11-22，launchd 常驻入口 [5474](http://127.0.0.1:5474) 已切换至 rc.7，签收源码 `555f9e1`，部署来源 `16c49ee`。沿用原回环绑定、primary 的三库、PostGIS、Garage 和凭据。rc.3 已退出日常服务，原发布与启动项副本保留供回退。停写备份已在独立存储恢复三库、196 条当前论文目录记录及 5,950 个对象。切换前后的两条研究记录、论文依据与森林图层一致。

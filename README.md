@@ -29,6 +29,7 @@ deploy_config="$oneearth_home/storage-isolated-first/deployment.env"
 export ONEEARTH_CREDENTIALS_FILE="$oneearth_home/access.json"
 export ONEEARTH_DISCOVERY_CHAT_MODEL='{"executor":"codex","model":"deepseek-flash","provider":"deepseek"}'
 export ONEEARTH_PORT=5894 ONEEARTH_DISCOVERY_PORT=5895 ONEEARTH_SPATIAL_PORT=5896 ONEEARTH_RUNTIME_PORT=5897
+node --env-file="$deploy_config" --import tsx scripts/migrate-paper-catalog.ts --initialize-empty
 node --env-file="$deploy_config" scripts/launch.mjs seed
 node --env-file="$deploy_config" scripts/launch.mjs
 ```
@@ -67,9 +68,9 @@ node scripts/macos-product-service.mjs restart
 
 ## 备份和恢复
 
-在 v0.2.0-rc.5 上，先等研究任务与目录发布完成，再停止应用和目录导入进程后备份。备份包含三个产品数据库、图层对象及 `ONEEARTH_STATE_DIR/paper-evidence.sqlite` 的一致快照。该快照保存论文目录选用的当前版本及历史内容 ID。已初始化的空目录也可备份。发布文件缺失时报错。备份含研究记录与论文材料，存放在授权的数据目录。
+先等研究任务、目录导入和时空投影同步完成，再停止应用和目录导入进程后备份。格式 3 保存三个产品 PostgreSQL 库和图层对象。发现库包含论文的当前发布映射、原样版本和修订，时空库包含当时可查询的本地论文投影。备份清单分别记下两个库的目录状态。备份含研究记录与论文材料，存放在授权的数据目录。
 
-初始化独立 PostgreSQL 实例、Garage 服务和空桶，使用新的空应用状态目录恢复，成功后再启动应用。若恢复中断，保留失败目标用于排查，使用新的空目标重跑。旧格式可以导入；其目录只能从已完成的发现任务有限重建，原先直接发布或导入的目录集合与版本顺序无法由旧备份核对。
+初始化独立 PostgreSQL、Garage 和空桶，使用新的空应用状态目录恢复，成功后再启动应用。若恢复中断，保留失败目标用于排查，使用新的空目标重跑。格式 2 直接将封存的 SQLite 发布快照导入目标发现 PostgreSQL，保留当前映射和历史内容 ID。格式 1 只从归档发现任务有限重建，原先发布集合和发布顺序无法由该格式核对。
 
 ```sh
 export ONEEARTH_PG_BIN_DIR=/path/to/Postgres.app/Contents/Versions/18/bin
@@ -89,4 +90,13 @@ ONEEARTH_PORT=5574 ONEEARTH_DISCOVERY_PORT=5575 ONEEARTH_SPATIAL_PORT=5576 \
 node --env-file="$deploy_config" --import tsx scripts/sync-assertion-catalog.ts --import /path/to/catalog.json
 ```
 
-全量导入替换当前目录并保留历史内容 ID。只读 PostgreSQL 同步脚本也采用 `ONEEARTH_STATE_DIR` 指定的位置。省略该配置时，两种同步脚本默认写项目的 `.local/paper-evidence.sqlite` 暂存文件。
+全量导入和 `scripts/sync-assertion-postgres.ts` 都向配置的发现 PostgreSQL 发布。后者通过原有只读连接从断言库取材。正式发布替换同一数据集键的当前映射，保留历史内容 ID。时空服务按代同步，可用的上一完整投影在同步失败时继续服务。
+
+原地升级先停写，用上一版本生成格式 2 备份。用新发布读取密封包内的 SQLite 快照并迁移到仍在使用的发现库。
+
+```sh
+node --env-file="$deploy_config" --import tsx scripts/migrate-paper-catalog.ts --sqlite /absolute/backup/paper-evidence.sqlite
+node --env-file="$deploy_config" --import tsx scripts/migrate-paper-catalog.ts --status
+```
+
+同一个快照可重试，已初始化的不同发布状态需要先核对。回退前仍须停写。已有新写入时，用新版本的 `--export-sqlite /absolute/new/compatibility.sqlite` 从当前发现库导出兼容快照，将原有文件及其伴随文件留存后换入，再启动原发布。保留当前三库，记录和对象沿用实际已写入数据。

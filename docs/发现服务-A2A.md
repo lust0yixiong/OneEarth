@@ -9,7 +9,7 @@
 | 操作 | 在 OneEarth 中的用途 |
 | --- | --- |
 | `GET /.well-known/agent-card.json` | 声明数据发现能力和流式订阅 |
-| `POST /message:send` | 确定性的论文、海纳目录与指定条件逐景查询响应 `{message}`。开放发现和精确补读响应 `{task}`，运行时显式设置 `configuration.returnImmediately=true`，随后按已受理的 Task ID 取进展 |
+| `POST /message:send` | 确定性的论文查询、论文时空投影、海纳目录与指定条件逐景查询响应 `{message}`。开放发现和精确补读响应 `{task}`，运行时显式设置 `configuration.returnImmediately=true`，随后按已受理的 Task ID 取进展 |
 | `POST /message:stream` | 接收委托并打开该任务的 SSE |
 | `GET /tasks/{id}` | 读取已保存的受托任务状态与材料 |
 | `POST /tasks/{id}:subscribe` | 首帧给出 Task 快照，随后推送按序保存的进展。任务快速结束或连接断开时按同一 ID 取回快照 |
@@ -26,7 +26,7 @@
 | operation | input 其余字段 | 返回的 value |
 | --- | --- | --- |
 | `records` | `ids`，1–20 个精确内容 ID | 按输入顺序返回找到的记录。未知 ID 不触发查找 |
-| `list` | `view` 为 `full`、`catalog` 或 `map`，`cursor` 为字符串，`limit` 为 1–500 | `records`、`nextCursor`、`total`、`catalog` 和 `cached`。`catalog.revision` 标记本次分页发布状态，供投影判断是否可复用 |
+| `list` | `view` 为 `full`、`catalog` 或 `map`，`cursor` 为字符串，`limit` 为 1–500 | `records`、`nextCursor`、`total`、`catalog` 和 `cached`。`catalog.revision` 是发现库持久的当前发布修订，供消费方校验分页 |
 | `questions` | `id`、`cursor`，起始游标为空字符串 | `items` 和 `nextCursor` |
 | `evidence` | `id` | `dataset` 和 `papers`。缺失 ID 返回 404，断言读取不可用返回相应错误 |
 | `search` | 用户明确输入的 `query`，最长 240 字符 | 原名称/DOI 检索结果和渠道限制。沿用显式查询的发布行为 |
@@ -56,6 +56,32 @@
   }
 }
 ```
+
+### 论文时空投影
+
+时空服务后台调用 `kind=oneearth.paper.projection.query.v1`。同一 `POST /message:send` 返回带有效 `contextId` 的直接 Message，数据 part 的 kind 为 `oneearth.paper.projection.result.v1`。本查询无需模型或受托任务。
+
+| input.operation | 输入与产物 |
+| --- | --- |
+| `head` | 无附加参数。返回 `revision`、`generation`、`publishedCount` 和 `versionCount`。发布修订指当前目录，只有历史版本增加时仅同步代推进。 |
+| `page` | 必传目标 `generation`、游标 `cursor` 和 `limit`（1–250）。沿用上页 `nextCursor`，初始为 `""`。返回带相同元数据的 `entries` 和 `nextCursor`，`null` 表示末页。传 `baseGeneration` 读取相对于本地已提交代的增量，产物会回显它。省略时读取完整一代。 |
+
+以下为使用已保存代的请求数据 part。两个代的标识由实际 head 回执提供。
+
+```json
+{
+  "kind": "oneearth.paper.projection.query.v1",
+  "input": {
+    "operation": "page",
+    "generation": "5652ce37-defb-43c6-b9a3-bd9d42f44307",
+    "baseGeneration": "1ae586e3-3787-4c94-ba24-847acf20154b",
+    "cursor": "",
+    "limit": 250
+  }
+}
+```
+
+各条目有精确 `id`、`dsKey`、标题、类型、来源、坐标、覆盖范围和时段。换版本或撤下通过相应旧 ID 的 `published:false` 表示，旧版本仍可用于明确指定的历史范围。时空服务检查分页、应用后总数和代标识，随后原子切换本地投影。目标代已变化返回 `CATALOG_GENERATION_CHANGED`，下一轮按新 head 重试。基准代超出可追溯历史返回 `CATALOG_BASE_UNAVAILABLE`，重新获取完整代。其余传输失败保留上一完整代，首次尚无完整投影时覆盖未知。
 
 ### 海纳目录分页
 
@@ -142,4 +168,4 @@
 
 A2A Task 的受理关系、消息去重和作业映射随发现 PostgreSQL 库保存，由停写产品备份包含。内部计划由发现服务产生，归档产物沿用的结果结构仍包含历史计划字段。
 
-此批覆盖同一 Mac mini 上的服务间委托与已列操作。开放发现的归档产物仍包含旧内部计划结构。论文发布 SQLite 由发现及授权导入方维护，时空服务继续读取。运行时经协议读取当前论文或使用自己的历史材料。机构身份、项目权限和跨主机授权另待验证。List Tasks 和推送通知尚未启用。
+此批覆盖同一 Mac mini 上的服务间委托与已列操作。开放发现的归档产物仍包含旧内部计划结构。论文目录的发布状态与稳定版本由发现 PostgreSQL 保管，时空消费其最小版本化投影并保存自己的本地索引。运行时经协议读取当前论文或使用自己的历史材料。机构身份、项目权限和跨主机授权另待验证。List Tasks 和推送通知尚未启用。
