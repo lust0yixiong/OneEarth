@@ -12,6 +12,7 @@ export interface DiscoveryInput {
   config: ChatModel;
   deepseekTools?: DeepSeekTools;
   decision?: QuestionDecision;
+  clarificationReply?: {text:string;afterSeq:number};
   continuedFrom?: string;
   continuation?: {previousId:string;focus:string};
   researchGoal?: string;

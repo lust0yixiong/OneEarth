@@ -6,6 +6,7 @@ import { validDeepSeekTools } from "../src/domain/deepseek-tools";
 import { validQuestionDecision } from "../src/domain/question-confirmation";
 import { cases } from "../src/domain/catalog";
 import type { DiscoveryResponse } from "../src/domain/types";
+import {clarificationParent} from "./clarification-guard";
 
 export async function priorResult(tasks: TaskStore, conversationId: string | undefined, parentId: string | undefined): Promise<DiscoveryResponse | undefined> {
   if (!conversationId || !parentId || !taskIdPattern.test(parentId)) return;
@@ -32,5 +33,9 @@ export async function validateTurn(tasks: TaskStore, value: unknown): Promise<st
   }
   const context = body.context as import("../src/domain/types").DiscoveryContext;
   if (context.caseId && !cases.some(c => c.id === context.caseId)) return "未找到对应案例。";
+  if(body.clarificationReply!==undefined){
+    try{await clarificationParent(tasks,body as Parameters<typeof clarificationParent>[1]);}
+    catch(error){return error instanceof Error?error.message:"原澄清无法继续。";}
+  }
 }
 

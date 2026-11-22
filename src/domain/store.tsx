@@ -1,4 +1,4 @@
-import { loadResearchRecord, openTaskEvents } from "./runtime-client";
+import { canReplyToDiscoveryClarification, discoveryClarificationResult, loadResearchRecord, openTaskEvents } from "./runtime-client";
 import {datasetScope,mergeScope,scopedQuestionContext,scopeDetail,scopeLabel,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
 import {rememberReadEvidence} from "./read-evidence";
@@ -22,7 +22,7 @@ import { observationIntent } from "./observation-intent";
 import { observationBatchCamera, observationById, pushId, type PushFeed } from "./push-observations";
 import { isWorkspaceCommand } from "./research-question";
 import {makeQuestionDecision} from "./question-confirmation";
-import type {QuestionDecision} from "./types";
+import type {ClarificationReply, QuestionDecision} from "./types";
 import {validAccessSection,initialAccessSection} from "./data-access";
 import { registerHaina, registerObservations, registerPapers, loadRemoteAssetIds } from "./datasets";
 import {loadHainaCatalog,type HainaCatalogStatus} from "./haina-catalog-client";
@@ -99,6 +99,7 @@ type Inspector =
 export interface State {
   researchRegion?:ResearchRegionLayer|null;
   draftScope: ScopeItem[] | null;
+  clarificationReply?: ClarificationReply | null;
   attachingMapScope?: boolean;
   flight?: {id:string;camera:Camera;kind?:"research-region"|"place"|"grid";label?:string}|null;
   mapFocus?: {answerId:string;assetId:string;locked:boolean}|null;
@@ -147,7 +148,7 @@ const workspaceFields = [
   "view", "caseId", "filters", "camera", "gridSystem", "layer", "selection", "mesh", "source",
   "inspector", "mapResult", "search", "overview", "origin", "visualization", "fieldLayer", "dataView",
   "comparisonYear", "listLibraryOpen", "citation", "evidence", "previewKind", "readerPosition",
-  "chatOpen", "saved",
+  "chatOpen", "saved", "clarificationReply",
   "researchRegion",
 ] as const satisfies readonly (keyof State)[];
 export type WorkspaceSnapshot = Pick<State, (typeof workspaceFields)[number]> & { resultId?: string | null };
@@ -500,13 +501,15 @@ async function loadInitialSession(): Promise<State> {
         if(reply.hainaRecords?.length&&reply.hainaCatalog)
           registerHaina(reply.hainaRecords,reply.hainaCatalog.synced,reply.hainaCatalog.endpoint,false);
         const stored=await readSession(saved.conversationId);
+        state.clarificationReply=stored?.workspace.clarificationReply ?? null;
         const messages:Message[]=[
           {id:saved.turnId,role:"user",text:saved.question,time:saved.created},
           {id:saved.id,role:"assistant",text:reply.message,time:saved.updated,replyTo:saved.turnId,
             researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
             conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
             answerNotes:reply.answerNotes,runTrace:reply.runTrace,researchRegion:reply.researchRegion,
-            gridCoverage:reply.gridCoverage},
+            gridCoverage:reply.gridCoverage,
+            ...(discoveryClarificationResult(reply)?{clarification:true,discoveryClarification:true}:{})},
         ];
         state.sessionId=saved.conversationId;
         state.messages=mergeMessages(stored?.messages||[],messages);
@@ -1231,8 +1234,9 @@ function useWorkspaceValue(initialState: State) {
       const conversationReferences=conversationReferenceMemory(preceding);
       const previousAnswer = current.messages.slice().reverse().find(message => message.role==="assistant" && !message.failed && message.answerNotes);
       const payload = {query:q, context:attempt.context, config:readChatModel(), deepseekTools:readDeepSeekTools(),
-        conversationId:current.sessionId, turnId:attempt.userMessageId, previousTaskId:previousAnswer?.id,
+        conversationId:current.sessionId, turnId:attempt.userMessageId, previousTaskId:attempt.clarificationReply?undefined:previousAnswer?.id,
         ...(attempt.questionDecision?{questionDecision:attempt.questionDecision}:{}),
+        ...(attempt.clarificationReply?{clarificationReply:attempt.clarificationReply}:{}),
         history:preceding.filter(m=>!m.failed).slice(-8).map(m=>{
           const notes=m.answerNotes;
           const text=notes?.references
@@ -1286,7 +1290,7 @@ function useWorkspaceValue(initialState: State) {
         [c?.title, s.filters.place, s.selection?.grid.label]
           .filter(Boolean)
           .join(" · ") || "全球视图";
-      patch({ pending: true, liveTrace:{started:Date.now(),stages:[],calls:[]},liveSearches:[], chatStage:saved ? "正在接回本轮回答" : "正在提交问题", error: null, ...(retrying ? {} : { citation: null }), ...(saved ? {} : {chatOpen:true}) });
+      patch({ pending: true, liveTrace:{started:Date.now(),stages:[],calls:[]},liveSearches:[], chatStage:saved ? "正在接回本轮回答" : "正在提交问题", error: null, ...(retrying || attempt.clarificationReply ? {} : { citation: null }), ...(saved ? {} : {chatOpen:true}) });
       try {
         if (!saved) {
           payload.deepseekTools = await loadDeepSeekTools(controller.signal);
@@ -1311,7 +1315,7 @@ function useWorkspaceValue(initialState: State) {
         if(r.clarification){
           patch({pending:false});
           await add("assistant",r.message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,
-            clarification:true,researchRegion:r.researchRegion,researchIntent:r.researchIntent,conversationContext:r.conversationContext,conversationEvidence:r.conversationEvidence,conversationAssertionEvidence:r.conversationAssertionEvidence});
+            clarification:true,...(discoveryClarificationResult(r)?{discoveryClarification:true}:{}),researchRegion:r.researchRegion,researchIntent:r.researchIntent,conversationContext:r.conversationContext,conversationEvidence:r.conversationEvidence,conversationAssertionEvidence:r.conversationAssertionEvidence});
           if(!failedMessages.current.has(delivery.id))
             await removeChatDelivery(session,delivery.id).catch(()=>patch({sessionError:sessionFailure}));
           return;
@@ -1680,7 +1684,8 @@ function useWorkspaceValue(initialState: State) {
     let decision:QuestionDecision;
     try{decision=makeQuestionDecision(check,messageId,choice,edited);}
     catch(error){patch({error:error instanceof Error?error.message:"请核对问题内容。"});return;}
-    const attempt={...check.attempt,query:check.originalQuestion,userMessageId:randomId(),questionDecision:decision};
+    const {clarificationReply: _clarificationReply,...checkedAttempt}=check.attempt;
+    const attempt={...checkedAttempt,query:check.originalQuestion,userMessageId:randomId(),questionDecision:decision};
     confirmingQuestions.current.add(messageId);
     try{
       await add("user",(choice==="original"?"按原问题继续：":"按确认的问题继续：")+decision.dataQuestion,
@@ -1761,10 +1766,23 @@ function useWorkspaceValue(initialState: State) {
     [patch],
   );
   const send = useCallback(
-    async (query: string) => {
+    async (query: string, clarificationReply?: ClarificationReply) => {
       const q = query.trim(),
         s = latest.current;
       if (!q || s.pending || s.attachingMapScope || request.current) return;
+      if (clarificationReply) {
+        const {parentTaskId}=clarificationReply;
+        const parent=s.messages.find(m=>m.id===parentTaskId);
+        const alreadySent=s.messages.some(m=>m.role==="user" && m.id!==s.unansweredQuestionId &&
+          m.clarificationReply?.parentTaskId===parentTaskId);
+        if (!canReplyToDiscoveryClarification(parent) || alreadySent) return;
+        const attempt:DiscoveryAttempt={query:q,userMessageId:randomId(),workspaceKey:requestWorkspaceKey(s),
+          view:s.view,context:scopedQuestionContext([],null),clarificationReply};
+        add("user",q,{id:attempt.userMessageId,clarificationReply});
+        patch({clarificationReply:null,unansweredQuestionId:null});
+        await executeDiscovery(attempt,false);
+        return;
+      }
       // Explicit workspace commands remain local after attachments are removed.
       // Ordinary science questions do not acquire an area or year just by browsing.
       const useComposerScope=!isWorkspaceCommand(q) && (s.draftScope!==null || (!s.caseId && !s.citation &&

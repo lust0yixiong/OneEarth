@@ -1,6 +1,7 @@
 import { chromium } from "playwright-core";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
+import { archivedDiscovery } from "./discovery-evidence.mjs";
 
 const base=new URL(process.env.ONEEARTH_URL || "http://127.0.0.1:5284");
 const discovery=new URL(process.env.ONEEARTH_DISCOVERY_URL || "http://127.0.0.1:5285");
@@ -16,7 +17,7 @@ page.on("request",r=>{
   if(new URL(r.url()).pathname==="/api/tasks" && r.method()==="POST")tasks.add(r.postDataJSON().id);
 });
 const events=async(id)=>{
-  const r=await fetch(new URL("/v1/discoveries/"+id+"/events",discovery),{signal:AbortSignal.timeout(240000)});
+  const r=await fetch(new URL("/api/tasks/"+id+"/events",base),{signal:AbortSignal.timeout(420000)});
   assert.ok(r.ok);
   return (await r.text()).split("\n").filter(line=>line.trim()).map(JSON.parse);
 };
@@ -27,7 +28,9 @@ try {
   await page.getByLabel("发送消息",{exact:true}).click();
   await page.getByRole("region",{name:"确认问题理解"}).waitFor({timeout:180000});
   const [confirmationId]=tasks;
-  const planned=await events(confirmationId);
+  const before=await archivedDiscovery(discovery,confirmationId,await events(confirmationId));
+  const planned=before.events;
+  if (before.state) assert.equal(before.state,"TASK_STATE_INPUT_REQUIRED");
   assert.ok(planned.at(-1).result.questionCheck);
   assert.equal(planned.at(-1).result.sourceStatus.length,0);
   assert.equal(planned.filter(e=>e.finding).length,0);
@@ -36,7 +39,9 @@ try {
   await page.getByRole("region",{name:"阶段发现"}).first().waitFor({timeout:130000});
   const [,discoveryId]=tasks;
   assert.ok(discoveryId);
-  const completed=await events(discoveryId);
+  const after=await archivedDiscovery(discovery,discoveryId,await events(discoveryId),{after:before.lastSeq});
+  if (before.state) assert.equal(after.id,before.id);
+  const completed=after.events;
   const terminal=completed.at(-1).result;
   const failed=terminal.sourceStatus.find(c=>c.source==="网络检索");
   if(injected){
@@ -47,6 +52,6 @@ try {
   assert.ok(terminal.papers.length || terminal.haina.length);
   await page.locator(".message.assistant").nth(1).waitFor({timeout:180000});
   await page.screenshot({path:output+"/result-after-fault.png"});
-  await writeFile(output+"/results.json",JSON.stringify({confirmationId,discoveryId,searchCallsBeforeDecision:0,
+  await writeFile(output+"/results.json",JSON.stringify({confirmationId,discoveryId,providerTaskId:after.id,searchCallsBeforeDecision:0,
     injection:injected?"web":null,channels:terminal.sourceStatus,savedFindings:completed.filter(e=>e.finding?.items.length).length},null,2)+"\n");
 } finally {await browser.close();}

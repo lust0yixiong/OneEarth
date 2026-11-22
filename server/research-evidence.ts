@@ -141,7 +141,7 @@ export async function continueResearch(question:string,plan:TurnPlan,material:Ma
     gaps.add(focus.normalize("NFKC").toLowerCase());
     try{
       const next=await deps.discover(focus,step);
-      if(confirmation&&(next.questionCheck||next.clarification)){
+      if(confirmation&&next.questionCheck){
         retrieval={...retrieval!,issues:[...retrieval!.issues,"补充发现需要新的范围选择，已保留此前材料。"]};
         break;
       }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
+import { archivedDiscovery } from "./discovery-evidence.mjs";
 
 const [report, firstId, followId] = process.argv.slice(2);
 const base=new URL(process.env.ONEEARTH_URL || "http://127.0.0.1:5274");
@@ -12,7 +13,8 @@ async function events(origin,route,id) {
 }
 const first=await events(base,"/api/tasks",firstId);
 const next=await events(base,"/api/tasks",followId);
-const independent=await events(process.env.ONEEARTH_DISCOVERY_URL || "http://127.0.0.1:5275","/v1/discoveries",firstId);
+const {id:providerTaskId,events:independent}=await archivedDiscovery(
+  process.env.ONEEARTH_DISCOVERY_URL || "http://127.0.0.1:5275",firstId,first);
 const source = rows => rows.at(-1).result.answerNotes.references.filter(r=>r.sourceChannel==="assertion").map(r=>r.id);
 const selected=next.find(event=>event.call?.id==="citation-ordinal");
 const target=JSON.parse(selected.call.output).sourceId;
@@ -34,7 +36,7 @@ function summary(rows) {
     executorTimings:output.result.runTrace?.timings?.map(t=>({executor:t.executor,model:t.model,elapsedMs:t.elapsedMs,firstStdoutMs:t.firstStdoutMs}))};
 }
 data.turns=[summary(first),summary(next)];
-data.independentDiscovery={id:firstId,readOnce:true,channels:independent.at(-1).result.sourceStatus.map(c=>({source:c.source,status:c.status,count:c.count}))};
+data.independentDiscovery={id:providerTaskId,readOnce:true,channels:independent.at(-1).result.sourceStatus.map(c=>({source:c.source,status:c.status,count:c.count}))};
 data.followUp={previousTaskId:firstId,taskId:followId,pinnedId:target,newDiscoveryTasks:0};
 await writeFile(report,JSON.stringify(data,null,2)+"\n");
 console.log(JSON.stringify({firstId,followId,replayedTaskId:data.refresh.taskId,matchedPaper:target,newDiscoveryTasks:0}));

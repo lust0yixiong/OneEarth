@@ -63,6 +63,8 @@ async function controlled(t: TestContext, options: Options = {}) {
   const address = remote.address();
   assert.ok(address && typeof address !== "string");
   const previous = process.env.ONEEARTH_DISCOVERY_URL;
+  const previousProtocol = process.env.ONEEARTH_DISCOVERY_PROTOCOL;
+  process.env.ONEEARTH_DISCOVERY_PROTOCOL = "v1";
   process.env.ONEEARTH_DISCOVERY_URL = "http://127.0.0.1:" + address.port;
   const stopChild = await workTasks(child, async ({id, body}, signal, emit) => {
     emit({finding:{id,channel:"fixture",items:[{title:"already acquired material"}]}});
@@ -93,6 +95,8 @@ async function controlled(t: TestContext, options: Options = {}) {
     parent.close(); child.close();
     if (previous === undefined) delete process.env.ONEEARTH_DISCOVERY_URL;
     else process.env.ONEEARTH_DISCOVERY_URL = previous;
+    if (previousProtocol === undefined) delete process.env.ONEEARTH_DISCOVERY_PROTOCOL;
+    else process.env.ONEEARTH_DISCOVERY_PROTOCOL = previousProtocol;
   });
   const start = async (id = randomUUID()) => {
     assert.equal((await fetch(origin + "/api/tasks", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id,input:{query:"fixture"}})})).status, 202);

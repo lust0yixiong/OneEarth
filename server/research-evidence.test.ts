@@ -83,6 +83,15 @@ test("a failed supplemental discovery preserves material and disables repeated d
   assert.match(result.retrieval!.issues[0],/保留前面取得的材料/);
 });
 
+test("a confirmed goal still surfaces an actual provider clarification without silently re-confirming a new goal",async()=>{
+  const result=await continueResearch(question,plan,{retrieval:start,reads:[]},new AbortController().signal,{
+    model:async()=>JSON.stringify({action:"discover",reason:"need an exact station",gap:"station identity",targets:[],clarification:null}),
+    discover:async()=>({...start,clarification:"Which station within the confirmed region?"}),read:async()=>assert.fail(),stage:()=>{},report:()=>{},
+  },{choice:"proposed",originalQuestion:"original task",dataQuestion:question,checkMessageId:"confirmed-parent"});
+  assert.equal(result.clarification,"Which station within the confirmed region?");
+  assert.equal(result.retrieval,start);
+});
+
 test("a model cannot invent a read target or convert a pinned source into discovery",async()=>{
   const trace:ToolCall[]=[];
   const exact={...plan,action:"read" as const,targets:[{key:"web:"+address,kind:"web" as const,title:"Known",basis:"citation" as const,url:address}]};
