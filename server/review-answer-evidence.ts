@@ -5,8 +5,9 @@ import type {CalculationReport} from './verified-calculation';
 import {auditSourceStatements,type AuditInput,type Source,type Run} from './answer-evidence-check';
 import {validAssertionEvidenceMemory} from '../src/domain/assertion-evidence-memory';
 import {webMaterial} from '../src/domain/web-material';
+import type {SourceReadComparison} from './source-read-comparison';
 export type ParsedAnswer=ReturnType<typeof parseSynthesis>;
-export type EvidenceReviewInput={parsedAnswer:ParsedAnswer;catalogue:CatalogueEvidence[];references:AnswerReference[];webHits:WebHit[];question:string;originalSynthesisPrompt:string;calculations:CalculationReport[];run:(prompt:string,schema:Record<string,unknown>,signal:AbortSignal)=>Promise<unknown>;parentSignal:AbortSignal;onTool?:(call:ToolCall)=>void;budgets?:{totalMs?:number;auditMs?:number;repairMs?:number}};
+export type EvidenceReviewInput={parsedAnswer:ParsedAnswer;catalogue:CatalogueEvidence[];references:AnswerReference[];webHits:WebHit[];sourceReadComparisons?:SourceReadComparison[];question:string;originalSynthesisPrompt:string;calculations:CalculationReport[];run:(prompt:string,schema:Record<string,unknown>,signal:AbortSignal)=>Promise<unknown>;parentSignal:AbortSignal;onTool?:(call:ToolCall)=>void;budgets?:{totalMs?:number;auditMs?:number;repairMs?:number}};
 const identity=(r:AnswerReference)=>r.kind==='asset'?'asset:'+r.id:'web:'+r.url;
 const partial:Source['completeness']={loaded:'partial',supplied:'excerpt',totalItems:null,suppliedItems:null};
 const literal=(value:unknown):value is string=>typeof value==='string'&&!!value.trim();
@@ -18,7 +19,7 @@ function indexNames(index?:ManifestIndex){
 }
 /** Actual supplied literal and structured source evidence, with its level explicit.
  * Never substitute conversation background or assistant research notes. */
-export function buildAnswerEvidenceInput(input:Pick<EvidenceReviewInput,'parsedAnswer'|'catalogue'|'references'|'webHits'>):AuditInput {
+export function buildAnswerEvidenceInput(input:Pick<EvidenceReviewInput,'parsedAnswer'|'catalogue'|'references'|'webHits'|'sourceReadComparisons'>):AuditInput {
  const bindings=input.parsedAnswer.references.map((r,i)=>{
   const exact=input.references.flatMap((v,j)=>v===r?[j]:[]);const matches=exact.length?exact:input.references.flatMap((v,j)=>identity(v)===identity(r)&&v.title===r.title?[j]:[]);
   if(matches.length!==1)throw Error('ambiguous-display-binding');
@@ -48,6 +49,8 @@ export function buildAnswerEvidenceInput(input:Pick<EvidenceReviewInput,'parsedA
   if(hit){
    const material=webMaterial(hit.url);
    add('page',hit.pageExcerpt,JSON.stringify({kind:hit.stage||'page-excerpt',material:material?.kind,readBy:hit.readBy,previousRead:hit.previousRead,readAt:hit.readAt,truncated:hit.previousExcerptTruncated}));
+   const comparison=input.sourceReadComparisons?.find(value=>value.ref==='S'+(i+1));
+   for(const old of comparison?.history||[])add('prior-literal-archive-'+old.id,old.excerpt,JSON.stringify({kind:'historical-source-window-supplied-now',readAt:old.readAt,stage:old.stage,origin:old.origin,truncated:old.truncated,pageMarkers:old.pageMarkers}));
    add('snippet',hit.snippet,'current supplied search/metadata snippet; not evidence that page body was read');
    stage=literal(hit.pageExcerpt)?material?.kind==='metadata'?'metadata':'page-excerpt':'search-snippet';
    const metadata=Object.fromEntries(['doi','version','publisher','landingUrl'].flatMap(k=>literal(hit[k as keyof WebHit])?[[k,hit[k as keyof WebHit]]]:[]));
@@ -81,7 +84,7 @@ function repairRaw(raw:unknown){
  const value=typeof raw==='string'?JSON.parse(raw.trim().replace(/^```(?:json)?\s*|\s*```$/gi,'')):raw;
  if(!value||typeof value!=='object'||Array.isArray(value))throw Error('invalid-repair-shape');
  const v=value as Record<string,unknown>,fields=['message','sections','limitation','followUp','researchNotes','calculationRequests'];
- if(Object.keys(v).length!==fields.length||fields.some(k=>!Object.hasOwn(v,k))||!Array.isArray(v.calculationRequests)||v.calculationRequests.length)throw Error('invalid-repair-shape-or-calculation');
+ if(Object.keys(v).some(k=>!fields.includes(k)&&k!=='sourceChanges')||fields.some(k=>!Object.hasOwn(v,k))||!Array.isArray(v.calculationRequests)||v.calculationRequests.length)throw Error('invalid-repair-shape-or-calculation');
  return JSON.stringify(v);
 }
 const urls=(text:string)=>[...text.matchAll(/https?:\/\/[^\s<>"'\\)）\]]+/g)].map(m=>m[0].replace(/[。，,;；]+$/,''));

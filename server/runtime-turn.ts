@@ -455,7 +455,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       if(pinnedIds.length)report({id:"referenced-material",kind:"tool",name:"采用所引资料的已存内容",input:pinnedIds.join("、"),
         status:pinnedIds.every(id=>assetById.has(id))?"done":"partial",output:"已存资料身份 "+pinnedIds.filter(id=>assetById.has(id)).length+" 项；没有重新检索文献库或海纳。"});
       const reply=await modelReply(targetQuery,context,{message:summary,gridCoverage},history,executor,signal,
-        stage,pinnedPapers,"",undefined,undefined,report,{plan:turn,searches:readRuns,priorEvidence},currentAssertionReadings);
+        stage,pinnedPapers,"",undefined,undefined,report,{plan:turn,searches:readRuns,priorEvidence},currentAssertionReadings,{record:prior,searches:archived.searches});
       if(pinnedPapers.length)reply.paperRecords=literatureDisplay(pinnedPapers);
       reply.hainaRecords=pinnedIds.flatMap(id=>id.startsWith("haina:")?haina.records().filter(r=>String(r.id)===id.slice(6)):[]);
       if(reply.answerNotes)reply.answerNotes.elapsedMs=Date.now()-runTrace.started;
@@ -492,7 +492,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       const paperTrace=retrieved!.sourceStatus.map(s=>s.source+" "+(s.status==="done"?"完成":s.status==="partial"?"部分完成":"未完成")+" · "+s.count+" 项").join("；");
       const reply:DiscoveryResponse=await modelReply(decision?.dataQuestion||query,scopedContext,result,history,executor,signal,
         stage,retrieved!.papers,paperTrace,
-        !context.filters.source || context.filters.source==="constellation"?constellationFeed:undefined,retrieved,report,undefined,currentAssertionReadings);
+        !context.filters.source || context.filters.source==="constellation"?constellationFeed:undefined,retrieved,report,undefined,currentAssertionReadings,{record:prior,searches:archived.searches});
       if(retrieved!.papers.length)reply.paperRecords=literatureDisplay(retrieved!.papers);
       reply.hainaRecords=retrieved!.haina.flatMap(asset=>{
         const recordId=Number(asset.datasetId.slice(6));
