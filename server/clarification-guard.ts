@@ -2,14 +2,15 @@ import type {DiscoveryContext,DiscoveryResponse} from "../src/domain/types";
 import type {DeepSeekTools} from "../src/domain/deepseek-tools";
 import type {TaskStore} from "./task-store";
 import {taskIdPattern} from "./task-store";
-import {previousDiscovery} from "./discovery-bindings";
+import {previousDiscovery,discoveryConfirmation} from "./discovery-bindings";
 import type {StoredDiscoveryBinding} from "./discovery-bindings";
 
 export type ClarificationReply={parentTaskId:string};
 type ReplyInput={query:string;conversationId:string;context:DiscoveryContext;deepseekTools?:DeepSeekTools;questionDecision?:unknown;clarificationReply?:ClarificationReply};
 type ArchivedTurn={query:string;context:DiscoveryContext;deepseekTools?:DeepSeekTools;questionDecision?:import("../src/domain/types").QuestionDecision;
   history:import("./turn-planning").TurnHistory;clarificationReply?:ClarificationReply};
-export type ClarificationParent={binding:StoredDiscoveryBinding&{lastSeq:number};original:ArchivedTurn;goal:string;context:DiscoveryContext;result:DiscoveryResponse};
+export type ClarificationParent={binding:StoredDiscoveryBinding&{lastSeq:number};original:ArchivedTurn;goal:string;focus?:string;
+  delegation:{query:string;decision?:ArchivedTurn["questionDecision"]};context:DiscoveryContext;result:DiscoveryResponse};
 const scoped=(context:DiscoveryContext)=>({filters:context.filters,selection:context.selection,caseId:context.caseId,
   citation:context.citation,attachedScope:context.attachedScope,candidateIds:context.candidateIds,
   candidateVersions:context.candidateVersions,inCandidateScope:context.inCandidateScope});
@@ -22,7 +23,7 @@ export async function clarificationParent(tasks:TaskStore,body:ReplyInput):Promi
   if(!parent||JSON.parse(parent.body).conversationId!==body.conversationId)throw Error("原澄清不属于当前研究会话。");
   const previous=JSON.parse(parent.body),result=(await tasks.terminal(reply.parentTaskId))?.result as (DiscoveryResponse&{discoveryClarification?:boolean})|undefined;
   if(!result?.clarification||!result.discoveryClarification||result.questionCheck)throw Error("该记录没有可继续的受托澄清。");
-  const binding=await previousDiscovery(tasks,body.conversationId,reply.parentTaskId);
+  const binding=await previousDiscovery(tasks,body.conversationId,reply.parentTaskId,true);
   if(binding.transport!=="a2a"||binding.state!=="TASK_STATE_INPUT_REQUIRED"||binding.lastSeq===undefined)
     throw Error("原澄清缺少有效的受理身份或等待水位。");
   // Current browser filters/tool preferences are a view, never renewed authority.
@@ -42,7 +43,14 @@ export async function clarificationParent(tasks:TaskStore,body:ReplyInput):Promi
   const action=prior?.runTrace?.calls.find(c=>c.id==="turn-action"&&c.status==="done");
   try{normalized=JSON.parse(action?.output||"null")?.goal;}catch{}
   const goal=original.questionDecision?.dataQuestion||(typeof normalized==="string"&&normalized)||prior?.researchIntent?.task||original.query;
-  return {binding:binding as ClarificationParent["binding"],original,goal,context:{...original.context},result};
+  const confirmation=original.questionDecision?await discoveryConfirmation(tasks,body.conversationId,original.questionDecision.checkMessageId):undefined;
+  const delegation=confirmation?.newTask?{query:original.questionDecision!.dataQuestion}:{query:original.query,decision:original.questionDecision};
+  let focus:string|undefined;
+  if(binding.kind==="continuation"){
+    const call=result.runTrace?.calls.find(c=>c.id===binding.messageId+":discovery");
+    try{const saved=JSON.parse(call?.input||"null")?.focus;if(typeof saved==="string"&&saved)focus=saved;}catch{}
+  }
+  return {binding:binding as ClarificationParent["binding"],original,goal,focus,delegation,context:{...original.context},result};
 }
 
 export const clarificationGuardSchema={type:"object",additionalProperties:false,
@@ -59,7 +67,7 @@ supplement：针对原澄清补充缺失条件，原目的及已确认范围、�
 new_goal：要求实质改变研究目标、已确认区域/时段、资料或工具授权，或要求跳过确认；停止续行，提出保留实际新意图的完整新问题，待既有问题确认流程处理。不能把它当作edited确认通行证。
 clarify：回复仍无法判断所补充的条件，问最关键的一点；不调用发现。
 只输出action、reason、proposedQuestion、clarification的JSON。reason说明依据，只有new_goal填写proposedQuestion，只有clarify填写clarification。\n`+
-    JSON.stringify({originalQuestion:parent.original.query,researchGoal:parent.goal,confirmed:parent.original.questionDecision,
+    JSON.stringify({originalQuestion:parent.original.query,researchGoal:parent.goal,evidenceGap:parent.focus,confirmed:parent.original.questionDecision,
       scope:scoped(parent.context),tools:parent.original.deepseekTools,
       awaiting:parent.result.message,reply:text});
   const value=JSON.parse((await run(prompt)).trim().replace(/^```(?:json)?\s*|\s*```$/gi,"")) as Guard;

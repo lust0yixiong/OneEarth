@@ -166,7 +166,8 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
           previousResearchIntent:planningIntent,history,conversationContext,
         })})};
     }
-    let initialDiscoveryId:string|undefined,initialBinding:DiscoveryBinding|undefined;
+    let initialDiscoveryId:string|undefined,initialBinding:DiscoveryBinding|undefined,lastBinding:DiscoveryBinding|undefined;
+    let lastDiscoveryResult:import("./data-search").DataSearchResult|undefined;
     async function find(turn:TurnPlan,continuation?:DiscoveryInput["continuation"]){
       const messageId=continuation?randomUUID():taskId;
       const a2a=discoveryProtocol()==="a2a";
@@ -180,6 +181,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         input:JSON.stringify({messageId,...(discoveryId?{discoveryId}:{}),...(continuation?{previousId:continuation.previousId,focus:continuation.focus}:{})})};
       const saveBinding=async(binding:DiscoveryBinding)=>{
         discoveryId=binding.discoveryId;
+        lastBinding=binding;
         if(!continuation){initialDiscoveryId=discoveryId;initialBinding=binding;}
         await tasks.append(taskId,{discoveryBinding:{...binding,kind:continuation?"continuation":"initial"}});
       };
@@ -188,9 +190,10 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         const request:DiscoveryA2AInput=clarification&&!continuation?{
           continuedFrom:clarification.binding.discoveryId,clarificationReply:{text:body.query,afterSeq:clarification.binding.lastSeq},
         }:{
-          query:newTarget??query, decision:newTarget?undefined:decision, continuation,
-          continuedFrom:confirmation?.continuedFrom,
-          researchGoal:newTarget??decision?.dataQuestion??turn.goal, evidenceGap:continuation?.focus||turn.evidenceGap,
+          query:clarification?clarification.delegation.query:newTarget??query,
+          decision:clarification?clarification.delegation.decision:newTarget?undefined:decision, continuation,
+          continuedFrom:clarification?undefined:confirmation?.continuedFrom,
+          researchGoal:clarification?clarification.goal:newTarget??decision?.dataQuestion??turn.goal, evidenceGap:continuation?.focus||turn.evidenceGap,
           conversationContext, previousResearchIntent:planningIntent,
           history, currentDatasets, conversationEvidence,
           scope:{filters:context.filters,selection:context.selection,caseId:context.caseId,citation:context.citation,attachedScope:context.attachedScope},
@@ -216,6 +219,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
           }
         },{onAccepted:saveBinding,onCheckpoint:saveBinding,...(!continuation?confirmation?.options:{})});
         if(!continuation)initialDiscoveryId=discoveryId;
+        lastDiscoveryResult=result;
         report({...call,status:"done",output:JSON.stringify({messageId,discoveryId,channels:result.sourceStatus.map(({source,status,count})=>({source,status,count})),
           materials:{papers:result.papers.map(record=>record.id),haina:result.haina.map(asset=>asset.id),
             web:[...new Set(result.searches.flatMap(search=>search.hits.map(hit=>hit.url)))]}})});
@@ -263,12 +267,21 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
             return find(turn,{previousId:initialDiscoveryId,focus});
           },stage,report,
         },decision);
-        if(outcome.clarification)return {result:literatureDisplay({
+        if(outcome.clarification){
+          const material=outcome.retrieval;
+          if(material?.papers.length)cachedPapers.remember(material.papers);
+          runTrace.searches=[...(material?.searches||[]),...outcome.reads];
+          return {result:literatureDisplay({
           message:outcome.clarification,clarification:true,runTrace,researchRegion,
+          ...(lastDiscoveryResult?.clarification&&lastBinding?.state==="TASK_STATE_INPUT_REQUIRED"?{discoveryClarification:true}:{}),
+          ...(material?.papers.length?{paperRecords:material.papers}:{}),
+          hainaRecords:(material?.haina||[]).flatMap(asset=>haina.records().filter(r=>r.id===Number(asset.datasetId.slice(6)))),
+          ...(gridCoverage?{gridCoverage}:{}),
           researchIntent:retrieved?.plan.researchIntent||turn.researchIntent,
           conversationContext:retrieved?.plan.conversationContext||turn.conversationContext,
           conversationEvidence,conversationAssertionEvidence,
         })};
+        }
         retrieved=outcome.retrieval;
         readRuns=outcome.reads;
       }

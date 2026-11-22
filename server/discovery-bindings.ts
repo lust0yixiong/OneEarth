@@ -5,10 +5,11 @@ export type StoredDiscoveryBinding=DiscoveryBinding&{kind:"initial"|"continuatio
 type PreviousDiscovery=StoredDiscoveryBinding|{transport:"v1";discoveryId:string};
 
 /** Only a same-conversation persisted parent can supply a confirmation binding. */
-export async function previousDiscovery(tasks:TaskStore,conversationId:string,parentId:string):Promise<PreviousDiscovery>{
+export async function previousDiscovery(tasks:TaskStore,conversationId:string,parentId:string,waiting=false):Promise<PreviousDiscovery>{
   const parent=await tasks.get(parentId);
   if(!parent||JSON.parse(parent.body).conversationId!==conversationId)throw Error("没有找到同一研究会话的发现委托。");
   let after=0,found:StoredDiscoveryBinding|undefined,hasBinding=false;
+  const latest=new Map<string,StoredDiscoveryBinding>();
   for(;;){
     const events=await tasks.events(parentId,after);
     for(const event of events){
@@ -17,6 +18,13 @@ export async function previousDiscovery(tasks:TaskStore,conversationId:string,pa
         hasBinding=true;
         if(!saved||saved.transport!=="a2a"||!["initial","continuation"].includes(saved.kind))
           throw Error("已存研究记录的发现绑定无效，不能按旧协议猜测任务。");
+        if(typeof saved.messageId!=="string"||!saved.messageId||typeof saved.discoveryId!=="string"||!saved.discoveryId||
+          typeof saved.state!=="string"||(saved.lastSeq!==undefined&&(!Number.isSafeInteger(saved.lastSeq)||saved.lastSeq<0)))
+          throw Error("已存研究记录的发现受理身份无效。");
+        const old=latest.get(saved.messageId);
+        if(old&&(old.discoveryId!==saved.discoveryId||(old.contextId!==undefined&&saved.contextId!==undefined&&old.contextId!==saved.contextId)))
+          throw Error("发现受理身份发生冲突。");
+        latest.set(saved.messageId,saved);
       }
       if(saved?.kind==="initial"){
         if(saved.transport!=="a2a"||saved.messageId!==parentId||typeof saved.discoveryId!=="string"||!saved.discoveryId||
@@ -34,6 +42,11 @@ export async function previousDiscovery(tasks:TaskStore,conversationId:string,pa
     after=next;
   }
   // Archived v1 research records predate explicit bindings and used the same ID.
+  if(waiting&&hasBinding){
+    const pending=[...latest.values()].filter(b=>b.state==="TASK_STATE_INPUT_REQUIRED");
+    if(pending.length!==1||pending[0].lastSeq===undefined)throw Error("该研究记录无法唯一定位当前待补充的受托发现及等待水位。");
+    return pending[0];
+  }
   if(found)return found;
   if(hasBinding)throw Error("已存研究记录缺少初次发现的受理绑定。");
   return {transport:"v1",discoveryId:parentId};

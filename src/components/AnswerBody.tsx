@@ -70,7 +70,7 @@ export function AnswerBody({message,question,animate,children,clarificationActio
   ]);
   const remaining=batch?.ids.filter(id=>!shown.has(id)) || [];
   if(m.clarification)return <div role="region" aria-label="补充关键信息">
-    <RunDetails trace={m.runTrace}/>
+    <RunDetails trace={m.runTrace} openFinding={inspect}/>
     <AnswerContent text={m.text} references={[]} inspect={inspect} animate={animate} onComplete={finish}/>
     {clarificationAction}
   </div>;

@@ -59,6 +59,28 @@ test("a completed A2A task is referenced without being resurrected as a same-tas
   }finally{tasks.close();}
 });
 
+test("a supplemental wait is distinct from the completed initial discovery",async()=>{
+  const {tasks,id,conversationId}=parent();
+  try{
+    tasks.append(id,{discoveryBinding:binding(id,"TASK_STATE_COMPLETED")});
+    tasks.append(id,{discoveryBinding:{...binding(randomUUID()),kind:"continuation",discoveryId:"waiting-supplement"}});
+    assert.equal((await previousDiscovery(tasks,conversationId,id)).discoveryId,"server-issued-discovery");
+    assert.equal((await previousDiscovery(tasks,conversationId,id,true)).discoveryId,"waiting-supplement");
+  }finally{tasks.close();}
+});
+
+for(const extraCheckpoint of [86,undefined]){
+  test("multiple waiting tasks are not guessed even when an extra wait checkpoint is "+extraCheckpoint,async()=>{
+    const {tasks,id,conversationId}=parent();
+    try{
+      tasks.append(id,{discoveryBinding:binding(id,"TASK_STATE_COMPLETED")});
+      tasks.append(id,{discoveryBinding:{...binding(randomUUID()),kind:"continuation",discoveryId:"waiting-first"}});
+      tasks.append(id,{discoveryBinding:{...binding(randomUUID()),kind:"continuation",discoveryId:"waiting-second",lastSeq:extraCheckpoint}});
+      await assert.rejects(previousDiscovery(tasks,conversationId,id,true),/唯一定位/);
+    }finally{tasks.close();}
+  });
+}
+
 for(const invalid of ["missing-checkpoint","conflicting-id","malformed-binding"]){
   test(invalid+" fails closed instead of guessing the runtime UUID",async()=>{
     const {tasks,id,conversationId}=parent();
