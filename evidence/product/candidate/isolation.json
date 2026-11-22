@@ -1,0 +1,8 @@
+{
+  "checkedAt": "2026-11-22T00:29:04.618Z",
+  "release": "v0.2.0-rc.1-8581ccd",
+  "prototypeHealthOutsidePolicy": 0,
+  "prototypePortDeniedExitCode": 7,
+  "prototypeDirectoryDeniedExitCode": 1,
+  "credentialTransport": "independent private deployment config"
+}

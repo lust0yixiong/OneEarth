@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
 import {chromium} from "playwright-core";
+import {setTimeout as wait} from "node:timers/promises";
 
 const origin=new URL(process.env.ONEEARTH_URL||"http://127.0.0.1:5474");
 assert.notEqual(origin.port,"5174");
@@ -34,17 +35,33 @@ page.on("request",request=>{
   if(url.pathname==="/api/tasks"&&request.method()==="POST")submits.push(request.postDataJSON().id);
 });
 try{
-  await page.goto(origin.href);
-  record.version=(await page.request.get(new URL("/api/health",origin).href).then(response=>response.json())).version;
-  await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(question);
-  const accepted=page.waitForResponse(response=>response.request().method()==="POST"&&new URL(response.url()).pathname==="/api/tasks");
-  await page.getByLabel("发送消息",{exact:true}).click();
-  const queued=await accepted;
-  assert.ok(queued.ok(),"任务提交 HTTP "+queued.status());
-  record.taskId=(await queued.json()).id;
-  await save();
+  const existing=process.env.ONEEARTH_REOPEN_TASK;
+  await page.goto(existing?new URL("/?research="+existing,origin).href:origin.href);
+  record.version=(await fetch(new URL("/api/health",origin)).then(response=>response.json())).version;
+  if(existing){
+    assert.match(existing,/^[a-f0-9-]{36}$/);
+    record.taskId=existing;
+    record.reopenedFromOriginalSubmission=true;
+    const stored=await fetch(new URL("/api/tasks/"+existing+"/record",origin)).then(response=>response.json());
+    assert.equal(stored.question,question);
+  }else{
+    await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(question);
+    const submitted=page.waitForRequest(request=>request.method()==="POST"&&new URL(request.url()).pathname==="/api/tasks");
+    await page.getByLabel("发送消息",{exact:true}).click();
+    record.taskId=(await submitted).postDataJSON().id;
+  }
   const route="/api/tasks/"+record.taskId;
-  if(kind==="additional"&&process.env.ONEEARTH_REFRESH!=="0"){
+  let accepted=false;
+  for(let n=0;n<50;n++){
+    const status=await fetch(new URL(route,origin)).then(response=>response.status);
+    if(status===200){accepted=true;break;}
+    assert.equal(status,404,"任务提交状态");
+    await wait(100);
+  }
+  assert.ok(accepted,"网页提交的任务应持久化后再读取事件。");
+  await save();
+  console.log(JSON.stringify({kind,taskId:record.taskId,accepted}));
+  if(!existing&&kind==="additional"&&process.env.ONEEARTH_REFRESH!=="0"){
     await page.locator(".oe-findings").first().waitFor({timeout:160000});
     const pending=await page.request.get(new URL(route,origin).href).then(response=>response.json());
     record.beforeRefresh=pending.status;
@@ -72,7 +89,9 @@ try{
     if(c.id.startsWith("research-read-"))entries.push({...common,type:"exact-read",source:publicAddress(c.input),returnedHits:output?.hits||0});
     if(c.id==="answer-generation")entries.push({...common,type:"retained-sources-fallback"});
   }
-  Object.assign(record,{result:result?"complete":last.code||"failed",elapsedMs:Date.now()-millis,entries,
+  if(existing)record.browserReopenedAt=record.startedAt;
+  record.startedAt=new Date(events[0].at).toISOString();
+  Object.assign(record,{result:result?"complete":last.code||"failed",elapsedMs:last.at-events[0].at,entries,
     prototypeRequests:prototype.length,distinctBrowserTaskIds:[...new Set(submits)],findings:events.filter(e=>e.finding?.items?.length).map(e=>({seq:e.seq,
       channel:e.finding.source,identities:e.finding.items.map(item=>item.assetId||publicAddress(item.url)).filter(Boolean)})),
     executors:traces?.timings?.map(({model,executor,elapsedMs,startedAt})=>({model,executor,elapsedMs,startedAt})),
@@ -82,7 +101,7 @@ try{
     .map(({type,status,action,returnedHits})=>({type,status,action,returnedHits})),references:record.references?.length,result:record.result}));
   assert.ok(result?.answerNotes?.references?.length,"真实研究答复需要可打开的最终引用。");
   assert.ok(!entries.some(e=>e.type==="retained-sources-fallback"),"本组验收需要有证据支撑的实际答复。");
-  assert.deepEqual(record.distinctBrowserTaskIds,[record.taskId]);
+  assert.deepEqual(record.distinctBrowserTaskIds,existing?[]:[record.taskId]);
   assert.deepEqual(prototype,[]);
   assert.ok(record.executors?.length>=3);
   const firstDiscovery=entries.find(e=>e.type==="discovery"&&e.status==="done");

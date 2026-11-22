@@ -1,0 +1,349 @@
+{
+  "kind": "direct",
+  "question": "有哪些开放卫星降水产品可以先拿来做中国的月降水对比？给我两个产品名称和官方入口，能确认有月尺度产品就行。",
+  "entry": "http://127.0.0.1:5474",
+  "browser": "157.0.8103.79",
+  "startedAt": "2026-11-22T00:29:23.555Z",
+  "version": "0.2.0-rc.1",
+  "taskId": "c4036a5b-0444-4279-b9b0-d6283c9dd4f0",
+  "reopenedFromOriginalSubmission": true,
+  "result": "complete",
+  "elapsedMs": 78714,
+  "entries": [
+    {
+      "seq": 2733,
+      "at": 1795307381069,
+      "id": "turn-action",
+      "status": "done",
+      "type": "initial-decision",
+      "action": "search"
+    },
+    {
+      "seq": 3096,
+      "at": 1795307420473,
+      "id": "c4036a5b-0444-4279-b9b0-d6283c9dd4f0:discovery",
+      "status": "done",
+      "type": "discovery",
+      "childId": "c4036a5b-0444-4279-b9b0-d6283c9dd4f0",
+      "channels": [
+        {
+          "source": "海纳专区检索",
+          "status": "done",
+          "count": 15
+        },
+        {
+          "source": "文献资料检索",
+          "status": "done",
+          "count": 24
+        },
+        {
+          "source": "网络检索",
+          "status": "done",
+          "count": 26
+        }
+      ],
+      "materials": {
+        "papers": [
+          "earthnano:8b3376d1529ef25feeeea82896484f6736c989e6ece86fef55630546bc53126a",
+          "earthnano:bf0bde18761c2ab4408c038bd1a3ee4f31ced2da0b54c0d3154cecde6274047b",
+          "earthnano:8db39b0714bcf99df46f33d83296195972d2099bd1cd1afb46805f697b251586",
+          "earthnano:88388bf2e12fdff8b760b48cec71dc62fff118d1c155dd713e441e9a6146844b",
+          "earthnano:93205b6cc99fd417e02f9ffba532d2cdb3ef2a5ce311d70c841e43f1a5834b94",
+          "earthnano:c61aafbe0b3b835235c1c19fc78e22b0bc3f01336cc6833d39284487fba38154",
+          "earthnano:3ca67b767cc8d445aee9330ace9ed46e786dd5aef7c25e7c88213da0392cbd74",
+          "earthnano:7255a5e8d70aa606110ae088a24762832452dfe54dc332207adee10dccd72d2f",
+          "earthnano:030ddc42dbb11433937cf72eb0da42ced6d5efee90a2ed753207eea523d561ce",
+          "earthnano:fee6f76be58eaceb83f00af9836960c2f23ab2c27e8604ac04ebf33f3219d4a2",
+          "earthnano:b41923fa77939305349c903e0ca2a96825b78398a81ef4cd98a8275c540f658b",
+          "earthnano:385cbb36394696ac3e62dbdf6fcd2fc5a99138e052c40c98c6081374b81c3ae7",
+          "earthnano:bee7b57685963fea00a494501ffa7ca024b07fb4b94e3e23bca96a405a8b57c7",
+          "earthnano:eeb9d64ef3607036435bc34603c0f0c33d4d70c4c9b75f7be5d74862c9145cdf",
+          "earthnano:0bc6bc76b078ad7fb42b759c73dd067863d4ddb8df7c3b33f96873dc0108e30a",
+          "earthnano:19caaf7ba211f9498a5a1ac54dcba923ac36b196456a3c02edd9b9e331564a54",
+          "earthnano:be780780eee3da03378d32faad9ff792ee91b90ef16f30b7cf7a555d77923d6b",
+          "earthnano:066cb2c89d413d46e69ade4faaf944743a433901f8c57157b5132e896d797cbe",
+          "earthnano:56abb9916b50579c92fce67ca0c8e7ae38ac9d4b859d7c56cdaf57661ff575d2",
+          "earthnano:b182a823cd36850ce32051fa34f614e6853e23f2b2a6087f7cdfbb0c9af0aa6e",
+          "earthnano:13c7ce204ca426eae11436df465afa1d959f9f156cf77b5270c3fc956f16345c",
+          "earthnano:6dae1847644ec5aea87b4dd75ee974cdfbb06ad1e5ae96f28011e926d548959c",
+          "earthnano:35f2f47c5c89ea8f425de22189432cc5fca43b1064e00f206c9030c9d05bda72",
+          "earthnano:2ce4aef8c7cc50686caadaba98bc280a3055afd7c1a115ba4ebad318f73d1124"
+        ],
+        "haina": [
+          "haina:1825366",
+          "haina:1845609",
+          "haina:1824188",
+          "haina:1824256",
+          "haina:1824995",
+          "haina:1825051",
+          "haina:1825063",
+          "haina:1825066",
+          "haina:1825232",
+          "haina:1825235",
+          "haina:1825237",
+          "haina:1825293",
+          "haina:1825364",
+          "haina:1825365",
+          "haina:1825381"
+        ],
+        "web": [
+          "https://zhuanlan.zhihu.com/p/716543809",
+          "https://gpm.nasa.gov/missions/GPM",
+          "https://www.lkbiao.com/conversion/flow-rate-converter",
+          "https://baike.baidu.com/item/gpm/7168071",
+          "https://zhuanlan.zhihu.com/p/656185886",
+          "https://catalog.data.gov/dataset/gpm-imerg-final-precipitation-l3-1-month-0-1-degree-x-0-1-degree-v07-gpm_3imergm-at-ges-di",
+          "https://www.geoplatform.gov/metadata/00c11a6c-820e-4f87-a777-17f6be3dc27e",
+          "https://gpm.nasa.gov/sites/default/files/2019-05/IMERG_doc_190416.docx",
+          "https://gpm.nasa.gov/sites/default/files/2020-10/IMERG_doc_201006.pdf",
+          "https://gpm.nasa.gov/education/sites/default/files/interactive_files3/From%20Satellites%20to%20Your%20Backyard_final_0.pdf",
+          "https://headlines.ametsoc.org/wp-content/uploads/2025/09/20170601_BAMSDigitalEdition_June17.pdf",
+          "https://doi.org/10.5281/zenodo.23694866",
+          "https://doi.org/10.5281/zenodo.23694865",
+          "https://doi.org/10.5281/zenodo.24390905",
+          "https://doi.org/10.5281/zenodo.24390904",
+          "https://doi.org/10.5281/zenodo.24348215",
+          "https://earlywarning.usgs.gov/fews/product/175/",
+          "https://coastwatch.pfeg.noaa.gov/erddap/zh-CN/griddap/chirps20GlobalMonthlyP05.iso19115",
+          "https://upwell.pfeg.noaa.gov/erddap/metadata/iso19115/xml/chirps20GlobalMonthlyP05_iso19115.xml",
+          "https://data.apps.fao.org/catalog/iso/f8223d82-de9a-4ac8-9810-36e34d085d28",
+          "https://wiki.chc.ucsb.edu/index.php",
+          "https://www.psl.noaa.gov/data/gridded/data.chirps.html",
+          "https://doi.org/10.5281/zenodo.24404765",
+          "https://doi.org/10.5281/zenodo.24404766",
+          "https://doi.org/10.5281/zenodo.23495994",
+          "https://doi.org/10.5067/gpm/imerg/3b-month/07"
+        ]
+      }
+    },
+    {
+      "seq": 3099,
+      "at": 1795307430122,
+      "id": "research-decision-1",
+      "status": "done",
+      "type": "evidence-decision",
+      "action": "answer",
+      "reason": "现有材料已足以给出两个开放卫星降水产品，并确认月尺度：GPM IMERG 1-month V07 和 CHIRPS v2.0 monthly。NASA 的 IMERG 月产品官方入口可用 W6 对应的 NASA GES DISC 产品目录；CHIRPS 官方数据入口可用 W21，材料也有 NOAA 月产品元数据 W18。",
+      "gap": null,
+      "targets": [],
+      "visibleMaterials": {
+        "papers": [
+          "earthnano:8b3376d1529ef25feeeea82896484f6736c989e6ece86fef55630546bc53126a",
+          "earthnano:bf0bde18761c2ab4408c038bd1a3ee4f31ced2da0b54c0d3154cecde6274047b",
+          "earthnano:8db39b0714bcf99df46f33d83296195972d2099bd1cd1afb46805f697b251586",
+          "earthnano:88388bf2e12fdff8b760b48cec71dc62fff118d1c155dd713e441e9a6146844b",
+          "earthnano:93205b6cc99fd417e02f9ffba532d2cdb3ef2a5ce311d70c841e43f1a5834b94",
+          "earthnano:c61aafbe0b3b835235c1c19fc78e22b0bc3f01336cc6833d39284487fba38154",
+          "earthnano:3ca67b767cc8d445aee9330ace9ed46e786dd5aef7c25e7c88213da0392cbd74",
+          "earthnano:7255a5e8d70aa606110ae088a24762832452dfe54dc332207adee10dccd72d2f",
+          "earthnano:030ddc42dbb11433937cf72eb0da42ced6d5efee90a2ed753207eea523d561ce",
+          "earthnano:fee6f76be58eaceb83f00af9836960c2f23ab2c27e8604ac04ebf33f3219d4a2",
+          "earthnano:b41923fa77939305349c903e0ca2a96825b78398a81ef4cd98a8275c540f658b",
+          "earthnano:385cbb36394696ac3e62dbdf6fcd2fc5a99138e052c40c98c6081374b81c3ae7",
+          "earthnano:bee7b57685963fea00a494501ffa7ca024b07fb4b94e3e23bca96a405a8b57c7",
+          "earthnano:eeb9d64ef3607036435bc34603c0f0c33d4d70c4c9b75f7be5d74862c9145cdf",
+          "earthnano:0bc6bc76b078ad7fb42b759c73dd067863d4ddb8df7c3b33f96873dc0108e30a",
+          "earthnano:19caaf7ba211f9498a5a1ac54dcba923ac36b196456a3c02edd9b9e331564a54"
+        ],
+        "haina": [
+          "haina:1825366",
+          "haina:1845609",
+          "haina:1824188",
+          "haina:1824256",
+          "haina:1824995",
+          "haina:1825051",
+          "haina:1825063",
+          "haina:1825066",
+          "haina:1825232",
+          "haina:1825235",
+          "haina:1825237",
+          "haina:1825293"
+        ],
+        "web": [
+          {
+            "url": "https://zhuanlan.zhihu.com/p/716543809",
+            "label": "W1"
+          },
+          {
+            "url": "https://gpm.nasa.gov/missions/GPM",
+            "label": "W2"
+          },
+          {
+            "url": "https://www.lkbiao.com/conversion/flow-rate-converter",
+            "label": "W3"
+          },
+          {
+            "url": "https://baike.baidu.com/item/gpm/7168071",
+            "label": "W4"
+          },
+          {
+            "url": "https://zhuanlan.zhihu.com/p/656185886",
+            "label": "W5"
+          },
+          {
+            "url": "https://catalog.data.gov/dataset/gpm-imerg-final-precipitation-l3-1-month-0-1-degree-x-0-1-degree-v07-gpm_3imergm-at-ges-di",
+            "label": "W6"
+          },
+          {
+            "url": "https://www.geoplatform.gov/metadata/00c11a6c-820e-4f87-a777-17f6be3dc27e",
+            "label": "W7"
+          },
+          {
+            "url": "https://gpm.nasa.gov/sites/default/files/2019-05/IMERG_doc_190416.docx",
+            "label": "W8"
+          },
+          {
+            "url": "https://gpm.nasa.gov/sites/default/files/2020-10/IMERG_doc_201006.pdf",
+            "label": "W9"
+          },
+          {
+            "url": "https://gpm.nasa.gov/education/sites/default/files/interactive_files3/From%20Satellites%20to%20Your%20Backyard_final_0.pdf",
+            "label": "W10"
+          },
+          {
+            "url": "https://headlines.ametsoc.org/wp-content/uploads/2025/09/20170601_BAMSDigitalEdition_June17.pdf",
+            "label": "W11"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.23694866",
+            "label": "W12"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.23694865",
+            "label": "W13"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.24390905",
+            "label": "W14"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.24390904",
+            "label": "W15"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.24348215",
+            "label": "W16"
+          },
+          {
+            "url": "https://earlywarning.usgs.gov/fews/product/175/",
+            "label": "W17"
+          },
+          {
+            "url": "https://coastwatch.pfeg.noaa.gov/erddap/zh-CN/griddap/chirps20GlobalMonthlyP05.iso19115",
+            "label": "W18"
+          },
+          {
+            "url": "https://upwell.pfeg.noaa.gov/erddap/metadata/iso19115/xml/chirps20GlobalMonthlyP05_iso19115.xml",
+            "label": "W19"
+          },
+          {
+            "url": "https://data.apps.fao.org/catalog/iso/f8223d82-de9a-4ac8-9810-36e34d085d28",
+            "label": "W20"
+          },
+          {
+            "url": "https://wiki.chc.ucsb.edu/index.php",
+            "label": "W21"
+          },
+          {
+            "url": "https://www.psl.noaa.gov/data/gridded/data.chirps.html",
+            "label": "W22"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.24404765",
+            "label": "W23"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.24404766",
+            "label": "W24"
+          }
+        ],
+        "channels": [
+          {
+            "source": "海纳专区检索",
+            "status": "done",
+            "count": 15
+          },
+          {
+            "source": "文献资料检索",
+            "status": "done",
+            "count": 24
+          },
+          {
+            "source": "网络检索",
+            "status": "done",
+            "count": 26
+          }
+        ],
+        "reads": []
+      }
+    }
+  ],
+  "prototypeRequests": 0,
+  "distinctBrowserTaskIds": [],
+  "findings": [
+    {
+      "seq": 2752,
+      "channel": "海纳专区",
+      "identities": [
+        "haina:1825366",
+        "haina:1845609"
+      ]
+    },
+    {
+      "seq": 2786,
+      "channel": "公开网络",
+      "identities": [
+        "https://zhuanlan.zhihu.com/p/716543809",
+        "https://gpm.nasa.gov/missions/GPM"
+      ]
+    },
+    {
+      "seq": 3080,
+      "channel": "文献资料",
+      "identities": [
+        "earthnano:8b3376d1529ef25feeeea82896484f6736c989e6ece86fef55630546bc53126a",
+        "earthnano:bf0bde18761c2ab4408c038bd1a3ee4f31ced2da0b54c0d3154cecde6274047b"
+      ]
+    },
+    {
+      "seq": 3093,
+      "channel": "公开网络",
+      "identities": [
+        "https://zhuanlan.zhihu.com/p/716543809",
+        "https://gpm.nasa.gov/missions/GPM"
+      ]
+    }
+  ],
+  "executors": [
+    {
+      "model": "gpt-6-luna",
+      "executor": "codex",
+      "elapsedMs": 17381,
+      "startedAt": 1795307363667
+    },
+    {
+      "model": "gpt-6-luna",
+      "executor": "codex",
+      "elapsedMs": 9554,
+      "startedAt": 1795307420470
+    },
+    {
+      "model": "gpt-6-luna",
+      "executor": "codex",
+      "elapsedMs": 12134,
+      "startedAt": 1795307430121
+    }
+  ],
+  "references": [
+    {
+      "channel": "web",
+      "url": "https://doi.org/10.5067/gpm/imerg/3b-month/07"
+    },
+    {
+      "channel": "web",
+      "url": "https://www.psl.noaa.gov/data/gridded/data.chirps.html"
+    }
+  ],
+  "browserReopenedAt": "2026-11-22T00:32:15.783Z",
+  "browserSubmissionTaskId": "c4036a5b-0444-4279-b9b0-d6283c9dd4f0"
+}

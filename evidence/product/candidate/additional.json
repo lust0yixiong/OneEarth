@@ -1,0 +1,591 @@
+{
+  "kind": "additional",
+  "question": "我想核对 NASA IMERG V07 Final Run 的月降水产品。请查清 precipitation 和 randomError 两个字段的单位，以及月产品提供的是平均降水率还是累计量。请给对应的数据字典或产品说明，只有产品首页不能算核实。",
+  "entry": "http://127.0.0.1:5474",
+  "browser": "157.0.8103.79",
+  "startedAt": "2026-11-22T00:32:16.203Z",
+  "version": "0.2.0-rc.1",
+  "taskId": "a67b99b1-5874-4f88-bba7-25e9a1c2c1ff",
+  "beforeRefresh": "running",
+  "result": "complete",
+  "elapsedMs": 111518,
+  "entries": [
+    {
+      "seq": 3110,
+      "at": 1795307556942,
+      "id": "turn-action",
+      "status": "done",
+      "type": "initial-decision",
+      "action": "search"
+    },
+    {
+      "seq": 3467,
+      "at": 1795307589381,
+      "id": "a67b99b1-5874-4f88-bba7-25e9a1c2c1ff:discovery",
+      "status": "done",
+      "type": "discovery",
+      "childId": "a67b99b1-5874-4f88-bba7-25e9a1c2c1ff",
+      "channels": [
+        {
+          "source": "海纳专区检索",
+          "status": "done",
+          "count": 15
+        },
+        {
+          "source": "文献资料检索",
+          "status": "done",
+          "count": 24
+        },
+        {
+          "source": "网络检索",
+          "status": "done",
+          "count": 11
+        }
+      ],
+      "materials": {
+        "papers": [
+          "earthnano:f30ed8a5df1b9133aefb78dfe1962f9747e0e38d8f137de42fa978e1eea6c9ff",
+          "earthnano:5bca9329848771244f99e8934a58f61653427fa40b9d99e560c708b12ef67957",
+          "earthnano:88388bf2e12fdff8b760b48cec71dc62fff118d1c155dd713e441e9a6146844b",
+          "earthnano:c5bb13b0429fc74442bc65ec95191b965ab181b4fdcea506a831dc47f15b1e20",
+          "earthnano:5005c7d8f2e3a8b97b7f55602d4a5d9c5e9c18d4ff5a2a595c7c1bb2ee8d4351",
+          "earthnano:d211750bed879290da21905bbf188002d6b5447d0b7925bb10ab508890658b43",
+          "earthnano:df1dc3cee0cbc261f7bfb5653162e6cd8393d960b26b1e332c09819a6f4d124f",
+          "earthnano:030ddc42dbb11433937cf72eb0da42ced6d5efee90a2ed753207eea523d561ce",
+          "earthnano:a90ad09e9ca74d047fb35b349b259921e41e7f775a6d27b92d55c78c89c66562",
+          "earthnano:c6bd770f9bc643b53cde73e9fb9f87e4c06d47eb2fb9ad5e8d6ed92aeab22bce",
+          "earthnano:3e33c138b4835f5ad6461a7abdb4164ec857894421462ec74e717575dec55cd3",
+          "earthnano:154c2d5587d6f16a27c195e5eaf8436b9017781842be69ff38017eff029af2c1",
+          "earthnano:299005dc4017f38a4ef070cd2fcdb8883946dc2ed97601e149f57c1a4e9335cf",
+          "earthnano:c3d4eb1efde8b56f7e070f84da23ee48273e780641b2c5351f94ec0280dbd421",
+          "earthnano:ea0513318ba9ce926b02636799aa0c8344c952873a09f10ae853fdfbb281ff9a",
+          "earthnano:4683a63b23fc699cd608071e0a50bb9465acf44f6f36a0fde2601d6cbb9f8195",
+          "earthnano:3472279a91892b7fb4796771643c3e4c87b2e78119803487b6c28e877b619fc7",
+          "earthnano:f1d6e1cf020abe0c2c64e352a114da78c102931a581e10b5366bf1a4efce9a6d",
+          "earthnano:ba258d8c7fbef969431c15d21e6cde945707669ecbac651cd70e21de19cc55e5",
+          "earthnano:f44ef220a6bd59c2874f659da769677ed66e9fdcc07f5576e2d17718455f0275",
+          "earthnano:95f6a8b94535342b5d19750ce0c10c09ad6f604d3cf0af0fcaa6fde9fe156b3e",
+          "earthnano:170c447bfe7d225e89afc1e75fbd805977cf4682c893ef70c2dbde2bfa256c98",
+          "earthnano:bda25a82d9918a0b4fce9e9e2d14dd331b349ac650526eba488854069949bafc",
+          "earthnano:1f81ba33f669525b134cf2da7b70e98a90a8e27bf89d758dbe7a167f1ec2229e"
+        ],
+        "haina": [
+          "haina:1845757",
+          "haina:1845761",
+          "haina:1845765",
+          "haina:1845769",
+          "haina:1846541",
+          "haina:1845660",
+          "haina:1845756",
+          "haina:1845760",
+          "haina:1845764",
+          "haina:1845768",
+          "haina:1846060",
+          "haina:1845749",
+          "haina:1845750",
+          "haina:1845751",
+          "haina:1845661"
+        ],
+        "web": [
+          "https://developers.google.cn/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_MONTHLY_V07",
+          "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_V07_ATBD_final_230712.pdf",
+          "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_TechnicalDocumentation_final_230713.pdf",
+          "https://ntrs.nasa.gov/api/citations/20205001707/downloads/EGU20_AS1.36_Huffman_IMERG-slides.pdf",
+          "https://ntrs.nasa.gov/api/citations/20190032563/downloads/20190032563.pdf",
+          "https://doi.org/10.5281/zenodo.24022297",
+          "https://doi.org/10.5281/zenodo.24022298",
+          "https://doi.org/10.5281/zenodo.23763561",
+          "https://doi.org/10.5281/zenodo.23763562",
+          "https://doi.org/10.5281/zenodo.20801024",
+          "https://doi.org/10.5067/gpm/imerg/3b-month/07"
+        ]
+      }
+    },
+    {
+      "seq": 3470,
+      "at": 1795307599437,
+      "id": "research-decision-1",
+      "status": "done",
+      "type": "evidence-decision",
+      "action": "read",
+      "reason": "官方 IMERG V07 ATBD 和技术文档尚未读取正文；它们可能直接说明月 Final 文件中 precipitation、randomError 的单位，以及月值是平均率还是累计量。",
+      "gap": "核对官方文档中月产品 precipitation 与 randomError 的单位，以及月产品值代表平均降水率还是累计降水量。",
+      "targets": [
+        "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_V07_ATBD_final_230712.pdf",
+        "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_TechnicalDocumentation_final_230713.pdf"
+      ],
+      "visibleMaterials": {
+        "papers": [
+          "earthnano:f30ed8a5df1b9133aefb78dfe1962f9747e0e38d8f137de42fa978e1eea6c9ff",
+          "earthnano:5bca9329848771244f99e8934a58f61653427fa40b9d99e560c708b12ef67957",
+          "earthnano:88388bf2e12fdff8b760b48cec71dc62fff118d1c155dd713e441e9a6146844b",
+          "earthnano:c5bb13b0429fc74442bc65ec95191b965ab181b4fdcea506a831dc47f15b1e20",
+          "earthnano:5005c7d8f2e3a8b97b7f55602d4a5d9c5e9c18d4ff5a2a595c7c1bb2ee8d4351",
+          "earthnano:d211750bed879290da21905bbf188002d6b5447d0b7925bb10ab508890658b43",
+          "earthnano:df1dc3cee0cbc261f7bfb5653162e6cd8393d960b26b1e332c09819a6f4d124f",
+          "earthnano:030ddc42dbb11433937cf72eb0da42ced6d5efee90a2ed753207eea523d561ce",
+          "earthnano:a90ad09e9ca74d047fb35b349b259921e41e7f775a6d27b92d55c78c89c66562",
+          "earthnano:c6bd770f9bc643b53cde73e9fb9f87e4c06d47eb2fb9ad5e8d6ed92aeab22bce",
+          "earthnano:3e33c138b4835f5ad6461a7abdb4164ec857894421462ec74e717575dec55cd3",
+          "earthnano:154c2d5587d6f16a27c195e5eaf8436b9017781842be69ff38017eff029af2c1",
+          "earthnano:299005dc4017f38a4ef070cd2fcdb8883946dc2ed97601e149f57c1a4e9335cf",
+          "earthnano:c3d4eb1efde8b56f7e070f84da23ee48273e780641b2c5351f94ec0280dbd421",
+          "earthnano:ea0513318ba9ce926b02636799aa0c8344c952873a09f10ae853fdfbb281ff9a",
+          "earthnano:4683a63b23fc699cd608071e0a50bb9465acf44f6f36a0fde2601d6cbb9f8195"
+        ],
+        "haina": [
+          "haina:1845757",
+          "haina:1845761",
+          "haina:1845765",
+          "haina:1845769",
+          "haina:1846541",
+          "haina:1845660",
+          "haina:1845756",
+          "haina:1845760",
+          "haina:1845764",
+          "haina:1845768",
+          "haina:1846060",
+          "haina:1845749"
+        ],
+        "web": [
+          {
+            "url": "https://developers.google.cn/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_MONTHLY_V07",
+            "label": "W1"
+          },
+          {
+            "url": "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_V07_ATBD_final_230712.pdf",
+            "label": "W2"
+          },
+          {
+            "url": "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_TechnicalDocumentation_final_230713.pdf",
+            "label": "W3"
+          },
+          {
+            "url": "https://ntrs.nasa.gov/api/citations/20205001707/downloads/EGU20_AS1.36_Huffman_IMERG-slides.pdf",
+            "label": "W4"
+          },
+          {
+            "url": "https://ntrs.nasa.gov/api/citations/20190032563/downloads/20190032563.pdf",
+            "label": "W5"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.24022297",
+            "label": "W6"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.24022298",
+            "label": "W7"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.23763561",
+            "label": "W8"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.23763562",
+            "label": "W9"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.20801024",
+            "label": "W10"
+          },
+          {
+            "url": "https://doi.org/10.5067/gpm/imerg/3b-month/07",
+            "label": "W11"
+          }
+        ],
+        "channels": [
+          {
+            "source": "海纳专区检索",
+            "status": "done",
+            "count": 15
+          },
+          {
+            "source": "文献资料检索",
+            "status": "done",
+            "count": 24
+          },
+          {
+            "source": "网络检索",
+            "status": "done",
+            "count": 11
+          }
+        ],
+        "reads": []
+      }
+    },
+    {
+      "seq": 3476,
+      "at": 1795307603231,
+      "id": "research-read-1-1",
+      "status": "done",
+      "type": "exact-read",
+      "source": "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_TechnicalDocumentation_final_230713.pdf",
+      "returnedHits": 1
+    },
+    {
+      "seq": 3478,
+      "at": 1795307604842,
+      "id": "research-read-1-0",
+      "status": "done",
+      "type": "exact-read",
+      "source": "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_V07_ATBD_final_230712.pdf",
+      "returnedHits": 1
+    },
+    {
+      "seq": 3483,
+      "at": 1795307615671,
+      "id": "research-decision-2",
+      "status": "done",
+      "type": "evidence-decision",
+      "action": "read",
+      "reason": "现有材料包含月产品字段的官方 NASA 技术文档和 ATBD，但目前只有摘要片段，未读到字段定义正文。W1 虽有单位和说明，却是 Google Earth Engine 产品目录；需要读取 NASA 原始文档中的月产品字段定义，以核实 randomError 单位及 precipitation 是平均率还是月累计量。",
+      "gap": "核对 NASA IMERG V07 Technical Documentation 中 3IMERGM Final 月文件对 precipitation、randomError 的字段定义、单位，以及月值的时间含义。",
+      "targets": [
+        "https://developers.google.cn/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_MONTHLY_V07",
+        "https://ntrs.nasa.gov/api/citations/20190032563/downloads/20190032563.pdf"
+      ],
+      "visibleMaterials": {
+        "papers": [
+          "earthnano:f30ed8a5df1b9133aefb78dfe1962f9747e0e38d8f137de42fa978e1eea6c9ff",
+          "earthnano:5bca9329848771244f99e8934a58f61653427fa40b9d99e560c708b12ef67957",
+          "earthnano:88388bf2e12fdff8b760b48cec71dc62fff118d1c155dd713e441e9a6146844b",
+          "earthnano:c5bb13b0429fc74442bc65ec95191b965ab181b4fdcea506a831dc47f15b1e20",
+          "earthnano:5005c7d8f2e3a8b97b7f55602d4a5d9c5e9c18d4ff5a2a595c7c1bb2ee8d4351",
+          "earthnano:d211750bed879290da21905bbf188002d6b5447d0b7925bb10ab508890658b43",
+          "earthnano:df1dc3cee0cbc261f7bfb5653162e6cd8393d960b26b1e332c09819a6f4d124f",
+          "earthnano:030ddc42dbb11433937cf72eb0da42ced6d5efee90a2ed753207eea523d561ce",
+          "earthnano:a90ad09e9ca74d047fb35b349b259921e41e7f775a6d27b92d55c78c89c66562",
+          "earthnano:c6bd770f9bc643b53cde73e9fb9f87e4c06d47eb2fb9ad5e8d6ed92aeab22bce",
+          "earthnano:3e33c138b4835f5ad6461a7abdb4164ec857894421462ec74e717575dec55cd3",
+          "earthnano:154c2d5587d6f16a27c195e5eaf8436b9017781842be69ff38017eff029af2c1",
+          "earthnano:299005dc4017f38a4ef070cd2fcdb8883946dc2ed97601e149f57c1a4e9335cf",
+          "earthnano:c3d4eb1efde8b56f7e070f84da23ee48273e780641b2c5351f94ec0280dbd421",
+          "earthnano:ea0513318ba9ce926b02636799aa0c8344c952873a09f10ae853fdfbb281ff9a",
+          "earthnano:4683a63b23fc699cd608071e0a50bb9465acf44f6f36a0fde2601d6cbb9f8195"
+        ],
+        "haina": [
+          "haina:1845757",
+          "haina:1845761",
+          "haina:1845765",
+          "haina:1845769",
+          "haina:1846541",
+          "haina:1845660",
+          "haina:1845756",
+          "haina:1845760",
+          "haina:1845764",
+          "haina:1845768",
+          "haina:1846060",
+          "haina:1845749"
+        ],
+        "web": [
+          {
+            "url": "https://developers.google.cn/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_MONTHLY_V07",
+            "label": "W1"
+          },
+          {
+            "url": "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_V07_ATBD_final_230712.pdf",
+            "stage": "pdf-excerpt"
+          },
+          {
+            "url": "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_TechnicalDocumentation_final_230713.pdf",
+            "stage": "pdf-excerpt"
+          },
+          {
+            "url": "https://ntrs.nasa.gov/api/citations/20205001707/downloads/EGU20_AS1.36_Huffman_IMERG-slides.pdf",
+            "label": "W2"
+          },
+          {
+            "url": "https://ntrs.nasa.gov/api/citations/20190032563/downloads/20190032563.pdf",
+            "label": "W3"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.24022297",
+            "label": "W4"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.24022298",
+            "label": "W5"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.23763561",
+            "label": "W6"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.23763562",
+            "label": "W7"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.20801024",
+            "label": "W8"
+          },
+          {
+            "url": "https://doi.org/10.5067/gpm/imerg/3b-month/07",
+            "label": "W9"
+          }
+        ],
+        "channels": [
+          {
+            "source": "海纳专区检索",
+            "status": "done",
+            "count": 15
+          },
+          {
+            "source": "文献资料检索",
+            "status": "done",
+            "count": 24
+          },
+          {
+            "source": "网络检索",
+            "status": "done",
+            "count": 11
+          }
+        ],
+        "reads": [
+          {
+            "query": "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_V07_ATBD_final_230712.pdf",
+            "status": "done",
+            "engine": "PDF 原文",
+            "hits": 1
+          },
+          {
+            "query": "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_TechnicalDocumentation_final_230713.pdf",
+            "status": "done",
+            "engine": "PDF 原文",
+            "hits": 1
+          }
+        ]
+      }
+    },
+    {
+      "seq": 3489,
+      "at": 1795307616844,
+      "id": "research-read-2-1",
+      "status": "failed",
+      "type": "exact-read",
+      "source": "https://ntrs.nasa.gov/api/citations/20190032563/downloads/20190032563.pdf",
+      "returnedHits": 0
+    },
+    {
+      "seq": 3491,
+      "at": 1795307617166,
+      "id": "research-read-2-0",
+      "status": "done",
+      "type": "exact-read",
+      "source": "https://developers.google.cn/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_MONTHLY_V07",
+      "returnedHits": 1
+    },
+    {
+      "seq": 3495,
+      "at": 1795307627080,
+      "id": "research-decision-3",
+      "status": "done",
+      "type": "evidence-decision",
+      "action": "answer",
+      "reason": "已取得的 Earth Engine 数据目录正文 excerpt 明确列出 monthly 数据集频率为 1 个月，并给出 precipitation 与 randomError 均为毫米/小时；NASA IMERG V07 ATBD 原文摘要明确指出月度 Final 文件的 precipitation 是合并卫星与雨量计的降水估计。足以回答所问字段单位及产品表示形式；NASA 产品说明的原文依据已在材料中提供，因此不需继续读取或发现。",
+      "gap": null,
+      "targets": [],
+      "visibleMaterials": {
+        "papers": [
+          "earthnano:f30ed8a5df1b9133aefb78dfe1962f9747e0e38d8f137de42fa978e1eea6c9ff",
+          "earthnano:5bca9329848771244f99e8934a58f61653427fa40b9d99e560c708b12ef67957",
+          "earthnano:88388bf2e12fdff8b760b48cec71dc62fff118d1c155dd713e441e9a6146844b",
+          "earthnano:c5bb13b0429fc74442bc65ec95191b965ab181b4fdcea506a831dc47f15b1e20",
+          "earthnano:5005c7d8f2e3a8b97b7f55602d4a5d9c5e9c18d4ff5a2a595c7c1bb2ee8d4351",
+          "earthnano:d211750bed879290da21905bbf188002d6b5447d0b7925bb10ab508890658b43",
+          "earthnano:df1dc3cee0cbc261f7bfb5653162e6cd8393d960b26b1e332c09819a6f4d124f",
+          "earthnano:030ddc42dbb11433937cf72eb0da42ced6d5efee90a2ed753207eea523d561ce",
+          "earthnano:a90ad09e9ca74d047fb35b349b259921e41e7f775a6d27b92d55c78c89c66562",
+          "earthnano:c6bd770f9bc643b53cde73e9fb9f87e4c06d47eb2fb9ad5e8d6ed92aeab22bce",
+          "earthnano:3e33c138b4835f5ad6461a7abdb4164ec857894421462ec74e717575dec55cd3",
+          "earthnano:154c2d5587d6f16a27c195e5eaf8436b9017781842be69ff38017eff029af2c1",
+          "earthnano:299005dc4017f38a4ef070cd2fcdb8883946dc2ed97601e149f57c1a4e9335cf",
+          "earthnano:c3d4eb1efde8b56f7e070f84da23ee48273e780641b2c5351f94ec0280dbd421",
+          "earthnano:ea0513318ba9ce926b02636799aa0c8344c952873a09f10ae853fdfbb281ff9a",
+          "earthnano:4683a63b23fc699cd608071e0a50bb9465acf44f6f36a0fde2601d6cbb9f8195"
+        ],
+        "haina": [
+          "haina:1845757",
+          "haina:1845761",
+          "haina:1845765",
+          "haina:1845769",
+          "haina:1846541",
+          "haina:1845660",
+          "haina:1845756",
+          "haina:1845760",
+          "haina:1845764",
+          "haina:1845768",
+          "haina:1846060",
+          "haina:1845749"
+        ],
+        "web": [
+          {
+            "url": "https://developers.google.cn/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_MONTHLY_V07",
+            "stage": "page-excerpt"
+          },
+          {
+            "url": "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_V07_ATBD_final_230712.pdf",
+            "stage": "pdf-excerpt"
+          },
+          {
+            "url": "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_TechnicalDocumentation_final_230713.pdf",
+            "stage": "pdf-excerpt"
+          },
+          {
+            "url": "https://ntrs.nasa.gov/api/citations/20205001707/downloads/EGU20_AS1.36_Huffman_IMERG-slides.pdf",
+            "label": "W1"
+          },
+          {
+            "url": "https://ntrs.nasa.gov/api/citations/20190032563/downloads/20190032563.pdf"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.24022297",
+            "label": "W2"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.24022298",
+            "label": "W3"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.23763561",
+            "label": "W4"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.23763562",
+            "label": "W5"
+          },
+          {
+            "url": "https://doi.org/10.5281/zenodo.20801024",
+            "label": "W6"
+          },
+          {
+            "url": "https://doi.org/10.5067/gpm/imerg/3b-month/07",
+            "label": "W7"
+          }
+        ],
+        "channels": [
+          {
+            "source": "海纳专区检索",
+            "status": "done",
+            "count": 15
+          },
+          {
+            "source": "文献资料检索",
+            "status": "done",
+            "count": 24
+          },
+          {
+            "source": "网络检索",
+            "status": "done",
+            "count": 11
+          }
+        ],
+        "reads": [
+          {
+            "query": "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_V07_ATBD_final_230712.pdf",
+            "status": "done",
+            "engine": "PDF 原文",
+            "hits": 1
+          },
+          {
+            "query": "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_TechnicalDocumentation_final_230713.pdf",
+            "status": "done",
+            "engine": "PDF 原文",
+            "hits": 1
+          },
+          {
+            "query": "https://developers.google.cn/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_MONTHLY_V07",
+            "status": "done",
+            "engine": "原站读取",
+            "hits": 1
+          },
+          {
+            "query": "https://ntrs.nasa.gov/api/citations/20190032563/downloads/20190032563.pdf",
+            "status": "failed",
+            "engine": "PDF 原文",
+            "hits": 0
+          }
+        ]
+      }
+    }
+  ],
+  "prototypeRequests": 0,
+  "distinctBrowserTaskIds": [
+    "a67b99b1-5874-4f88-bba7-25e9a1c2c1ff"
+  ],
+  "findings": [
+    {
+      "seq": 3126,
+      "channel": "海纳专区",
+      "identities": [
+        "haina:1845757",
+        "haina:1845761"
+      ]
+    },
+    {
+      "seq": 3133,
+      "channel": "公开网络",
+      "identities": [
+        "https://developers.google.cn/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_MONTHLY_V07",
+        "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_V07_ATBD_final_230712.pdf"
+      ]
+    },
+    {
+      "seq": 3451,
+      "channel": "文献资料",
+      "identities": [
+        "earthnano:f30ed8a5df1b9133aefb78dfe1962f9747e0e38d8f137de42fa978e1eea6c9ff",
+        "earthnano:5bca9329848771244f99e8934a58f61653427fa40b9d99e560c708b12ef67957"
+      ]
+    },
+    {
+      "seq": 3464,
+      "channel": "公开网络",
+      "identities": [
+        "https://developers.google.cn/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_MONTHLY_V07",
+        "https://gpm.nasa.gov/sites/default/files/2023-07/IMERG_V07_ATBD_final_230712.pdf"
+      ]
+    }
+  ],
+  "executors": [
+    {
+      "model": "gpt-6-luna",
+      "executor": "codex",
+      "elapsedMs": 20668,
+      "startedAt": 1795307536268
+    },
+    {
+      "model": "gpt-6-luna",
+      "executor": "codex",
+      "elapsedMs": 10046,
+      "startedAt": 1795307589378
+    },
+    {
+      "model": "gpt-6-luna",
+      "executor": "codex",
+      "elapsedMs": 10824,
+      "startedAt": 1795307604841
+    },
+    {
+      "model": "gpt-6-luna",
+      "executor": "codex",
+      "elapsedMs": 9766,
+      "startedAt": 1795307617165
+    },
+    {
+      "model": "gpt-6-luna",
+      "executor": "codex",
+      "elapsedMs": 20626,
+      "startedAt": 1795307627078
+    }
+  ],
+  "references": [
+    {
+      "channel": "web",
+      "url": "https://developers.google.cn/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_MONTHLY_V07"
+    },
+    {
+      "channel": "web",
+      "url": "https://doi.org/10.5067/gpm/imerg/3b-month/07"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "candidateCommit": "8581ccd0faaa8356ffa43bda3b6e7f723308d9f5",
+  "releaseFolder": "v0.2.0-rc.1-8581ccd",
+  "version": "0.2.0-rc.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "node": "v26.0.0",
+  "entry": "http://127.0.0.1:5474",
+  "tests": {
+    "passed": 546,
+    "typecheck": true,
+    "build": true
+  },
+  "distIndexSha256": "da0687a48fe2644c4455f36d9c127ec3883d07d12324d6c5767b89cb460eedcf"
+}

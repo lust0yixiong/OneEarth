@@ -1,0 +1,27 @@
+{
+  "confirmationId": "c313cf65-9e4c-4acf-92e9-87de38a81ef8",
+  "discoveryId": "9b6ff93e-66ee-4868-a659-a02cdb0d6d40",
+  "searchCallsBeforeDecision": 0,
+  "injection": null,
+  "channels": [
+    {
+      "count": 15,
+      "detail": "",
+      "source": "海纳专区检索",
+      "status": "done"
+    },
+    {
+      "count": 24,
+      "detail": "",
+      "source": "文献资料检索",
+      "status": "done"
+    },
+    {
+      "count": 12,
+      "detail": "PDF 原文 原站未返回可分段核对的 PDF。；DeepSeek Fetch DeepSeek fetch 请求失败（HTTP 404）。",
+      "source": "网络检索",
+      "status": "partial"
+    }
+  ],
+  "savedFindings": 4
+}
