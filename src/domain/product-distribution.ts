@@ -1,7 +1,7 @@
 import { footprintCells } from "./observation-grid";
 import { geoArea, geoBounds } from "d3-geo";
 import type { Polygon, MultiPolygon } from "geojson";
-import { assetById, assets, observationAssets, type Asset } from "./datasets";
+import { assetById, assets, coverageAssets, observationAssets, type Asset } from "./datasets";
 import { inventoryId, sample } from "./earth-search";
 import {
   observationById,
@@ -12,7 +12,7 @@ import { cellAt, cellShape, getModel } from "./spatial";
 import { withinWindow } from "./time-window";
 import type { CandidateSet, Filters, GridSpec } from "./types";
 import { windManifest } from "./wind";
-import { paperId, paperRecords } from "./paper-record";
+import { paperRecords } from "./paper-record";
 import { rectangleContainsVertex } from "./geo-rectangle";
 
 export type Area = Polygon | MultiPolygon;
@@ -119,7 +119,6 @@ export function regionRecords(
   const allowed=batch?new Set(batch.ids):null;
   const include = (a: Asset) =>
     acceptsAsset(a, f) &&
-    (!paperCandidates || !paperId(a.id) || paperCandidates.has(a.id)) &&
     (!allowed || allowed.has(a.id)) &&
     (!batch?.caseId || batch.caseId === a.caseId);
   const inventory = assetById.get(inventoryId)!;
@@ -156,7 +155,7 @@ export function regionRecords(
         url: a.url,
       });
   }
-  for (const a of batch ? batch.ids.flatMap(id=>assetById.get(id)||[]) : assets) {
+  for (const a of coverageAssets(batch?.ids, paperCandidates)) {
     if (!include(a) || !productKey(a) || f.place) continue;
     // The administrative boundary file itself has geometry. A paper's study window is not a product footprint.
     const area =

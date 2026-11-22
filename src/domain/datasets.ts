@@ -160,6 +160,31 @@ function editionOf(a: Asset): Asset {
 }
 export const assets = resources.flatMap(assetsFor).map(editionOf);
 export const assetById = new Map(assets.map((a) => [a.id, a]));
+let nonPaperCatalogue = [...assets];
+function refreshNonPaperCatalogue() {
+  nonPaperCatalogue = assets.filter(asset => !paperId(asset.id));
+}
+
+/** SQL candidates limit spatial coverage; explicit batches retain exact record IDs. */
+export function* coverageAssets(ids?: string[], paperCandidates?: ReadonlySet<string>) {
+  if (ids) {
+    for (const id of ids) {
+      if (paperCandidates && paperId(id) && !paperCandidates.has(id)) continue;
+      const asset = assetById.get(id);
+      if (asset) yield asset;
+    }
+  } else if (paperCandidates) {
+    yield* nonPaperCatalogue;
+    for (const id of paperCandidates) {
+      if (!paperId(id)) continue;
+      const asset = assetById.get(id);
+      if (asset) yield asset;
+    }
+  } else {
+    yield* assets;
+  }
+}
+
 let revision = 0;
 export const catalogRevision = () => revision;
 const catalogListeners=new Set<()=>void>();
@@ -188,7 +213,7 @@ export function registerHaina(records:HainaRecord[],synced:string,endpoint:strin
       if(ri<0)resources.push(a);else resources[ri]=a;
       assetById.set(a.id,a);byIdentity.set(assetIdentity(a),[a]);
     }
-    if(records.length){hainaSignature="";catalogChanged();}
+    if(records.length){hainaSignature="";refreshNonPaperCatalogue();catalogChanged();}
     return !!records.length;
   }
   const signature=JSON.stringify([records,synced,endpoint]);
@@ -201,6 +226,7 @@ export function registerHaina(records:HainaRecord[],synced:string,endpoint:strin
   hainaGroup.needs=needs;
   for(const a of next){assetById.set(a.id,a);byIdentity.set(assetIdentity(a),[a]);}
   assets.push(...next);resources.push(...next);
+  refreshNonPaperCatalogue();
   hainaSignature=signature;catalogChanged();return true;
 }
 let groupedRevision = -1;
@@ -298,12 +324,13 @@ export function registerObservations(records: Observation[], replaceFeed = false
   feedSignature=signature;
   for (let i=assets.length-1;i>=0;i--) if (assets[i].origins.includes("constellation")) assets.splice(i,1);
   assets.push(...actual.map(r=>assetById.get(pushId(r))!));
+  refreshNonPaperCatalogue();
   catalogChanged();
   return true;
 }
 export function observationAssets(ids?:string[]) {
   return ids ? ids.flatMap(id=>id.startsWith(pushPrefix) && assetById.has(id)?[assetById.get(id)!]:[]) :
-    assets.filter(a=>a.origins.includes("constellation"));
+    nonPaperCatalogue.filter(a=>a.origins.includes("constellation"));
 }
 export function registerPapers(records: PaperRecord[], includeInCatalog = true) {
   registerPaperRecords(records.filter(validPaperRecord), includeInCatalog);

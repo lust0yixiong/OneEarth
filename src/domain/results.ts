@@ -1,6 +1,6 @@
 import {globalProduct,productKey,regionHit,regionRecords,timeFits} from "./product-distribution";
 import {countBand,countBands} from "./distribution-heat";
-import { paperId, paperRecords } from "./paper-record";
+import { paperRecords } from "./paper-record";
 import {accessMembership} from "./data-access";
 import {dateEvidence,withinWindow} from "./time-window";
 import { observationCells } from "./observation-grid";
@@ -11,7 +11,7 @@ import { geoContains } from "d3-geo";
 import { documentedFinding } from "./lineage";
 import { catalogGroups, catalogGroupById, caseById } from "./catalog";
 import {
-  assets, observationAssets, discoverableAsset, assetsByCase, catalogRevision,
+  assets, observationAssets, discoverableAsset, assetsByCase, catalogRevision, coverageAssets,
   assetById,
   assetIdentity,
   identitiesForRecords,
@@ -214,7 +214,6 @@ export function catalogGrid(
 ) {
   if (catalogEvidenceGrid(grid, result).key !== grid.key)
     return new Map<string, Set<string>>();
-  const allowed = result ? identitiesForRecords(result.ids) : null;
   const pushed = observationAssets(result?.ids);
   const key = JSON.stringify([
     catalogRevision(),
@@ -241,22 +240,20 @@ export function catalogGrid(
   // Saved references may be absent from the discoverable feed. Group their
   // exact registered IDs once; do not scan every catalogue group per batch ID.
   // Received observations are handled by the separate pushed path below.
-  const grouped = result ? new Map<string, Asset[]>() : assetsByCase();
-  if (result) for (const id of result.ids) {
-    const a = assetById.get(id);
-    if (!a || observationById(a.id)) continue;
+  const scoped = result != null || paperCandidates !== undefined;
+  const grouped = scoped ? new Map<string, Asset[]>() : assetsByCase();
+  if (scoped) for (const a of coverageAssets(result?.ids, paperCandidates)) {
+    if (observationById(a.id)) continue;
     const group = grouped.get(a.caseId) || [];
     group.push(a);grouped.set(a.caseId, group);
   }
-  const caseIds = result ? grouped.keys() : catalogGroups.map(c => c.id);
+  const caseIds = scoped ? grouped.keys() : catalogGroups.map(c => c.id);
   for (const caseId of caseIds) {
     if (result?.caseId && caseId !== result.caseId) continue;
     const related = (grouped.get(caseId) || []).filter(
       (a) =>
         a.caseId === caseId &&
-        a.kind !== "requirement" &&
-        (!paperCandidates || !paperId(a.id) || paperCandidates.has(a.id)) &&
-        (!allowed || allowed.has(assetIdentity(a))),
+        a.kind !== "requirement",
     );
     const selection = result?.selection;
     if(!related.length)continue;
