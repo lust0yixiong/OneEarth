@@ -1,3 +1,4 @@
+import {researchExecutor} from "../../server/research-executor";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
@@ -77,7 +78,7 @@ test('the actual reply builder uses provided context and never labels an unreque
   await writeFile(path.join(dir,'codex'),body,{mode:0o755});process.env.PATH=dir+path.delimiter+oldPath;
   const i=input('解释我引用这段的含义');i.context.citation={title:'片段',scope:'第2页',body:'相对稳定点的位移。'};
   const plan=parseTurnPlan(JSON.stringify(route(i,'respond',['citation'])),i);const stages:string[]=[];
-  const r=await modelReply(i.question,i.context,{message:'无新检索'},[],{executor:'codex',model:''},new AbortController().signal,s=>stages.push(s),false,[],'',undefined,undefined,undefined,{plan,searches:[]});
+  const r=await modelReply(i.question,i.context,{message:'无新检索'},[],researchExecutor({executor:'codex',model:''},undefined,new AbortController().signal),new AbortController().signal,s=>stages.push(s),[],'',undefined,undefined,undefined,{plan,searches:[]});
   assert.equal(r.answerNotes?.reviewed,0);assert.deepEqual(r.answerNotes?.searches,[]);assert.ok(stages.every(s=>!s.includes('0 项目录候选')));assert.equal(r.researchIntent?.task,i.question);
  }finally{if(oldPath===undefined)delete process.env.PATH;else process.env.PATH=oldPath;await rm(dir,{recursive:true,force:true})}
 });

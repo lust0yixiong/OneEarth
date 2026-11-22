@@ -7,20 +7,21 @@ import type { paperCache } from "./earthnano";
 import type { hainaService } from "./haina-search";
 import type { constellationService } from "./constellations";
 import { assetById, registerObservations, registerPapers } from "../src/domain/datasets";
-import { runExecutor } from "./executor";
 import { modelReply } from "./research-answer";
 import { validHistory } from "./turn-history";
 import path from "node:path";
 import {questionGridEvidence} from "./question-grid";
 import {ExecutorFailure} from "./executor-failure";
 import {prepareTurn,turnMetadata,turnPlanSchema,type TurnPlan} from "./turn-planning";
-import {readPlannedSources} from "./turn-reading";
+import {randomUUID} from "node:crypto";
+import {researchExecutor} from "./research-executor";
+import {continueResearch, evidenceDecisionSchema} from "./research-evidence";
+import type {DiscoveryInput} from "./discovery-contract";
 import {rememberConversationReferences} from "../src/domain/reference-memory";
 import {conversationScope,scopedReply} from "./conversation-scope";
 import {discoverConversation} from "./conversation-discovery";
 import { priorResult } from "./runtime-input";
 import { numberedFollowUp } from "./follow-up-reference";
-import { discoverThroughService } from "./discovery-contract";
 import {AnswerReferenceError,synthesisFailureDiagnostic} from "./scientific-answer";
 import {scopeLabel} from "../src/domain/question-scope";
 import {navigationTarget,parseCoordinates,photonLookup,wikipediaLookup,placeVariants,canonicalPlaceNames,placeLookupSchema,geocoderEnabled,type NavigationTarget,type PlaceHit} from "./place-lookup";
@@ -58,6 +59,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
   const {tasks, cachedPapers, haina, push, coverage, researchRegionService, adminBoundaryDir, canonicalCache} = services;
   const {query, context, history, questionDecision: decision} = body;
   const controller = {signal};
+  const executor=researchExecutor(body.config,body.deepseekTools,signal);
   const runTrace:RunTrace = {started:Date.now(),stages:[],calls:[],timings:requestPerformance.getStore()};
   let researchRegion:ResearchRegion|null|undefined;
   let regionTask:Promise<void>|undefined;
@@ -130,52 +132,82 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
           reason:"上条回答没有该编号。",clarification:"上一条回答里没有第 "+selected.ordinal+" 条"+label+"。你可以点击原引用，或告诉我标题。",searchPlan:undefined};
       }
     }
+    async function find(turn:TurnPlan,continuation?:DiscoveryInput["continuation"]){
+      const discoveryId=continuation?randomUUID():taskId;
+      const prefix=continuation?discoveryId+":":"";
+      const call={id:discoveryId+":discovery",kind:"tool" as const,name:"独立数据发现服务",
+        input:continuation?JSON.stringify({discoveryId,previousId:continuation.previousId,focus:continuation.focus}):taskId};
+      report({...call,status:"running"});
+      try {
+        const result = await executor.discover(discoveryId, {
+          query, decision, continuation,
+          continuedFrom:decision?.checkMessageId,
+          initialPlan:continuation?undefined:turn.searchPlan, conversationContext, previousResearchIntent:planningIntent,
+          history, currentDatasets, conversationEvidence,
+          scope:{filters:context.filters,selection:context.selection,caseId:context.caseId,citation:context.citation,attachedScope:context.attachedScope},
+          references:rememberConversationReferences(history.filter(t=>t.role==="assistant").at(-1)?.conversationReferences||[],
+            turn.targets.flatMap<AnswerReference>(t=>t.id?[{kind:"asset",id:t.id,title:t.title,source:assetById.get(t.id)?.source||"所引资料"}]:t.url?[{kind:"web",title:t.title,url:t.url}]:[])),
+        }, update => {
+          if(update.planned&&!continuation){
+            const plan = update.planned;
+            regionTask=researchRegionService.locate(plan.questionMode==="reframe"?null:plan.researchIntent?.region,
+              plan.questionMode==="reframe"?undefined:attachedGrid?.selection).then(region=>{
+              researchRegion=region;event({researchRegion});
+            }).catch(()=>{researchRegion=null;event({researchRegion});});
+          }
+          if(update.stage)stage(update.stage,update.searches);
+          if(update.call)report({...update.call,id:prefix+update.call.id});
+          if(update.finding){
+            const finding={...update.finding,id:prefix+update.finding.id};
+            const findings=[...(runTrace.findings||[])], index=findings.findIndex(f=>f.id===finding.id);
+            if(index<0)findings.push(finding);else findings[index]=finding;
+            runTrace.findings=findings;
+            event({finding,traceStarted:runTrace.started});
+          }
+        });
+        report({...call,status:"done",output:JSON.stringify({discoveryId,channels:result.sourceStatus.map(({source,status,count})=>({source,status,count})),
+          materials:{papers:result.papers.map(record=>record.id),haina:result.haina.map(asset=>asset.id),
+            web:[...new Set(result.searches.flatMap(search=>search.hits.map(hit=>hit.url)))]}})});
+        return result;
+      } catch(error) {
+        report({...call,status:"failed",error:error instanceof Error?error.message:"发现服务未完成。"});
+        throw error;
+      }
+    }
     const prepared = navigation ? navigationTurn(navigation) : ordinalPlan ? {plan:ordinalPlan,retrieval:undefined} : await prepareTurn({
       question:query, context, history, conversationContext,
       previousResearchIntent:planningIntent, confirmedQuestion:decision?.dataQuestion,
     }, signal, {
-      run: prompt => runExecutor(body.config, prompt, signal, {outputSchema:turnPlanSchema}),
+      run: prompt => executor.model(prompt, {outputSchema:turnPlanSchema}),
       stage, report,
-      search: async turn => {
-        const call = {id:taskId + ":discovery", kind:"tool" as const, name:"独立数据发现服务", input:taskId};
-        report({...call,status:"running"});
-        try {
-          const result = await discoverThroughService(taskId, {
-            query, config:body.config, deepseekTools:body.deepseekTools, decision,
-            continuedFrom:decision?.checkMessageId,
-            initialPlan:turn.searchPlan, conversationContext, previousResearchIntent:planningIntent,
-            history, currentDatasets, conversationEvidence,
-            scope:{filters:context.filters,selection:context.selection,caseId:context.caseId,citation:context.citation,attachedScope:context.attachedScope},
-            references:rememberConversationReferences(history.filter(t=>t.role==="assistant").at(-1)?.conversationReferences||[],
-              turn.targets.flatMap<AnswerReference>(t=>t.id?[{kind:"asset",id:t.id,title:t.title,source:assetById.get(t.id)?.source||"所引资料"}]:t.url?[{kind:"web",title:t.title,url:t.url}]:[])),
-          }, signal, update => {
-            if(update.planned){
-              const plan = update.planned;
-              regionTask=researchRegionService.locate(plan.questionMode==="reframe"?null:plan.researchIntent?.region,
-                plan.questionMode==="reframe"?undefined:attachedGrid?.selection).then(region=>{
-                researchRegion=region;event({researchRegion});
-              }).catch(()=>{researchRegion=null;event({researchRegion});});
-            }
-            if(update.stage)stage(update.stage,update.searches);
-            if(update.call)report(update.call);
-            if(update.finding){
-              const finding=update.finding;
-              const findings=[...(runTrace.findings||[])], index=findings.findIndex(f=>f.id===finding.id);
-              if(index<0)findings.push(finding);else findings[index]=finding;
-              runTrace.findings=findings;
-              event({finding,traceStarted:runTrace.started});
-            }
-          });
-          report({...call,status:"done",output:JSON.stringify({discoveryId:taskId,channels:result.sourceStatus})});
-          return result;
-        } catch(error) {
-          report({...call,status:"failed",error:error instanceof Error?error.message:"发现服务未完成。"});
-          throw error;
-        }
-      },
+      search:find,
     });
-    const turn=prepared?.plan,retrieved=prepared?.retrieval;
+    const turn=prepared.plan;
+    let retrieved=prepared.retrieval;
+    let readRuns:SearchRun[]=[];
     await regionTask;
+    if(!retrieved?.questionCheck&&!retrieved?.clarification&&(retrieved||turn.action==="read")){
+      const targetQuery=decision?.dataQuestion||query;
+      if(turn.action==="read")readRuns=await executor.read(turn,targetQuery,{stage,report});
+      // Workspace and exact reference routing retain their existing scope. A review
+      // receives actual results from each action, never a hypothetical tool result.
+      if(retrieved||readRuns.length){
+        const outcome=await continueResearch(targetQuery,turn,{retrieval:retrieved,reads:readRuns},signal,{
+          model:prompt=>executor.model(prompt,{outputSchema:evidenceDecisionSchema}),
+          read:(targets,focus,step)=>executor.read({...turn,action:"read",targets},targetQuery+"\n"+focus,
+            {stage,report,callPrefix:"research-read-"+step+"-"}),
+          discover:focus=>find(turn,{previousId:taskId,focus}),stage,report,
+        });
+        if(outcome.clarification)return {result:literatureDisplay({
+          message:outcome.clarification,clarification:true,runTrace,researchRegion,
+          researchIntent:retrieved?.plan.researchIntent||turn.researchIntent,
+          conversationContext:retrieved?.plan.conversationContext||turn.conversationContext,
+          conversationEvidence,conversationAssertionEvidence,
+        })};
+        retrieved=outcome.retrieval;
+        readRuns=outcome.reads;
+      }
+    }
     if(turn && turn.action!=="search"){
       const complete=(reply:DiscoveryResponse)=>{
         reply.runTrace=literatureDisplay(runTrace);
@@ -245,7 +277,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         // Last resort: the model only standardizes the name; coordinates still come from a geocoder.
         const canonical=canonicalCache.get(navigation.place);
         const names=canonical&&Date.now()-canonical.at<3600000?canonical.names:await canonicalPlaceNames(navigation.place,
-          prompt=>runExecutor(body.config,prompt,AbortSignal.any([controller.signal,AbortSignal.timeout(20000)]),{outputSchema:placeLookupSchema}));
+          prompt=>executor.model(prompt,{outputSchema:placeLookupSchema},AbortSignal.any([signal,AbortSignal.timeout(20000)])));
         if(!canonical||Date.now()-canonical.at>=3600000)canonicalCache.set(navigation.place,{at:Date.now(),names});
         for(const name of names.flatMap(placeVariants)){
           if(tried.has(name))continue;
@@ -284,7 +316,6 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
           output:actionable||navigationHandled?operation.message:"本轮未识别到可执行的界面变更。"});
         return complete({...operation,...(!actionable&&!navigationHandled?{message:"本轮没有执行界面切换。可点击引用打开预览，或明确指定要切换的网格、时段或图层。"}:{}),...continuity});
       }
-      const readRuns=await readPlannedSources(turn,targetQuery,controller.signal,{stage,report});
       let summary="本轮只处理已指定对象和已有内容，没有执行数据发现检索。";
       if(turn.action==="read" && turn.targets.some(t=>t.kind==="grid")){
         const grid=await questionGridEvidence(context,coverage,controller.signal);
@@ -293,8 +324,8 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       }
       if(pinnedIds.length)report({id:"referenced-material",kind:"tool",name:"采用所引资料的已存内容",input:pinnedIds.join("、"),
         status:pinnedIds.every(id=>assetById.has(id))?"done":"partial",output:"已存资料身份 "+pinnedIds.filter(id=>assetById.has(id)).length+" 项；没有重新检索文献库或海纳。"});
-      const reply=await modelReply(targetQuery,context,{message:summary},history,body.config,controller.signal,
-        stage,false,pinnedPapers,"",undefined,undefined,report,{plan:turn,searches:readRuns});
+      const reply=await modelReply(targetQuery,context,{message:summary},history,executor,signal,
+        stage,pinnedPapers,"",undefined,undefined,report,{plan:turn,searches:readRuns});
       if(pinnedPapers.length)reply.paperRecords=literatureDisplay(pinnedPapers);
       reply.hainaRecords=pinnedIds.flatMap(id=>id.startsWith("haina:")?haina.records().filter(r=>String(r.id)===id.slice(6)):[]);
       if(reply.answerNotes)reply.answerNotes.elapsedMs=Date.now()-runTrace.started;
@@ -308,6 +339,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       reply.researchRegion=researchRegion;
       return {result:reply};
     }
+    if(retrieved&&readRuns.length)retrieved={...retrieved,searches:[...retrieved.searches,...readRuns]};
     for(const record of retrieved?.papers||[])cachedPapers.save(record);
     if(retrieved?.papers.length)registerPapers(retrieved.papers);
     // Auxiliary data framing must not replace the user's operation or scope.
@@ -336,8 +368,8 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     report({...catalogCall,status:"done",output:result.message});
     {
       const paperTrace=retrieved!.sourceStatus.map(s=>s.source+" "+(s.status==="done"?"完成":s.status==="partial"?"部分完成":"未完成")+" · "+s.count+" 项").join("；");
-      const reply:DiscoveryResponse=await modelReply(query,scopedContext,result,history,body.config,controller.signal,
-        stage,true,retrieved!.papers,paperTrace,
+      const reply:DiscoveryResponse=await modelReply(query,scopedContext,result,history,executor,signal,
+        stage,retrieved!.papers,paperTrace,
         !context.filters.source || context.filters.source==="constellation"?constellationFeed:undefined,retrieved,report);
       if(retrieved!.papers.length)reply.paperRecords=literatureDisplay(retrieved!.papers);
       reply.hainaRecords=retrieved!.haina.flatMap(asset=>{

@@ -1,3 +1,4 @@
+import {researchExecutor} from "../../server/research-executor";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {requiredDataSearch,parseDataSearch,fallbackDataSearch,recoverDataSearch,dataSearchSchema,type DataSearchPlan} from "../../server/data-search";
@@ -130,8 +131,8 @@ test('necessary clarification stops before source retrieval and preserves the or
   assert.equal(result.clarification,asked);assert.equal(result.plan.dataQuestion,question);
   assert.equal(result.questionCheck,undefined);assert.equal(result.plan.dataNeed,null);
   assert.deepEqual(result.sourceStatus,[]);assert.deepEqual(result.issues,[]);
-  await assert.rejects(()=>import('../../server/chat-executor').then(m=>m.modelReply(question,{} as never,{message:''},[],{executor:'codex',model:''},
-    new AbortController().signal,undefined,false,[],'',undefined,result)),/尚未得到用户确认/);
+  await assert.rejects(()=>import('../../server/chat-executor').then(m=>m.modelReply(question,{} as never,{message:''},[],researchExecutor({executor:'codex',model:''},undefined,new AbortController().signal),
+    new AbortController().signal,undefined,[],'',undefined,result)),/尚未得到用户确认/);
 });
 
 test('short answers retain conversation context on an older or failed planner response',async()=>{

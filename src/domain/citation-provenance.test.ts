@@ -1,3 +1,4 @@
+import {researchExecutor} from "../../server/research-executor";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
@@ -23,7 +24,7 @@ test('the real reply builder records acquisition channels without overwriting re
   await writeFile(path.join(dir,'codex'),executable,{mode:0o755});process.env.PATH=dir+path.delimiter+oldPath;delete process.env.ONEEARTH_ANSWER_EVIDENCE_AUDIT;
   const retrieval:DataSearchResult={plan:{questionMode:'preserve',dataQuestion:'核对这些来源',dataNeed:null,hainaQueries:[],paper:{name:'',facets:[],region:[],scenario:[]},web:[]},papers:[paper],haina:[local],searches:[{engine:'Bing',status:'done',query:'source provenance',hits:web}],issues:[],sourceStatus:[]};
   const context={caseId:null,filters:emptyFilters(),selection:null,camera:{center:[105,25],zoom:1,reason:'test'},candidateIds:[local.id],inCandidateScope:true} as DiscoveryContext;
-  const result=await modelReply('核对这些来源',context,{message:''},[],{executor:'codex',model:''},new AbortController().signal,undefined,false,[paper],'',undefined,retrieval);
+  const result=await modelReply('核对这些来源',context,{message:''},[],researchExecutor({executor:'codex',model:''},undefined,new AbortController().signal),new AbortController().signal,undefined,[paper],'',undefined,retrieval);
   const refs=result.answerNotes.references!;
   const held=refs.find(r=>r.kind==='asset'&&r.id===local.id)!,assertion=refs.find(r=>r.kind==='asset'&&r.id===paper.id)!;
   assert.equal(held.sourceChannel,'local');assert.equal(assertion.sourceChannel,'assertion');

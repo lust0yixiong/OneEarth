@@ -197,6 +197,7 @@ export function parseDataSearch(raw:string,query:string):DataSearchPlan {
 }
 type Dependencies={
   initialPlan?:string;
+  lockQuestion?:boolean;
   conversationContext?:string;
   previousResearchIntent?:ResearchIntent;
   history?:PlanningHistory[];
@@ -227,7 +228,7 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
     try{
       raw=!correction&&deps.initialPlan!==undefined?deps.initialPlan:await deps.plan(correction);rawAttempts.push(raw);
       const parsed=parseDataSearch(raw,target);
-      if(decision&&parsed.questionMode==='reframe')throw Error('用户已选择问题，请沿固定问题生成检索参数，不再转换。');
+      if((decision||deps.lockQuestion)&&parsed.questionMode==='reframe')throw Error('用户已选择问题，请沿固定问题生成检索参数，不再转换。');
       if(parsed.questionMode==='reframe'&&equivalentQuestion(target,parsed.dataQuestion))throw Error('只是同义改写，请保留原问题并生成检索参数，不需重复求证。');
       if(parsed.clarification){const issue=clarificationBlockReason(target,parsed.clarification,deps);if(issue)throw Error('不应阻断当前可答任务：'+issue+'；请生成相关检索参数。');}
       deps.report({...call,status:'done',output:JSON.stringify(parsed)});return parsed;
@@ -250,6 +251,7 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
     deps.report({...preparation,status:"done",output:JSON.stringify(plan,null,2)});
   }catch(error){
     signal.throwIfAborted();
+    if(deps.lockQuestion)throw Error("补充发现未能形成具体且符合原问题的检索参数。");
     plan=recoverDataSearch(rawAttempts,target,deps,!!decision);
     issues.push(decision?"问题规划未完成，已保留用户确认的问题；各来源是否发出请求以执行记录为准。":"问题理解未完成，已保留研究任务与本轮原话；各来源按可恢复参数分别处理。");
     deps.report({...preparation,status:"failed",error:error instanceof Error?error.message:"问题理解失败",output:JSON.stringify(plan,null,2)});

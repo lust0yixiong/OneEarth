@@ -23,14 +23,14 @@ export async function readTurnSource(target:TurnTarget,question:string,signal:Ab
 }
 
 export async function readPlannedSources(plan:TurnPlan,question:string,signal:AbortSignal,deps:{
-  read?:typeof readTurnSource;stage:(text:string,searches?:SearchRun[])=>void;report:(call:ToolCall)=>void;
+  read?:typeof readTurnSource;callPrefix?:string;stage:(text:string,searches?:SearchRun[])=>void;report:(call:ToolCall)=>void;
 }){
   if(plan.action!=="read")return [];
   const targets=[...new Map(plan.targets.filter(t=>t.url).map(t=>[t.url!,t])).values()].slice(0,3),runs:SearchRun[]=[];
   if(!targets.length)return runs;
   deps.stage("正在读取本轮指定的来源");
   await Promise.all(targets.map(async(target,i)=>{
-    signal.throwIfAborted();const started=Date.now(),call={id:"read-target-"+i,kind:"tool" as const,name:"读取指定来源",input:target.url!};
+    signal.throwIfAborted();const started=Date.now(),call={id:(deps.callPrefix||"read-target-")+i,kind:"tool" as const,name:"读取指定来源",input:target.url!};
     const row:SearchRun={engine:/\.pdf/i.test(target.url!)?"PDF 原文":"原站读取",query:target.url!,status:"running",hits:[],startedAt:new Date(started).toISOString()};
     runs.push(row);deps.report({...call,status:"running"});deps.stage("正在读取本轮指定的来源",runs);
     try{

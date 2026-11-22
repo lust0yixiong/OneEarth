@@ -11,6 +11,7 @@ export interface DiscoveryInput {
   deepseekTools?: DeepSeekTools;
   decision?: QuestionDecision;
   continuedFrom?: string;
+  continuation?: {previousId:string;focus:string};
   initialPlan?: string;
   conversationContext?: string;
   previousResearchIntent?: ResearchIntent;

@@ -1,3 +1,4 @@
+import {researchExecutor} from "../../server/research-executor";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {requiredDataSearch,parseDataSearch,fallbackDataSearch,type DataSearchPlan} from "../../server/data-search";
@@ -35,8 +36,8 @@ test("every unconfirmed conversion stops before any source retrieval, including 
     assert.deepEqual(result.questionCheck,check);
     assert.deepEqual(result.sourceStatus,[]);
     assert.ok(calls.every(call=>["data-question","data-question-initial","data-question-repair"].includes(call.id)));
-    await assert.rejects(()=>modelReply(check.originalQuestion,{} as never,{message:""},[],{executor:"codex",model:""},
-      new AbortController().signal,undefined,false,[],"",undefined,result),/尚未得到用户确认/);
+    await assert.rejects(()=>modelReply(check.originalQuestion,{} as never,{message:""},[],researchExecutor({executor:"codex",model:""},undefined,new AbortController().signal),
+      new AbortController().signal,undefined,[],"",undefined,result),/尚未得到用户确认/);
   }
 });
 

@@ -1,3 +1,4 @@
+import {researchExecutor} from "../../server/research-executor";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {mkdtemp,writeFile,rm} from "node:fs/promises";
@@ -97,7 +98,7 @@ test("the live reply builder preserves selected source identities when the model
   const input:TurnInput={question:"解释这份已引用资料",history:[],context:{caseId:null,filters:emptyFilters(),selection:null,gridSystem:"h3",layer:"all",camera:{center:[105,25],zoom:1,reason:"test"},citation:null,attachedScope:[{kind:"dataset",id:"wind-0",title:"GFS 风场",version:null,source:"已接入资料"}]}};
   const plan=parseTurnPlan(JSON.stringify({action:"respond",goal:input.question,evidenceNeed:"existing",targets:["asset:wind-0"],reason:"依据指定对象",clarification:null,...turnMetadata(input.question,input),searchPlan:null}),input);
   const calls:ToolCall[]=[];
-  const reply=await modelReply(input.question,input.context,{message:"仅解释已提供材料"},[],{executor:"codex",model:""},signal(),()=>{},false,[],"",undefined,undefined,c=>calls.push(c),{plan,searches:[]});
+  const reply=await modelReply(input.question,input.context,{message:"仅解释已提供材料"},[],researchExecutor({executor:"codex",model:""},undefined,new AbortController().signal),signal(),()=>{},[],"",undefined,undefined,c=>calls.push(c),{plan,searches:[]});
   assert.match(reply.message,/来源条目/);assert.deepEqual(reply.modelIds,["wind-0"]);assert.equal(reply.answerNotes?.references?.length,1);
   assert.ok(calls.some(c=>c.id==="answer-generation"&&c.status==="failed"));assert.ok(!calls.some(c=>c.id==="synthesis-repair"&&c.status==="done"));
  }finally{if(oldPath===undefined)delete process.env.PATH;else process.env.PATH=oldPath;await rm(dir,{recursive:true,force:true});}

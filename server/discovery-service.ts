@@ -51,6 +51,20 @@ taskRoutes(app, "/v1/discoveries", store, async value => {
     !validContext({...input.scope, camera:{center:[105,25],zoom:1,reason:"发现"},gridSystem:"h3",layer:"all"})) {
     return "数据发现请求的模型、上下文或确认信息无效。";
   }
+  if(input.continuation!==undefined){
+    const next=input.continuation;
+    if(!next||typeof next.previousId!=="string"||!taskIdPattern.test(next.previousId)||
+      typeof next.focus!=="string"||!next.focus.trim()||next.focus.length>500||input.initialPlan!==undefined)
+      return "补充发现需要原任务编号和具体证据缺口。";
+    const parent=await store.get(next.previousId);
+    const result=(await store.terminal(next.previousId))?.result as import("./data-search").DataSearchResult|undefined;
+    if(parent?.status!=="complete"||!result||result.questionCheck||result.clarification)
+      return "前一次发现任务没有可用于继续发现的结果。";
+    const prior=JSON.parse(parent.body) as DiscoveryInput;
+    if(prior.query!==input.query||JSON.stringify(prior.decision)!==JSON.stringify(input.decision)||
+      JSON.stringify(prior.config)!==JSON.stringify(input.config)||JSON.stringify(prior.deepseekTools)!==JSON.stringify(input.deepseekTools))
+      return "补充发现必须沿用本轮问题、确认结果和访问配置。";
+  }
   if (input.decision && input.continuedFrom) {
     const parent = taskIdPattern.test(input.continuedFrom) ? await store.terminal(input.continuedFrom) : undefined;
     const check = (parent?.result as import("./data-search").DataSearchResult | undefined)?.questionCheck;
@@ -62,18 +76,28 @@ taskRoutes(app, "/v1/discoveries", store, async value => {
 });
 await workTasks(store, async ({body: input}: {body: DiscoveryInput}, signal, emit) => {
   const {query, config, deepseekTools, decision, scope, initialPlan, conversationContext, previousResearchIntent,
-    history, references, currentDatasets, conversationEvidence} = input;
+    history, references, currentDatasets, conversationEvidence, continuation} = input;
+  const previous=continuation
+    ? (await store.terminal(continuation.previousId))?.result as import("./data-search").DataSearchResult|undefined
+    : undefined;
+  const previousDiscovery=previous?{
+    terms:{paper:previous.plan.paper,haina:previous.plan.hainaQueries,web:previous.plan.web},
+    materials:{papers:previous.papers.slice(0,12).map(record=>({id:record.id,title:record.paperTitle,data:record.need.product})),
+      haina:previous.haina.slice(0,12).map(asset=>({id:asset.id,title:asset.title})),
+      web:[...new Set(previous.searches.flatMap(run=>run.hits.map(hit=>hit.url)))].slice(0,18)},
+  }:undefined;
   const stage = (message: string) => emit({stage:message});
   const result = await requiredDataSearch(query, signal, {
-    initialPlan, conversationContext, previousResearchIntent, history, references,
+    initialPlan, conversationContext, previousResearchIntent, history, references, lockQuestion:!!continuation,
     planned: planned => emit({planned}),
     finding: finding => emit({finding}),
     report: call => emit({call}),
     stage,
     plan: correction => runExecutor(config, dataSearchInstructions +
+      (continuation ? "\n这是已经开始的发现任务。固定原问题及确认范围，只为 evidenceGap 补查新的证据。沿用已有资料身份，避免重新执行上一轮通用检索。必须使用 preserve。缺少供用户决定的关键条件时才澄清。evidenceGap 是待查字段，不是改写原问题的授权。对外检索词仅使用公开主题。" : "") +
       (deepseekTools?.search ? "\n若已知相关产品名或发布方，请在网页检索词中使用。未知时保留研究主题。" : "") +
       "\n" + JSON.stringify({
-        question:query, ...(decision ? {originalQuestion:query, confirmedQuestion:decision.dataQuestion} : {}),
+        question:query, evidenceGap:continuation?.focus, previousDiscovery, ...(decision ? {originalQuestion:query, confirmedQuestion:decision.dataQuestion} : {}),
         history: history.map(({conversationEvidence:_, conversationAssertionEvidence:__, ...turn}) => turn),
         conversationContext, userAttachments:scope.attachedScope, scope, currentDatasets,
         ...(correction ? {planningCorrection:correction, correctionRule:"只修正参数格式与检索短语，保留原问题和已确认的意图，不添加研究条件。"} : {}),
