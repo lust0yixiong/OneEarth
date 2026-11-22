@@ -160,6 +160,67 @@
 
 发现服务发出的普通澄清可以在原消息上选择「回复此问题」，在输入框补充或取消关联。运行时核对同会话的父记录和授权范围，从已保存的受理事件取 Task ID 和等待水位。A2A 续行携带 `continuedFrom` 与 `clarificationReply: {text, afterSeq}`，发现方对照当前等待阶段，从原受理请求恢复目的、范围和权限。旧水位或未经确认的目标变更无法推进原委托。普通下一句和运行时自行发出的澄清沿用各自的聊天路径。
 
+### 只读观测核对与机器续接
+
+Mac mini 隔离候选 `287b8dd` 接受显式能力输入 `POST /api/tasks` 的 `input.observationCheck`。普通研究问答继续使用原委托。观测核对需要运行时的授权注册表，按文件身份、指定版本和变量授权。运行时 API 在首次合法提交时从操作者注册表取得 SHA-256，和研究请求及执行检查点在同一事务固定。相同 UUID 和相同请求复用原检查点。浏览器无法指定该摘要。执行器收到发现需求后只接受已固定且仍获准的 SHA-256。登记改指或撤权时明确未启动，归档保留原身份。通过校验后只有执行器的读子进程打开文件。文件以 `oneearth.observations.v1` 存放变量单位和含 `at`、`value` 的 UTC 日期记录。核对结论仅覆盖单位和非空记录的起止边界。
+
+运行时向发现方发送 `POST /message:send`，使用 `A2A-Version: 1.0`、`Content-Type: application/a2a+json` 和配置在服务侧的 bearer 凭据。下面是脱敏的请求体，`researchTaskId` 属于运行时，发现方签发自己的 Task。
+
+```json
+{
+  "message": {
+    "messageId": "bcea1854-ec8a-48d5-afe7-e2e274bf459b",
+    "role": "ROLE_USER",
+    "parts": [{
+      "data": {
+        "kind": "oneearth.skill.observation-check.request.v1",
+        "input": {
+          "researchTaskId": "6c60c94f-0869-4646-bf7b-78639e9273fa",
+          "check": {
+            "skill": "oneearth.observation-check@1",
+            "artifactId": "mac-mini-observation",
+            "version": "controlled-a",
+            "variable": "temperature",
+            "unit": "K",
+            "start": "2020-12-28",
+            "end": "2021-01-05"
+          }
+        }
+      }
+    }]
+  },
+  "configuration": { "returnImmediately": true }
+}
+```
+
+受理返回 `{task}`。发现方的首个作业保存 `skillDemand` 及事件序号，归还作业名额。原 Task 保持 `TASK_STATE_WORKING`，经授权的 `GET /tasks/{id}` 返回任务和已归档产物。运行时接回需求后核对本研究身份、版本、能力和等待序号。它通过同一接口发送 `oneearth.skill.observation-check.result.v1`，带新 `messageId`、原 `message.taskId` 和 `message.contextId`，业务输入为 `{requestId, afterSeq, result}`。发现方在同一事务核对等待点并登记后续作业。重复的同编号同内容回执复用原任务，冲突内容、过期序号、取消后才到达的回执均会拒绝。人工确认仍使用现有的 `TASK_STATE_INPUT_REQUIRED` 语义。
+
+以下为来自 Task 归档的能力请求字段示例。事件中的 `seq` 用作回送时的 `afterSeq`。
+
+```json
+{
+  "kind": "oneearth.discovery.event.v1",
+  "event": {
+    "seq": 88,
+    "skillDemand": {
+      "requestId": "aa252bb5-7c23-4379-b931-42c6bb103766",
+      "researchTaskId": "6c60c94f-0869-4646-bf7b-78639e9273fa",
+      "check": {
+        "skill": "oneearth.observation-check@1",
+        "artifactId": "mac-mini-observation",
+        "version": "controlled-a",
+        "variable": "temperature",
+        "unit": "K",
+        "start": "2020-12-28",
+        "end": "2021-01-05"
+      }
+    }
+  }
+}
+```
+
+启用时，运行时 API、worker 和发现服务从各自的部署环境取得同一 `ONEEARTH_SKILL_SERVICE_TOKEN`。注册表路径 `ONEEARTH_SKILL_REGISTRY` 只用于运行时 API 和 worker。配置中设置 `ONEEARTH_SKILL_MODE=suspend` 使用可让出的步骤。`retained` 启用保留父名额的路径，并按 `ONEEARTH_SKILL_CAPACITY`、`ONEEARTH_SKILL_CHILD_CAPACITY` 分配本地执行资源。首例是登记的固定只读方法，回执不包含本机路径、凭据或原始文件下载链接。执行器不在该委托中接受自由命令或供应商配置。
+
 ## 部署与兼容
 
 发现进程单独读取并校验 `ONEEARTH_DISCOVERY_CHAT_MODEL`，启动器只向发现角色传递此选择。已有授权的原生执行器模型或 DeepSeek 模型可以按部署配置启用，部署使用自己的凭据来源。缺少有效配置时，新的开放发现委托返回 `UNAVAILABLE`。已保存任务、确定性论文查询及可用来源的精确补读继续各走原路径。运行时模型和执行器仍取其原有授权配置。参见[部署说明](../README.md)。

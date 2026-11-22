@@ -1,5 +1,37 @@
 # Mac mini 产品验收
 
+## Mac mini 只读观测 Skill 与嵌套执行
+
+**Mac mini 隔离阶段通过独立验收。** 隔离候选源码 `287b8dd7814854f896339bff1f5f15308d10eb30`，构建清单 SHA-256 `466394a80c9f4785635671476a1ad5069e37fb31a8f7554a54717b4fc0e84cd5`（3,424 个文件）。候选入口 [6274](http://127.0.0.1:6274)，使用新的运行时、发现和时空数据库。类型检查、构建和 743 项测试通过，含隔离 PostgreSQL 测试。
+
+- [单名额原研究记录](http://127.0.0.1:6274/?research=d74b833e-1a73-4b1b-88a1-8a2e92be35c2) 中，A、B 持久化依赖后释放同一个名额，C 取得该名额并读取指定本地文件。研究任务等待期间，同一运行时 worker 完成普通地图定位，同一发现 worker 完成一次对缺失论文的精确读取并报告缺项。原发现保持 `TASK_STATE_WORKING`。A、B 的父行锁在 C 处理期间可以从另一数据库连接立即取得。
+- 预留路径两条 A 使用不同普通名额。主链 B 作为具独立编号的子调用，沿 A 的上下文请求 C。C 已完成读取并保持实际子进程，消耗预留名额。第二条链得到未启动回执，零读取、零文件引用。主链完成后该次拒绝不重新运行。试点只登记固定 A→B→C 依赖，外部指定跨链父项的请求在受理前拒绝。
+- 代理分别模拟首次委托和结果回送在受理后丢回执。原研究继续使用同一外部 Task，发现只登记两段实际作业。受控存储故障在 B 已保存判断后短时扣住 A，重复的同 C 回执、同编号改变内容与旧租约分别返回重复、冲突、过期，C 文件读取与 B 采纳各一次。恢复后 A 读取已存判断。执行进程在 C 尚未交出持久回执时重启，原任务保留审计并报告未知，无再次读取。
+- 取消前已经持久化的实际依据在原档中保留一条引用。取消后迟到的结果无权限推进原发现，也不会补记文件引用。Chrome 从正文〔1〕打开同一文件版本、变量、单位、非空边界及 SHA-256，刷新和新上下文重开可核。依据打开时无目录或原站查询。单位和非空边界不证明时段内连续有效。
+
+最初候选 `89614db` 的独立调度、Chrome 和双侧硬终止恢复结果单独保存在 `~/Library/Application Support/OneEarth Next/iterations/nested-skill-acceptance/evidence/89614db-index.json`。该版在公开受理后改变同一登记版本仍可读到新文件。修订版首次受理把可信 SHA 与任务落在同一事务。主程以 `registration-pinning.json` 验证登记改指、撤权与未变三组对照。前两组同 UUID 重提保留原 SHA，启动后无读取、无引用，末组实际读取原摘要并登记一条引用。 独立测试在 [6384](http://127.0.0.1:6384) 对最终源码独立重建，以可变注册表和另一组固定材料复验。相同编号的重提保持旧摘要。伪造摘要返回 400，改动原请求返回 409，实际 A2A 仅传能力和材料身份。恢复登记后，用新 UUID 发起的 [72e72bce](http://127.0.0.1:6384/?research=72e72bce-b72f-4daf-8f34-480b616c8672) 完成读取，Chrome 打开、刷新及新上下文重开均核到一条原文件引用。独立证据索引为 `~/Library/Application Support/OneEarth Next/iterations/nested-skill-acceptance/evidence/nested-skill-independent-acceptance.json`。
+
+主程证据根为 `~/Library/Application Support/OneEarth Next/iterations/nested-skill-delivery/evidence/candidate-287b8dd/`。从证据根执行 `shasum -a 256 -c self-test.sha256` 与 `shasum -a 256 -c protocol-proof.sha256` 可检查冻结清单。从候选源码运行 `npm run check`、`npm test`、`npm run build`。真实 PostgreSQL 定向与全套用例需要将 `ONEEARTH_A2A_TEST_PG_BIN` 配置为独立可用的 PostgreSQL bin 路径。程序联调入口、执行器和故障驱动在证据根上两级，具体记录及任务 ID 见 `self-test-index.json`。复跑另开输出目录，保留原证据。
+
+联调根是 `~/Library/Application Support/OneEarth Next/iterations/nested-skill-delivery/`。复跑使用该根配置的独立存储和 6274 端口组。为 `NESTED_SKILL_WIRE_LOG` 指定新的输出文件后，运行 `node observe-protocol.mjs` 启动该组代理。用 `node launch-isolated.mjs <role>` 分别启动 `discovery`、`spatial`、`web`。驱动独占启动、停止此隔离组的 `runtime` 和 `worker`，运行前让这两个角色退出，保留其他角色。各次退出后保留文件并写入新输出目录。
+
+```sh
+(
+  set -e
+  cd "$HOME/Library/Application Support/OneEarth Next/iterations/nested-skill-delivery/integration"
+  export NESTED_SKILL_EVIDENCE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/oneearth-skill-replay.XXXXXX")"
+  deployment="$HOME/Library/Application Support/OneEarth Next/storage-nested-skill-first/deployment.env"
+  for mode in suspend retained cancel cancel-active interrupted-read; do
+    node --env-file="$deployment" --import tsx ../verify-nested-product.mts "$mode"
+  done
+  node --env-file="$deployment" --import tsx ../verify-registration-pinning.mts
+)
+```
+
+总体负责人确认 89614db 的三种调度和双侧硬终止证据，确认 287b8dd 的受理摘要、迟到和拒绝行为及最终引用。其独立复跑的 18 项相关测试全部通过，两份独立证据清单验证一致。
+
+本批只使用受控版本文件、隔离 PostgreSQL 与真实本地进程。供应商模型配额、动态技能图、真实机构权限和具有外部副作用的 Skill 仍待专门验证。常驻 5474 继续运行 rc.9。
+
 ## Mac mini 网格问答目录引用 v0.2.0-rc.9
 
 **隔离单项验收通过。** 签收源码 `6b5f2c640a36634fb8fe4cc598ac91bfc0cf9a9e`，构建清单 SHA-256 `25e493fb639f031398a4f59853a31f5294c1297078f2c7b9fb839ea145bf1be7`（3,424 个文件）。隔离候选 [6174](http://127.0.0.1:6174)，rc.8 负基线 [6164](http://127.0.0.1:6164)。类型检查、723 项测试和独立重建通过，包含两个真实隔离 PostgreSQL 测试。
