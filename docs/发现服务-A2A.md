@@ -221,6 +221,16 @@ Mac mini 隔离候选 `287b8dd` 接受显式能力输入 `POST /api/tasks` 的 `
 
 启用时，运行时 API、worker 和发现服务从各自的部署环境取得同一 `ONEEARTH_SKILL_SERVICE_TOKEN`。注册表路径 `ONEEARTH_SKILL_REGISTRY` 只用于运行时 API 和 worker。配置中设置 `ONEEARTH_SKILL_MODE=suspend` 使用可让出的步骤。`retained` 启用保留父名额的路径，并按 `ONEEARTH_SKILL_CAPACITY`、`ONEEARTH_SKILL_CHILD_CAPACITY` 分配本地执行资源。首例是登记的固定只读方法，回执不包含本机路径、凭据或原始文件下载链接。执行器不在该委托中接受自由命令或供应商配置。
 
+### 普通 Chat 的观测资料
+
+工作台从同源 `GET /api/observation-materials` 显示可供对话使用的资料。运行时从操作者登记中挑选显式标记 `modelVisible: true` 的条目，列表只含文件身份、版本、显示名和变量名。工作台按正常提问流程发送问题。附着范围只记录 `{kind:"observation",artifactId,version,title}`，实际材料信息和摘要由运行时读取可信登记。
+
+运行时用受权 A2A `oneearth.observation.research.request.v1` 联系发现方。输入为 `{researchTaskId,question,materials,evidence}`。新会话首次提问时 `evidence` 为空。后续从同一会话的可信父任务取得仍获准的真实依据。运行时在受理检查点固定资料的 SHA-256。发现模型的规划输入仅含获准的资料身份、变量名、问题和已得事实。初始委托和复用规划均省去文件摘要。通过验证的执行回执仍按原契约提交 SHA-256。
+
+发现模型可选择请求读取、引用已得依据、澄清，或交回通用问答。读取需求引用一个获准资料版本和变量。报告实际单位、非空记录数及首尾日期时，需求使用 `purpose: "describe"`。对照已给标准时沿用明确的单位和起止日。两种需求使用相同只读执行链。运行时复核冻结的摘要与当前授权，并将结果交回同一个发现 Task。发现确认实际可用的证据，运行时据此保存可打开的版本引用。
+
+已得依据支持本轮时，发现模型可以在一次规划中选择复用，运行时回引归档中的文件版本，文件读取次数为零。文件中的变量全部为空时，已读单位和零非空条数仍可复用。后续撤掉模型使用许可时，原回答及其依据仍可重开，新提问按当前授权使用可用材料。显式 `input.observationCheck` 继续沿用原请求、执行及权限语义。观测资料浏览等待用户主动发出问题。
+
 ## 部署与兼容
 
 发现进程单独读取并校验 `ONEEARTH_DISCOVERY_CHAT_MODEL`，启动器只向发现角色传递此选择。已有授权的原生执行器模型或 DeepSeek 模型可以按部署配置启用，部署使用自己的凭据来源。缺少有效配置时，新的开放发现委托返回 `UNAVAILABLE`。已保存任务、确定性论文查询及可用来源的精确补读继续各走原路径。运行时模型和执行器仍取其原有授权配置。参见[部署说明](../README.md)。
