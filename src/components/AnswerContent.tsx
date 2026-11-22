@@ -5,6 +5,7 @@ import {answerTokens,renderAnswerMath,revealAnswerText} from "../domain/answer-m
 import {citationLabel,citationDetails,type CitationDetails} from "../domain/answer-sources";
 import {CitationLink} from "./CitationLink";
 import type {AnswerReference} from "../domain/types";
+import {materialLinkDisplay,webMaterial} from "../domain/web-material";
 
 const safeUrl=(s:string)=>{try{const u=new URL(s);return /^https?:$/.test(u.protocol)&&!u.username&&!u.password?u.href:undefined;}catch{return undefined;}};
 function AnswerMath({tex,display,raw}:{tex:string;display?:boolean;raw:string}) {
@@ -21,7 +22,7 @@ interface Props {
   savedActions?: ReadonlyMap<string,()=>void>;
 }
 export function AnswerContent({quote,selectedReferences,text,references,details,inspect,hover,inCell,focused,limitation,open,onComplete,savedActions}:Props) {
-  const blocks=useMemo(()=>answerBlocks(text),[text]);
+  const blocks=useMemo(()=>answerBlocks(materialLinkDisplay(text)),[text]);
   // The server returns a fully validated answer, not model token deltas.
   // Display available text and its source actions in the same paint.
   const limit=Infinity;
@@ -55,7 +56,10 @@ export function AnswerContent({quote,selectedReferences,text,references,details,
       if(part.startsWith("**")&&part.endsWith("**"))return <strong key={i}>{inline(part.slice(2,-2))}</strong>;
       if(part.startsWith("`")&&part.endsWith("`"))return <code key={i}>{part.slice(1,-1)}</code>;
       const link=/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(part);
-      return link&&safeUrl(link[2])?<a key={i} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>:part;
+      const material=link && webMaterial(link[2]);
+      return link&&safeUrl(link[2])?<a key={i} href={link[2]} target="_blank" rel="noreferrer"
+        data-web-material={material?material.kind:undefined}
+        title={material?material.label+" · 入口类型不代表已读取数据":undefined}>{link[1]}</a>:part;
     });
   }
   function sourceButton(raw:string) {
@@ -76,6 +80,6 @@ export function AnswerContent({quote,selectedReferences,text,references,details,
     const available=limit-offset,raw=blockText(b);offset+=raw.length;
     if(available<=0)return null;
     return <Fragment key={i}><div className={i===lead && b.kind==="paragraph"?"oe-answer-lead":"oe-answer-block"}>{render(b,available)}{b.kind!=="code" && available>=raw.length && sourceButton(raw)}</div>
-      {i===lead && limitation && available>=raw.length && <aside className="oe-limitation"><h4>适用范围与限制</h4><p>{inline(limitation)}</p>{sourceButton(limitation)}</aside>}</Fragment>;
+      {i===lead && limitation && available>=raw.length && <aside className="oe-limitation"><h4>适用范围与限制</h4><p>{inline(materialLinkDisplay(limitation))}</p>{sourceButton(limitation)}</aside>}</Fragment>;
   })}</div>;
 }

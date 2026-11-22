@@ -118,7 +118,7 @@ export function SourceDrawer({refs,title,message,question,close}:{refs:AnswerRef
         return url && <section className="oe-web-source" data-reference-type={details.type} key={r.url}>
           <a className="oe-source-card" href={url.href} target="_blank" rel="noreferrer">
             <b><CitationIcon type={details.type}/><span>{r.title} <ArrowUpRight size={13}/></span></b>
-            <small>{details.channel} · {url.hostname}</small>{doi && <small>DOI {doi}</small>}
+            <small>{details.channel} · {url.hostname}{details.material && " · "+details.material}</small>{doi && <small>DOI {doi}</small>}
           </a>
           {evidence && <button type="button" className="saved-web-evidence-action" data-source-url={r.url} onClick={()=>{
             setHost(previewHost.current);

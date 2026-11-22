@@ -17,13 +17,19 @@ import {webDocumentType,referenceChannel} from "../src/domain/citation-types";
 import { assets, assetById, discoverableAsset, type Asset } from "../src/domain/datasets";
 import { observationById } from "../src/domain/push-observations";
 import type { PushFeed } from "../src/domain/push-observations";
-import { caseById, sourceLabels } from "../src/domain/catalog";
+import { caseById, cases, sourceLabels } from "../src/domain/catalog";
 import type { DiscoveryContext, DiscoveryResponse } from "../src/domain/types";
 
 import type { researchExecutor } from "./research-executor";
 import {SourceReadClaimError,sourceReadReceipts,validateSourceReadClaim} from "./source-read-provenance";
+import {materialAccessEvidence,publicMaterialUrl,validateAnswerMaterialClaims} from "./answer-material-guard";
+import {webMaterial} from "../src/domain/web-material";
 import type { TurnHistoryEntry as Turn } from "./turn-history";
 import type { ParentResearchEvidence } from "./parent-research-evidence";
+
+// Only bundled public catalogue entries may authorize a structured file URL.
+const publishedFileUrls=new Set(cases.flatMap(c=>c.needs.flatMap(n=>
+  (n.dataEntities ?? []).flatMap(entity=>publicMaterialUrl(entity.url) ?? []))));
 
 const segmenter = new Intl.Segmenter("zh", {granularity:"word"});
 const genericTerms = new Set("想用 数据 数据集 资料 相关 哪些 研究 需要 分析 什么 如何 可以 推荐 方法 是否 估算 分别 哪里 获取 适合 来源 比较 分辨 影响 限制 论文 目录 使用 查看 找到 对比 解释 支持 使用 结合 材料 问题 科学 海纳 地学 目前 可能 提供 进行 这些".split(" "));
@@ -263,6 +269,10 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       .map(h=>userSources.has(h.url)?{...h,discoveredBy:"user" as const}:h);
     const memoryOptions={query:target,focusUrls:[...userSources,...(/刚才|此前|这份|前面|继续|你提到|这个|该/.test(query)?history.filter(t=>t.role==="assistant").at(-1)?.conversationReferences?.flatMap(r=>r.kind==="web"?[r.url]:[])||[]:[])]};
     const webHits=source?[]:withPreviousReadings(fresh,priorReadings,memoryOptions);
+    const catalogueFileUrls=rows.filter(row=>row.evidenceSelection?.detail==="bounded-excerpts").flatMap(row=>
+      (assetById.get(row.id)?.dataEntities ?? []).map(entity=>publicMaterialUrl(entity.url))
+        .filter((url):url is string=>!!url && publishedFileUrls.has(url)));
+    const accessLinks=materialAccessEvidence(webHits,catalogueFileUrls);
     onStage?.(turn?"正在按本轮目标与已有引用整理答复":"已取得 "+rows.length+" 项目录候选"+(webHits.length?"、"+webHits.length+" 条网络结果":"")+" · 正在整理答复",searches);
     const references:AnswerReference[]=[
       ...rows.map(r=>{const ref={kind:"asset" as const,id:r.id,title:r.title,source:r.source};return {...ref,sourceChannel:r.sourceChannel||referenceChannel(ref,assetById.get(r.id),observationById(r.id))};}),
@@ -280,6 +290,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       ?reference.kind==="asset"&&reference.id===ref.id:reference.kind==="web"&&reference.url===ref.url));
     function verifyExecutionAndReferences(answer:SynthesisAnswer){
       validateSourceReadClaim(answer,readReceipts,!!retrieval);
+      validateAnswerMaterialClaims(answer,accessLinks);
       if(exactReadRefs.length&&!answer.references.some(ref=>ref.kind==="web"&&exactReadRefs.some(source=>source.url===ref.url)))
         throw new SourceReadClaimError("定向读取已经返回材料，为核查结论或证据限制加上实际所读原站引用 "+
           exactReadRefs.map(ref=>ref.token).join("、")+"。");
@@ -303,7 +314,8 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       userAttachments:context.attachedScope,case:caseById(context.caseId)?.title,selection:context.selection,filters:context.filters,center:context.attachedScope?context.selection?.point:context.camera.center,
       citation:context.citation,expectedVersions:context.candidateVersions,dataView:context.dataView,visualization:context.visualization
     },catalogue:rows.map((r,i)=>({...r,ref:"S"+(i+1)})),
-    webResults:webHits.map((h,i)=>({...h,ref:"S"+(rows.length+i+1)})),
+    webResults:webHits.map((h,i)=>({...h,linkMaterial:webMaterial(h.url),ref:"S"+(rows.length+i+1)})),
+    documentedDataAccessLinks:[...accessLinks].filter(([url])=>publicMaterialUrl(url)).map(([url,kinds])=>({url,kinds:[...kinds]})),
     searchStatus:{paper:paperTrace || undefined,paperNotices:retrieval?.paperNotices,
       webChecks:retrieval?.webChecks,webIssue:webIssue || undefined, web:searches.map(r=>({engine:r.engine,query:r.query,status:r.status,hits:r.hits.length,total:r.total,error:r.error,warning:r.warning,cacheStoredAt:r.cacheStoredAt}))},
     constellationStatus:constellationFeed && {configured:constellationFeed.configured,checkedAt:constellationFeed.checkedAt,

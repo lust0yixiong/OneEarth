@@ -32,7 +32,7 @@ export function CitationLink({reference,number,label,details,inspect,hover,inCel
     const top=beside || right?Math.max(12,Math.min(rect.top,innerHeight-height-12)):
       block.top-height-8>=12?block.top-height-8:Math.max(12,Math.min(block.bottom+8,innerHeight-height-12));
     setPosition({left,top});
-  },[open,reference.title,details.type,details.channel,details.evidence,details.nature]);
+  },[open,reference.title,details.type,details.channel,details.evidence,details.nature,details.material]);
   useEffect(()=>{
     if(!open)return;
     const close=()=>{clearTimeout(timer.current);setOpen(false);};
@@ -73,6 +73,7 @@ export function CitationLink({reference,number,label,details,inspect,hover,inCel
       <strong>{reference.title}</strong>
       <dl><dt>引用类型</dt><dd><CitationIcon type={details.type}/>{citationTypeLabels[details.type]}</dd>
         {details.nature && <><dt>数据性质</dt><dd>{details.nature}</dd></>}
+        {details.material && <><dt>链接类型</dt><dd>{details.material}</dd></>}
         <dt>发现渠道</dt><dd>{details.channel}</dd><dt>本次依据</dt><dd>{details.evidence}</dd></dl>
     </div>,trigger.current?.closest("dialog") || document.body)}
   </>;

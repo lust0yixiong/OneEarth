@@ -4,6 +4,7 @@ import {parseSynthesis,synthesisResponseSchema} from './scientific-answer';
 import type {CalculationReport} from './verified-calculation';
 import {auditSourceStatements,type AuditInput,type Source,type Run} from './answer-evidence-check';
 import {validAssertionEvidenceMemory} from '../src/domain/assertion-evidence-memory';
+import {webMaterial} from '../src/domain/web-material';
 export type ParsedAnswer=ReturnType<typeof parseSynthesis>;
 export type EvidenceReviewInput={parsedAnswer:ParsedAnswer;catalogue:CatalogueEvidence[];references:AnswerReference[];webHits:WebHit[];question:string;originalSynthesisPrompt:string;calculations:CalculationReport[];run:(prompt:string,schema:Record<string,unknown>,signal:AbortSignal)=>Promise<unknown>;parentSignal:AbortSignal;onTool?:(call:ToolCall)=>void;budgets?:{totalMs?:number;auditMs?:number;repairMs?:number}};
 const identity=(r:AnswerReference)=>r.kind==='asset'?'asset:'+r.id:'web:'+r.url;
@@ -45,9 +46,10 @@ export function buildAnswerEvidenceInput(input:Pick<EvidenceReviewInput,'parsedA
    if(row.excerpts.length||windows.some(w=>w.id.startsWith('historical-assertion-')))stage='page-excerpt';
   }
   if(hit){
-   add('page',hit.pageExcerpt,JSON.stringify({kind:hit.stage||'page-excerpt',readBy:hit.readBy,previousRead:hit.previousRead,readAt:hit.readAt,truncated:hit.previousExcerptTruncated}));
+   const material=webMaterial(hit.url);
+   add('page',hit.pageExcerpt,JSON.stringify({kind:hit.stage||'page-excerpt',material:material?.kind,readBy:hit.readBy,previousRead:hit.previousRead,readAt:hit.readAt,truncated:hit.previousExcerptTruncated}));
    add('snippet',hit.snippet,'current supplied search/metadata snippet; not evidence that page body was read');
-   stage=literal(hit.pageExcerpt)?'page-excerpt':'search-snippet';
+   stage=literal(hit.pageExcerpt)?material?.kind==='metadata'?'metadata':'page-excerpt':'search-snippet';
    const metadata=Object.fromEntries(['doi','version','publisher','landingUrl'].flatMap(k=>literal(hit[k as keyof WebHit])?[[k,hit[k as keyof WebHit]]]:[]));
    if(Object.keys(metadata).length)add('web-metadata',JSON.stringify(metadata),'current supplied registry/identity metadata; not full text');
    const indices=[];if(hit.manifestIndex)indices.push(hit.manifestIndex);

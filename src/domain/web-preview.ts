@@ -1,5 +1,6 @@
 import type {AnswerReference,EvidenceDocument,EvidenceStage,EvidenceTab,Message,ReadEvidence,WebHit} from "./types";
 import {accessGate} from "./read-evidence";
+import {webMaterial} from "./web-material";
 
 export function webUrl(raw?:string) {
   try {
@@ -71,6 +72,7 @@ export function savedWebDocument(reference: AnswerReference, message: Message): 
   }
   addSavedMaterials(hit.priorEvidence,"此前记录");
   addSavedMaterials(message.conversationEvidence,"另存材料");
+  const material=webMaterial(href)?.label;
   return {id:"saved-web:"+message.id+":"+href,title:reference.title || url.hostname,
-    scope:"已保存依据",source:url.hostname,url:href,tabs};
+    scope:material?"已保存依据 · "+material:"已保存依据",source:url.hostname,url:href,tabs};
 }

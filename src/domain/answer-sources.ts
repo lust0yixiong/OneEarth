@@ -5,8 +5,9 @@ import {observationById} from "./push-observations";
 import type {AnswerReference,Message,CitationType,AnswerNotes} from "./types";
 import {referenceCitationType} from "./citation-types";
 import {hasReadWebExcerpt,webEvidenceStage} from "./web-preview";
+import {webMaterial} from "./web-material";
 
-export interface CitationDetails {type:CitationType;channel:string;evidence:string;nature?:string}
+export interface CitationDetails {type:CitationType;channel:string;evidence:string;nature?:string;material?:string}
 export function citationDetails(ref:AnswerReference,notes?:Partial<AnswerNotes>):CitationDetails{
   if(ref.kind==="web"){
     const matches=notes?.searches?.filter(run=>run.hits.some(h=>h.url===ref.url)) || [];
@@ -19,7 +20,9 @@ export function citationDetails(ref:AnswerReference,notes?:Partial<AnswerNotes>)
     const evidence=previous ? "此前已读摘录 · "+excerpt+(hit.readAt?" · "+hit.readAt:"") :
       read ? (dataCite?"数据集 DOI 元数据、":"")+excerpt :
       dataCite ? "数据集 DOI 元数据" : hit?.snippet ? "网页检索摘要" : "标题与来源链接";
-    return {type:"web",channel:previous?"会话已读记录":dataCite?"DataCite":search || hit?"网页检索":"公开网页",evidence};
+    const material=webMaterial(ref.url)?.label;
+    return {type:"web",channel:previous?"会话已读记录":dataCite?"DataCite":search || hit?"网页检索":"公开网页",evidence,
+      ...(material?{material}:{})};
   }
   const a=assetById.get(ref.id),record=paperRecords.get(ref.id),tabs=record?.need.tabs || a?.tabs || [];
   const type=referenceCitationType(ref,a,observationById(ref.id));
