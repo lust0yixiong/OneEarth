@@ -35,7 +35,7 @@ async function listen(t:TestContext,app:express.Express){
   t.after(async()=>{server.closeAllConnections();await new Promise<void>(done=>server.close(()=>done()));});
   return "http://127.0.0.1:"+address.port;
 }
-async function provider(t:TestContext,options:{malformed?:"task"|"operation";lostReceipt?:boolean;lostDirect?:boolean;working?:boolean;progress?:boolean;foreign?:boolean;openResult?:boolean;error?:boolean;disconnect?:boolean;stream?:boolean}={}){
+async function provider(t:TestContext,options:{malformed?:"task"|"operation"|"missing-context";lostReceipt?:boolean;lostDirect?:boolean;working?:boolean;progress?:boolean;foreign?:boolean;openResult?:boolean;error?:boolean;disconnect?:boolean;stream?:boolean}={}){
   const app=express();app.use(express.json({type:"application/a2a+json"}));const requests:any[]=[],tasks=new Map<string,any>(),accepted=new Map<string,any>();
   let jobs=0,gets=0,cancels=0,subscriptions=0;
   const snapshot=(task:any)=>structuredClone(task);
@@ -54,7 +54,9 @@ async function provider(t:TestContext,options:{malformed?:"task"|"operation";los
       const value=input.operation==="records"?input.ids.flatMap(id=>id===record().id?[record()]:[]):input.operation==="list"?list():
         input.operation==="search"?{records:[record()],cached:false,incomplete:["bounded fixture"]}:input.operation==="questions"?{items:[],nextCursor:"next-question"}:{dataset:null,papers:[]};
       if(options.malformed==="task"){respond(res,{task:{id:"not-a-direct-message"}});return;}
-      respond(res,{message:{messageId:randomUUID(),role:"ROLE_AGENT",parts:[{data:{kind:"oneearth.paper.result.v1",operation:options.malformed==="operation"?"search":input.operation,value}}]}});return;
+      respond(res,{message:{messageId:randomUUID(),role:"ROLE_AGENT",
+        ...(options.malformed==="missing-context"?{}:{contextId:"catalogue/provider-context"}),
+        parts:[{data:{kind:"oneearth.paper.result.v1",operation:options.malformed==="operation"?"search":input.operation,value}}]}});return;
     }
     assert.equal(data.kind,"oneearth.source.read.v1");
     let task=accepted.get(message.messageId);
@@ -97,7 +99,7 @@ test("paper queries are model-free direct Messages and preserve existing values 
     assert.equal(request.body.message.role,"ROLE_USER");assert.equal(request.body.message.taskId,undefined);assert.equal(request.body.configuration,undefined);assert.equal(request.body.message.parts[0].data.input.config,undefined);}
   assert.equal(service.counts().jobs,0);assert.equal(service.counts().subscriptions,0);
 });
-for(const malformed of ["task","operation"] as const)test("direct paper query rejects a mismatched "+malformed+" response",async t=>{
+for(const malformed of ["task","operation","missing-context"] as const)test("direct paper query rejects a mismatched "+malformed+" response",async t=>{
   await provider(t,{malformed});await assert.rejects(queryPapers({operation:"records",ids:[record().id]},new AbortController().signal),DiscoveryA2AError);
 });
 

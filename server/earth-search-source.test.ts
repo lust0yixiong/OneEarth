@@ -58,9 +58,9 @@ test("Earth Search A2A reads only the specified STAC collections and distinguish
     const receipt = await response.json();
     assert.equal(receipt.task,undefined);
     assert.equal(receipt.message.role,"ROLE_AGENT");
-    assert.ok(receipt.message.messageId);
+    assert.match(receipt.message.contextId,/^[0-9a-f-]{36}$/);
     assert.equal(receipt.message.taskId,undefined);
-    assert.equal(receipt.message.contextId,undefined);
+    assert.ok(receipt.message.messageId);
     assert.equal(receipt.message.parts.length,1);
     const data = receipt.message.parts[0].data;
     assert.equal(data.kind,sceneCatalogResultKind);

@@ -76,6 +76,18 @@ async function json(response:Response):Promise<any> {
   }
   return value;
 }
+
+function directMessageData(receipt: unknown, status: number, kind: string) {
+  const message = object(receipt) ? receipt.message : undefined;
+  if (status!==200 || !object(receipt) || receipt.task!==undefined || receipt.error!==undefined || !object(message) ||
+    message.role!=="ROLE_AGENT" || !identifier(message.messageId) || !identifier(message.contextId) ||
+    message.taskId!==undefined || !Array.isArray(message.parts) || message.parts.length!==1)
+    throw new DiscoveryA2AError("发现服务没有返回带有效上下文的 A2A Message。");
+  const data = message.parts[0]?.data;
+  if (!object(data) || data.kind!==kind)
+    throw new DiscoveryA2AError("发现服务返回的查询成果类型不匹配。");
+  return data;
+}
 async function getTask(base:string,binding:Pick<DiscoveryBinding,"discoveryId"|"contextId">,signal:AbortSignal){
   const response=await fetch(new URL("/tasks/"+encodeURIComponent(binding.discoveryId),base),{headers,signal,redirect:"error"});
   return task(await json(response),binding);
@@ -358,12 +370,8 @@ export async function queryPapers<Q extends PaperQuery>(input:Q,signal:AbortSign
   for(let attempt=0;;attempt++){
     try{
       const response=await fetch(new URL("/message:send",base),{method:"POST",headers,body,signal:deadline,redirect:"error"});
-      const receipt=await json(response),message=receipt?.message;
-      if(response.status!==200||!object(receipt)||receipt.task||receipt.error||!object(message)||message.role!=="ROLE_AGENT"||
-        !identifier(message.messageId)||message.taskId!==undefined||message.contextId!==undefined||!Array.isArray(message.parts)||message.parts.length!==1)
-        throw new DiscoveryA2AError("发现服务没有返回有效的纸本查询 Message。");
-      const data=message.parts[0]?.data;
-      if(!object(data)||data.kind!==paperResultKind||data.operation!==clean.operation||!paperValue(clean,data.value))
+      const data=directMessageData(await json(response),response.status,paperResultKind);
+      if(data.operation!==clean.operation||!paperValue(clean,data.value))
         throw new DiscoveryA2AError("纸本查询响应的种类、操作或材料身份无效。");
       return data.value;
     }catch(error){
@@ -426,10 +434,8 @@ export async function queryHainaCatalog(cursor:number,limit:number,signal:AbortS
   for(let attempt=0;;attempt++){
     try{
       const response=await fetch(new URL("/message:send",base),{method:"POST",headers,body,signal:deadline,redirect:"error"});
-      const receipt=await json(response),message=receipt?.message,data=message?.parts?.[0]?.data,value=data?.value;
-      if(response.status!==200||!object(receipt)||receipt.task||receipt.error||!object(message)||message.role!=="ROLE_AGENT"||
-        !identifier(message.messageId)||message.taskId!==undefined||message.contextId!==undefined||!Array.isArray(message.parts)||message.parts.length!==1||
-        data?.kind!==hainaCatalogResultKind||!object(value)||!Array.isArray(value.records)||value.records.length>limit||
+      const value=directMessageData(await json(response),response.status,hainaCatalogResultKind).value;
+      if(!object(value)||!Array.isArray(value.records)||value.records.length>limit||
         !value.records.every(validHainaRecord)||new Set(value.records.map((r:any)=>r.id)).size!==value.records.length||
         value.records.some((r:any,i:number)=>r.id<=(i?value.records[i-1].id:cursor))||
         !Number.isSafeInteger(value.total)||value.total<value.records.length||value.complete!==true||
@@ -452,15 +458,8 @@ export async function querySceneCatalogue(input: SceneCatalogQuery, signal: Abor
   const body = JSON.stringify({message:{messageId:randomUUID(),role:"ROLE_USER",
     parts:[{data:{kind:sceneCatalogQueryKind,input}}]}});
   const response = await fetch(new URL("/message:send",base), {method:"POST",headers,body,signal:deadline,redirect:"error"});
-  const receipt = await json(response);
-  const message = receipt?.message;
-  if (response.status!==200 || receipt.task || receipt.error || !object(message) || message.role!=="ROLE_AGENT" ||
-    !identifier(message.messageId) || message.taskId!==undefined || message.contextId!==undefined ||
-    !Array.isArray(message.parts) || message.parts.length!==1)
-    throw new DiscoveryA2AError("发现服务没有返回有效的影像目录 Message。");
-  const data = message.parts[0]?.data;
-  const value = data?.value;
-  if (data?.kind !== sceneCatalogResultKind || !object(value) || !Array.isArray(value.lookups) || !Array.isArray(value.failures))
+  const value = directMessageData(await json(response),response.status,sceneCatalogResultKind).value;
+  if (!object(value) || !Array.isArray(value.lookups) || !Array.isArray(value.failures))
     throw new DiscoveryA2AError("影像目录结果缺少实际状态。");
 
   const remaining = new Set<string>(input.assetIds);

@@ -215,7 +215,9 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
       res.once("close",abort);
       try {
         const data = await query(request.input,controller.signal);
-        if (!res.destroyed) res.json({message:{role:"ROLE_AGENT",messageId:randomUUID(),parts:[{data}]}});
+        if (!res.destroyed) res.json({message:{
+          role:"ROLE_AGENT",messageId:randomUUID(),contextId:randomUUID(),parts:[{data}],
+        }});
       } finally {res.off("close",abort);}
       return;
     }

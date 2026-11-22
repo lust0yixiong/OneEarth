@@ -18,13 +18,14 @@ import type {HainaCatalogPage} from "./discovery-materials-contract";
 
 const haina=(id=987654321,version="archived-v1"):HainaRecord=>({id,name:"Controlled Haina "+version,description:"Authorized snapshot "+version,provider:"fixture",source:"fixture Haina",version,license:"fixture license",access:"Public",labels:[],card:{tags:[]}});
 const catalog={total:17,synced:"2026-11-20T00:00:00Z",endpoint:"https://example.org/fixture-haina",warning:"original published snapshot warning"};
-async function provider(t:TestContext,mode:"normal"|"unavailable"|"wrong-message"="normal"){
+async function provider(t:TestContext,mode:"normal"|"unavailable"|"wrong-message"|"missing-context"="normal"){
   const app=express(),requests:any[]=[];app.use(express.json({type:"application/a2a+json"}));
   app.post("/message:send",(req,res)=>{
     requests.push(req.body);
     if(mode==="unavailable"){res.status(503).type("application/a2a+json").json({error:{code:503,message:"current catalogue unavailable"}});return;}
     const value:HainaCatalogPage={...catalog,areaId:"fixture-area",records:[haina()],nextCursor:null,complete:true,refreshing:false};
-    res.type("application/a2a+json").json(mode==="wrong-message"?{task:{id:randomUUID()}}:{message:{messageId:randomUUID(),role:"ROLE_AGENT",parts:[{data:{kind:"oneearth.haina.catalog.result.v1",value}}]}});
+    res.type("application/a2a+json").json(mode==="wrong-message"?{task:{id:randomUUID()}}:{message:{messageId:randomUUID(),role:"ROLE_AGENT",
+      ...(mode==="missing-context"?{}:{contextId:"haina-publication-context"}),parts:[{data:{kind:"oneearth.haina.catalog.result.v1",value}}]}});
   });
   const server=app.listen(0,"127.0.0.1");await once(server,"listening");const address=server.address();assert.ok(address&&typeof address!=="string");
   const old=process.env.ONEEARTH_DISCOVERY_URL;process.env.ONEEARTH_DISCOVERY_URL="http://127.0.0.1:"+address.port;
@@ -39,7 +40,7 @@ test("explicit Haina catalogue uses a model-free direct Message and preserves pu
   assert.equal(sent.message.role,"ROLE_USER");assert.equal(sent.message.taskId,undefined);assert.equal(sent.configuration,undefined);
   await assert.rejects(queryHainaCatalog(0,251,new AbortController().signal),DiscoveryA2AError);assert.equal(p.requests.length,1);
 });
-for(const mode of ["unavailable","wrong-message"] as const)test("Haina direct catalogue rejects "+mode+" without fabricating an empty snapshot",async t=>{
+for(const mode of ["unavailable","wrong-message","missing-context"] as const)test("Haina direct catalogue rejects "+mode+" without fabricating an empty snapshot",async t=>{
   const p=await provider(t,mode);await assert.rejects(queryHainaCatalog(0,20,new AbortController().signal),DiscoveryA2AError);
   assert.equal(p.requests.length,mode==="unavailable"?3:1);
 });

@@ -257,9 +257,9 @@ test("isolated PostgreSQL and loopback exercise the A2A provider and legacy comp
     const receipt = await response.json();
     assert.equal(receipt.task,undefined);
     assert.equal(receipt.message.role,"ROLE_AGENT");
-    assert.notEqual(receipt.message.messageId,"");
+    assert.match(receipt.message.contextId,/^[0-9a-f-]{36}$/);
     assert.equal(receipt.message.taskId,undefined);
-    assert.equal(receipt.message.contextId,undefined);
+    assert.notEqual(receipt.message.messageId,"");
     const {kind,value,operation:observed} = receipt.message.parts[0].data;
     assert.equal(kind,paperResultKind);
     assert.equal(observed,operation);
@@ -312,6 +312,8 @@ test("isolated PostgreSQL and loopback exercise the A2A provider and legacy comp
   const hainaReceipt = await firstPage.json();
   assert.equal(hainaReceipt.task,undefined);
   assert.equal(hainaReceipt.message.role,"ROLE_AGENT");
+  assert.match(hainaReceipt.message.contextId,/^[0-9a-f-]{36}$/);
+  assert.equal(hainaReceipt.message.taskId,undefined);
   assert.ok(hainaReceipt.message.messageId);
   const firstHaina = hainaReceipt.message.parts[0].data;
   assert.equal(firstHaina.kind,hainaCatalogResultKind);

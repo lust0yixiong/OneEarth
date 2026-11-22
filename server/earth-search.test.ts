@@ -14,7 +14,7 @@ test("runtime sends precise STAC terms to discovery and distinguishes zero from 
   const years: [number, number] = [2015, 2015];
   const input = { assetIds:[assetId], point, years, utcWindow };
   const url = "https://earth-search.aws.element84.com/v1/search";
-  let behavior: "found" | "empty" | "failure" | "wrong-scope" = "found";
+  let behavior: "found" | "empty" | "failure" | "wrong-scope" | "missing-context" = "found";
   const received: unknown[] = [];
   const server = createServer(async (req, res) => {
     const parts = [];
@@ -27,7 +27,8 @@ test("runtime sends precise STAC terms to discovery and distinguishes zero from 
       failures:[],
     };
     res.writeHead(200, {"Content-Type":"application/a2a+json"});
-    res.end(JSON.stringify({message:{messageId:"reply",role:"ROLE_AGENT",parts:[{data:{kind:sceneCatalogResultKind,value}}]}}));
+    res.end(JSON.stringify({message:{messageId:"reply",role:"ROLE_AGENT",
+      ...(behavior==="missing-context"?{}:{contextId:"scenes/publication-snapshot"}),parts:[{data:{kind:sceneCatalogResultKind,value}}]}}));
   }).listen(0,"127.0.0.1");
   await once(server,"listening");
   const saved = process.env.ONEEARTH_DISCOVERY_URL;
@@ -50,14 +51,14 @@ test("runtime sends precise STAC terms to discovery and distinguishes zero from 
   const empty = await request();
   assert.match(empty.message,/命中 0 景/);
   assert.equal(empty.catalogMatch?.lookups?.[0].matched,0);
-  for (const problem of ["failure","wrong-scope"] as const) {
+  for (const problem of ["failure","wrong-scope","missing-context"] as const) {
     behavior = problem;
     const failed = await request();
     assert.match(failed.message,/匹配数未知/);
     assert.doesNotMatch(failed.message,/命中 0 景/);
     assert.deepEqual(failed.catalogMatch?.lookups,[]);
   }
-  assert.equal(received.length,4);
+  assert.equal(received.length,5);
   for (const raw of received as {method:string;path:string;version:string;body:{message:{parts:unknown[]}}}[]) {
     assert.deepEqual([raw.method,raw.path,raw.version],["POST","/message:send","1.0"]);
     assert.deepEqual(raw.body.message.parts,[{data:{kind:sceneCatalogQueryKind,input}}]);
