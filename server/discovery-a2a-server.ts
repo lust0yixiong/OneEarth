@@ -14,6 +14,7 @@ import {paperId} from "../src/domain/paper-record";
 import {paperProjectionPageLimit,paperProjectionQueryKind,paperProjectionResultKind} from "./paper-projection-contract";
 import {PaperCatalogBaseUnavailable,PaperCatalogGenerationChanged,PaperCatalogUninitialized,type PostgresPaperCatalog} from "./postgres-paper-catalog";
 import {parseObservationCheck, skillRequestKind, skillResultKind, skillServiceAuthorized, validObservationResult} from "./observation-check-contract";
+import {observationResearchKind, parseObservationResearchRequest} from "./observation-research-contract";
 
 const media = "application/a2a+json";
 const protocol = "1.0";
@@ -135,7 +136,7 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
     const data = record(part.data);
     only(data, ["kind","input"]);
     const available = data.kind === "oneearth.discovery.request.v1" ||
-      data.kind === skillRequestKind || data.kind === skillResultKind ||
+      data.kind === skillRequestKind || data.kind === skillResultKind || data.kind === observationResearchKind ||
       (catalog && (data.kind === paperQueryKind || data.kind === sourceReadKind)) ||
       (haina && data.kind === hainaCatalogQueryKind) || data.kind === sceneCatalogQueryKind ||
       (paperProjection && data.kind === paperProjectionQueryKind);
@@ -153,7 +154,7 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
       !config.acceptedOutputModes.some(mode => ["application/json","*/*","application/*"].includes(mode))))
       throw invalid("发现成果以 JSON 数据 part 返回。","CONTENT_TYPE_NOT_SUPPORTED");
     checkHistoryLength(config.historyLength);
-    if (data.kind === skillRequestKind && taskId)
+    if ((data.kind === skillRequestKind || data.kind === observationResearchKind) && taskId)
       throw invalid("观测核对须先受理为新的发现委托。");
     if (data.kind !== "oneearth.discovery.request.v1" && data.kind !== skillResultKind && taskId)
       throw invalid("目录查询和精确读取不能绑定到已有发现任务。");
@@ -161,9 +162,14 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
   }
 
   async function submit({kind,input,messageId,taskId,immediately}: ReturnType<typeof decode>, skillAuthorized:boolean) {
-    if (kind === skillRequestKind || kind === skillResultKind) {
+    if (kind === skillRequestKind || kind === skillResultKind || kind === observationResearchKind) {
       if (!skillAuthorized) throw new A2aError(401,"UNAUTHENTICATED","观测核对需要服务凭据。");
       const digest = fingerprint({kind,taskId,input});
+      if (kind === observationResearchKind) {
+        const prepared = parseObservationResearchRequest(input);
+        if (!prepared) throw invalid("观测研究请求的目标、资料身份或已归档证据无效。");
+        return {id:await delegations.submitObservationResearch(messageId,digest,prepared),immediately};
+      }
       if (kind === skillRequestKind) {
         only(input,["researchTaskId","check"]);
         const {researchTaskId} = input, check = parseObservationCheck(input.check);

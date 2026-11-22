@@ -52,7 +52,7 @@ const configuredPushSources = Object.keys(parseSources(process.env.ONEEARTH_PUSH
 const runtime = spatialProxy(runtimeUrl);
 app.post("/api/paper-records/search",spatialProxy(runtimeUrl,{timeout:40000}));
 app.use(["/api/tasks","/api/results","/api/paper-records","/api/data-access","/api/coverage","/api/spatial",
-  "/api/research-record","/api/catalog","/api/haina/catalog"], runtime);
+  "/api/research-record","/api/catalog","/api/haina/catalog","/api/observation-materials"], runtime);
 app.use("/api/constellations",spatialProxy(runtimeUrl,{timeout:40000,authorization:true}));
 const geo = spatialProxy(process.env.ONEEARTH_SPATIAL_URL || "http://127.0.0.1:5276");
 app.use(["/precip-data","/visualizations/haina/1846764","/visualizations/haina/1846639"],geo);

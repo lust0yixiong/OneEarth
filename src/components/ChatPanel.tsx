@@ -1,5 +1,6 @@
 import { loadRemoteAssetIds } from "../domain/datasets";
 import {QuestionScope} from "./QuestionScope";
+import {ObservationMaterialPicker} from "./ObservationMaterialPicker";
 import {GridCoverageRecord} from "./GridCoverageRecord";
 import {scopeKey} from "../domain/question-scope";
 import {useWebPreview} from "./use-web-preview";
@@ -532,6 +533,8 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
               }
             }}
           />
+          {!clarificationTarget && <ObservationMaterialPicker attached={s.draftScope || []}
+            disabled={s.pending || !!s.attachingMapScope} onAttach={attachScope}/>}
           <div className="compose-bottom">
             <small>Enter 发送 · Shift + Enter 换行</small>
             <button

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {execFileSync, spawn} from "node:child_process";
 import {randomBytes, randomUUID} from "node:crypto";
 import {once} from "node:events";
-import {mkdtempSync, rmSync} from "node:fs";
+import {mkdtempSync, rmSync, writeFileSync} from "node:fs";
 import {createServer} from "node:net";
 import path from "node:path";
 import test from "node:test";
@@ -11,6 +11,7 @@ import {Pool} from "pg";
 import {
   observationCheckSkill, skillRequestKind, skillResultKind, type ObservationCheckResult, type SkillDemand,
 } from "./observation-check-contract";
+import {modelObservationEvidence, observationResearchKind, type ObservationResearchResult} from "./observation-research-contract";
 
 const pgBin = process.env.ONEEARTH_A2A_TEST_PG_BIN;
 const headers = {"A2A-Version":"1.0","Content-Type":"application/a2a+json"};
@@ -18,7 +19,10 @@ const check = {skill:observationCheckSkill,artifactId:"fixture-observations",ver
   unit:"K",start:"2025-01-01",end:"2025-01-31"};
 const result:ObservationCheckResult = {status:"verified",matches:true,evidence:{artifactId:check.artifactId,version:check.version,
   sha256:"a".repeat(64),variable:check.variable,unit:check.unit,count:2,first:check.start,last:check.end}};
-type Event = {seq:number; taskId:string; skillDemand?:SkillDemand; result?:{observationCheckResult:ObservationCheckResult}};
+type Event = {seq:number; taskId:string; skillDemand?:SkillDemand;
+  result?:{observationCheckResult?:ObservationCheckResult;observationResearchResult?:ObservationResearchResult};
+  observationResearchModel?:{phase:string;action?:string;model?:{model:string;provider:string};input?:unknown;executorFailure?:string};
+  observationResearchConsumption?:{requestId:string;afterSeq:number;status:string}};
 type Document = {id:string;status:{state:string};artifacts:{parts:{data:{event:Event}}[]}[]};
 const events = (task:Document) => task.artifacts.map(artifact=>artifact.parts[0].data.event);
 
@@ -47,6 +51,37 @@ test("actual discovery worker persists and resumes a private operation in the sa
   const token = randomBytes(32).toString("hex");
   let origin = "";
 
+  // The real service calls its normal model adapter, but this executable never contacts a provider.
+  writeFileSync(path.join(dir,"claude"),"#!"+process.execPath+"\n"+`
+const assert = require("node:assert/strict");
+const {readFileSync} = require("node:fs");
+assert.equal(process.env.ANTHROPIC_BASE_URL,"https://api.deepseek.com/anthropic");
+assert.equal(process.env.ANTHROPIC_MODEL,"deepseek-flash");
+assert.equal(process.env.ONEEARTH_SKILL_SERVICE_TOKEN,undefined);
+const prompt = readFileSync(0,"utf8").trim().split("\\n");
+const input = JSON.parse(prompt.at(-1));
+assert.deepEqual(Object.keys(input),["question","materials","evidence"]);
+assert.ok(!JSON.stringify(input.materials).includes("expectedSha256"));
+assert.ok(!JSON.stringify(input.evidence).includes("sha256"));
+const blank = {action:"general",artifactId:null,version:null,variable:null,purpose:null,unit:null,start:null,end:null,missing:null};
+const schemaPrefix = "Output JSON Schema: ";
+const schema = JSON.parse(prompt.find(line=>line.startsWith(schemaPrefix)).slice(schemaPrefix.length));
+assert.deepEqual(schema.required,Object.keys(blank));
+assert.equal(schema.additionalProperties,false);
+assert.match(prompt[0],/JSON null for every inapplicable field/);
+const target = {artifactId:input.materials[0].artifactId,version:input.materials[0].version,variable:"temperature",purpose:"describe"};
+let plan = {...blank};
+if (input.question === "请看这个文件的单位和记录数。") plan = {...blank,...target,action:"read"};
+if (input.question === "刚才有多少条？" && input.evidence.length) plan = {...blank,...target,action:"reuse"};
+if (input.question === "归档记录是否符合摄氏度要求？") plan = {...blank,...target,action:"reuse",purpose:"check",
+  unit:"C",start:"2025-01-01",end:"2025-01-31"};
+if (input.question === "这个文件的数据怎么样？") plan = {...blank,action:"clarify",missing:"variable"};
+if (input.question === "Fixture returns an unregistered variable") plan = {...blank,...target,action:"read",variable:"unregistered"};
+if (input.question === "Fixture returns a malformed response") {process.stdout.write("not JSON");process.exit(0);}
+if (input.question === "Fixture returns a provider failure") {process.stderr.write("Error: 401 Unauthorized fixture-private-text");process.exit(1);}
+process.stdout.write(JSON.stringify(plan));
+`,{mode:0o700});
+
   async function startService() {
     const reservation = createServer().listen(0,"127.0.0.1");
     await once(reservation,"listening");
@@ -59,7 +94,9 @@ test("actual discovery worker persists and resumes a private operation in the sa
     // Product startup keeps its Haina publish schedule. Prevent even that independent process activity from reaching an upstream.
     const preload = "data:text/javascript,"+encodeURIComponent("globalThis.fetch=async()=>{ throw Error('Fixture blocks upstream HTTP'); };");
     const worker = spawn(process.execPath,["--import","tsx","--import",preload,"server/discovery-service.ts"],{
-      env:{PATH:"/usr/bin:/bin",ONEEARTH_DISCOVERY_PORT:String(address.port),ONEEARTH_STATE_DIR:dir,
+      env:{PATH:dir+":/usr/bin:/bin",ONEEARTH_DISCOVERY_PORT:String(address.port),ONEEARTH_STATE_DIR:dir,
+        ONEEARTH_DISCOVERY_CHAT_MODEL:'{"executor":"claude","provider":"deepseek","model":"deepseek-flash"}',
+        DEEPSEEK_API_KEY:"fixture-only",
         ONEEARTH_DISCOVERY_DATABASE_URL:database,ONEEARTH_SKILL_SERVICE_TOKEN:token},
       stdio:["ignore","pipe","pipe"],
     });
@@ -220,4 +257,79 @@ test("actual discovery worker persists and resumes a private operation in the sa
   assert.deepEqual(requirement(raceFinal).event,raceDemand.event);
   assert.equal((await jobs(racing.id)).length,accepted.status===200 ? 2 : 1);
   await status(await accept(raceInput,racing.id),409);
+
+  await t.test("natural research selects reads, consumes receipts, and answers from archive", async () => {
+    assert.equal(result.status,"verified");
+    const material = {artifactId:check.artifactId,version:check.version,title:"Small observation file",variables:[check.variable]};
+    const publicEvidence = modelObservationEvidence(result.evidence);
+    const request = {researchTaskId:randomUUID(),question:"请看这个文件的单位和记录数。",materials:[material],evidence:[]};
+    const sendResearch = (value:unknown,messageId=randomUUID(),authorization?:string) =>
+      send(observationResearchKind,value,messageId,undefined,authorization,false);
+    await status(await sendResearch(request,randomUUID(),""),401);
+    await status(await sendResearch({...request,materials:[{...material,path:"/denied"}]}),400);
+    await status(await sendResearch({...request,evidence:[result.evidence]}),400);
+
+    const requestId = randomUUID();
+    const natural = (await status(await sendResearch(request,requestId),200)).task as Document;
+    const pending = requirement(natural);
+    assert.equal(natural.status.state,"TASK_STATE_WORKING");
+    assert.notEqual(natural.id,request.researchTaskId);
+    assert.deepEqual(pending.demand.check,{skill:observationCheckSkill,
+      artifactId:check.artifactId,version:check.version,variable:check.variable,purpose:"describe"});
+    const modelInput = events(natural).find(event=>event.observationResearchModel?.phase==="input")?.observationResearchModel;
+    assert.deepEqual(modelInput?.model,{executor:"claude",provider:"deepseek",model:"deepseek-flash"});
+    assert.deepEqual(modelInput?.input,{questionLength:request.question.length,
+      materials:[{artifactId:material.artifactId,version:material.version,variables:material.variables}],evidence:[]});
+    assert.equal(events(natural).find(event=>event.observationResearchModel?.phase==="decision")?.observationResearchModel?.action,"read");
+    assert.doesNotMatch(JSON.stringify(natural),/expectedSha256|fixture-only|请看这个文件/);
+    assert.equal((await jobs(natural.id)).length,1);
+
+    await stopService?.();
+    await startService();
+    assert.deepEqual((await status(await sendResearch(request,requestId),200)).task,natural);
+    const observed = {status:"verified",evidence:result.evidence};
+    const input = {requestId:pending.demand.requestId,afterSeq:pending.event.seq,result:observed};
+    await status(await accept({...input,result},natural.id),409);
+    const receiptMessage = randomUUID();
+    await status(await accept(input,natural.id,receiptMessage),200);
+    const terminal = await after(natural.id,task=>task.status.state==="TASK_STATE_COMPLETED");
+    assert.deepEqual(events(terminal).at(-1)?.result?.observationResearchResult,{action:"answer",basedOn:"read",evidence:publicEvidence});
+    assert.equal(events(terminal).at(-1)?.result?.observationCheckResult,undefined);
+    assert.deepEqual(events(terminal).flatMap(event=>event.observationResearchConsumption??[]),
+      [{requestId:input.requestId,afterSeq:input.afterSeq,status:"verified"}]);
+    assert.doesNotMatch(JSON.stringify(terminal),/sha256|fixture-only/);
+    assert.deepEqual((await status(await accept(input,natural.id,receiptMessage),200)).task,terminal);
+    assert.equal((await jobs(natural.id)).length,2);
+
+    const uncertain = (await status(await sendResearch({...request,researchTaskId:randomUUID()}),200)).task as Document;
+    const waiting = requirement(uncertain);
+    await status(await accept({requestId:waiting.demand.requestId,afterSeq:waiting.event.seq,
+      result:{status:"unknown",reason:"receipt_lost"}},uncertain.id),200);
+    const uncertainResult = await after(uncertain.id,task=>task.status.state==="TASK_STATE_COMPLETED");
+    assert.deepEqual(events(uncertainResult).at(-1)?.result?.observationResearchResult,{action:"unavailable",reason:"receipt_lost"});
+    assert.deepEqual(events(uncertainResult).flatMap(event=>event.observationResearchConsumption?.status??[]),["unknown"]);
+
+    async function withoutRead(question:string,evidence=request.evidence as typeof publicEvidence[]) {
+      const task = (await status(await sendResearch({...request,researchTaskId:randomUUID(),question,evidence}),200)).task as Document;
+      assert.equal(task.status.state,"TASK_STATE_COMPLETED");
+      assert.equal(events(task).some(event=>event.skillDemand),false);
+      assert.equal((await jobs(task.id)).length,1);
+      return events(task).at(-1)?.result?.observationResearchResult;
+    }
+    assert.deepEqual(await withoutRead("刚才有多少条？",[publicEvidence]),{action:"answer",basedOn:"archive",evidence:publicEvidence});
+    const emptyEvidence = {...publicEvidence,count:0,first:null,last:null};
+    assert.deepEqual(await withoutRead("刚才有多少条？",[emptyEvidence]),
+      {action:"answer",basedOn:"archive",evidence:emptyEvidence});
+    assert.deepEqual(await withoutRead("归档记录是否符合摄氏度要求？",[publicEvidence]),
+      {action:"answer",basedOn:"archive",evidence:publicEvidence,matches:false});
+    assert.equal((await withoutRead("这个文件的数据怎么样？"))?.action,"clarify");
+    assert.deepEqual(await withoutRead("海水为什么是咸的？"),{action:"general"});
+    assert.equal((await withoutRead("Fixture returns an unregistered variable"))?.action,"clarify");
+    assert.deepEqual(await withoutRead("Fixture returns a malformed response"),{action:"unavailable",reason:"invalid_plan"});
+    const failed = (await status(await sendResearch({...request,question:"Fixture returns a provider failure"}),200)).task as Document;
+    assert.equal(events(failed).find(event=>event.observationResearchModel?.phase==="error")?.observationResearchModel?.executorFailure,
+      "authentication");
+    assert.deepEqual(events(failed).at(-1)?.result?.observationResearchResult,{action:"unavailable",reason:"planning_failed"});
+    assert.doesNotMatch(JSON.stringify(failed),/fixture-private-text/);
+  });
 });

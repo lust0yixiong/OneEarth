@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {conversationReferenceMemory,rememberConversationReferences,validConversationReferences} from "./reference-memory";
+import {conversationReferenceMemory,modelHistoryMessages,rememberConversationReferences,validConversationReferences} from "./reference-memory";
 import {validHistory} from "../../server/chat-executor";
 import {validReadEvidence} from "./read-evidence";
 import {dataSearchInstructions} from "../../server/data-search";
@@ -11,6 +11,17 @@ import type {AnswerReference,Message} from "./types";
 const ref:AnswerReference={kind:"web",title:"EPA CLP Samplers Guide (2020)",url:"https://www.epa.gov/sites/default/files/2021-03/documents/samplers_guide_clp_guidance_for_field_samplers_november_2020.pdf",referenceType:"paper"};
 const assistant=(text:string,refs:AnswerReference[]=[]):Message=>({id:crypto.randomUUID(),role:"assistant",text,time:1,
   answerNotes:{references:refs,sources:[],webSources:[],limitation:"",followUp:"",reviewed:0,elapsedMs:1,executor:"Codex"}});
+
+test("browser history never replays archived observation facts when the previous answer is on another topic",()=>{
+  const observed:AnswerReference={kind:"asset",id:"observation:stable",title:"A fixed file",source:"local",evidenceLevel:"observation-file"};
+  const earlier=assistant("文件记录的单位和时段〔1〕",[observed]);
+  const newTopic=assistant("已有采样说明〔1〕",[ref]);
+  const messages=[earlier,newTopic];
+  const history=modelHistoryMessages(messages);
+  assert.deepEqual(history,[newTopic]);
+  assert.deepEqual(conversationReferenceMemory(history),[{...ref,sourceChannel:"web"}]);
+  assert.deepEqual(messages[0].answerNotes?.references,[observed]);
+});
 
 test("an entry at the end of a long answer remains identifiable after text and history truncation",()=>{
   const original=assistant("通用采样记录。".repeat(450)+`\n[${ref.title}](${ref.url})`,[ref]);

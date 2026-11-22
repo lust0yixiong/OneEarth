@@ -76,6 +76,14 @@ export function conversationReferenceMemory(messages:Message[]):AnswerReference[
   return memory;
 }
 
+// The runtime rebinds observation evidence from its authorized archive.
+export function modelHistoryMessages(messages:Message[]):Message[] {
+  return messages.filter(message=>!message.failed&&!(
+    message.role==="assistant"&&message.answerNotes?.references?.some(ref=>
+      ref?.kind==="asset"&&(ref.evidenceLevel==="observation-file"||ref.id.startsWith("observation:")))
+  ));
+}
+
 /** Who actually introduced an entry is separate from its identity and reading
  * status. This records the visible message role, not an unseen global origin.
  * Message IDs survive truncated history; never derive global turns from

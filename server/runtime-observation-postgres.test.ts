@@ -33,7 +33,7 @@ test("isolated PostgreSQL preserves parked research, releases the production wor
   const demand=remote.events[0].skillDemand!,result:ObservationCheckResult={status:"verified",matches:true,evidence:{artifactId:check.artifactId,version:check.version,sha256:"b".repeat(64),variable:"t",unit:"K",count:2,first:check.start,last:check.end}};
   let submitted=0,accepted=0,obtained:ObservationCheckResult|undefined,delivered=0;
   const messages=new Set<string>();
-  const client:ReturnType<typeof observationDiscoveryClient>={submit:async message=>{if(!messages.has(message)){messages.add(message);accepted++;}return structuredClone(remote);},
+  const client:ReturnType<typeof observationDiscoveryClient>={submitResearch:async()=>assert.fail("explicit test must not enter natural delegation"),submit:async message=>{if(!messages.has(message)){messages.add(message);accepted++;}return structuredClone(remote);},
     snapshot:async()=>structuredClone(remote),deliver:async(_binding,_message,input)=>{assert.equal(input.afterSeq,7);assert.equal(input.requestId,demand.requestId);assert.deepEqual(input.result,result);delivered++;
       remote.state="TASK_STATE_COMPLETED";remote.events.push({seq:8,artifactId:"result",result});return structuredClone(remote);},cancel:async()=>"TASK_STATE_CANCELED"};
   const engine:RuntimeObservationEngine={submit:async request=>{assert.equal(request.requestId,demand.requestId);assert.equal(request.discoveryTaskId,remote.taskId);assert.equal(request.expectedSha256,"b".repeat(64));if(!submitted)submitted++;},result:async()=>obtained,cancel:async()=>{}};

@@ -102,6 +102,7 @@ export function openTaskStore(file: string) {
     },
     finish,
     step(id:string):Payload|undefined{const row=db.prepare("SELECT checkpoint FROM task_steps WHERE id=?").get(id) as {checkpoint:string}|undefined;return row?JSON.parse(row.checkpoint):undefined;},
+    clearStep(id:string){return transaction(()=>get(id)?.status==="running"?!!db.prepare("DELETE FROM task_steps WHERE id=?").run(id).changes:false);},
     saveStep(id:string,checkpoint:Payload,event?:Payload){return transaction(()=>{
       if(get(id)?.status!=="running")return false;
       db.prepare("INSERT INTO task_steps VALUES (?,?,NULL) ON CONFLICT(id) DO UPDATE SET checkpoint=excluded.checkpoint").run(id,JSON.stringify(checkpoint));
@@ -147,15 +148,15 @@ export function openTaskStore(file: string) {
 }
 type LocalTaskStore = ReturnType<typeof openTaskStore>;
 export type TaskStore = {
-  [Method in Exclude<keyof LocalTaskStore,"materialEvents"|"step"|"saveStep"|"park"|"cancelStep"|"cancelledSteps">]: (...args: Parameters<LocalTaskStore[Method]>) =>
+  [Method in Exclude<keyof LocalTaskStore,"materialEvents"|"step"|"clearStep"|"saveStep"|"park"|"cancelStep"|"cancelledSteps">]: (...args: Parameters<LocalTaskStore[Method]>) =>
     ReturnType<LocalTaskStore[Method]> | Promise<ReturnType<LocalTaskStore[Method]>>;
 }&{materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>}&{
-  [Method in "step"|"saveStep"|"park"|"cancelStep"|"cancelledSteps"]?:(...args:Parameters<LocalTaskStore[Method]>)=>ReturnType<LocalTaskStore[Method]>|Promise<ReturnType<LocalTaskStore[Method]>>;
+  [Method in "step"|"clearStep"|"saveStep"|"park"|"cancelStep"|"cancelledSteps"]?:(...args:Parameters<LocalTaskStore[Method]>)=>ReturnType<LocalTaskStore[Method]>|Promise<ReturnType<LocalTaskStore[Method]>>;
 };
 
 export type TaskPreparation={checkpoint?:Payload;error?:string};
 export function taskRoutes(router: Router, base: string, store: TaskStore, validate: (body: unknown) => string | undefined | Promise<string | undefined>, options:{researchRecords?:boolean;initialCheckpoint?:(id:string,input:unknown)=>Payload|undefined;recoverRecord?:(task:Task)=>Promise<unknown>;
-  prepareWhen?:(input:unknown)=>boolean;prepare?:(id:string,input:unknown)=>Promise<TaskPreparation>}={}) {
+  prepareWhen?:(input:unknown)=>boolean|Promise<boolean>;prepare?:(id:string,input:unknown)=>Promise<TaskPreparation>}={}) {
   router.param("taskId", (_req, res, next, id) => {
     if (!taskIdPattern.test(id)) { res.status(400).json({error:"无效的任务编号。"}); return; }
     next();
@@ -163,7 +164,7 @@ export function taskRoutes(router: Router, base: string, store: TaskStore, valid
   router.post(base, async (req, res) => {
     const {id, input} = req.body ?? {};
     if (typeof id !== "string" || !taskIdPattern.test(id)) { res.status(400).json({error:"无效的任务编号。"}); return; }
-    const prepare=options.prepare&&(!options.prepareWhen||options.prepareWhen(input))?options.prepare:undefined;
+    const prepare=options.prepare&&(!options.prepareWhen||await options.prepareWhen(input))?options.prepare:undefined;
     if(!prepare){const issue=await validate(input);if(issue){res.status(400).json({error:issue});return;}}
     try {
       let checkpoint:Payload|undefined;

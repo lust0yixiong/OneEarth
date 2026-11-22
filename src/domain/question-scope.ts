@@ -5,8 +5,10 @@ import {windowFilters,windowLabel} from "./time-window";
 import type {GridCoverageScope} from "./grid-coverage";
 import type {CoverageScopeSummary} from "./coverage";
 import {sourceLabels} from "./catalog";
+import type {ObservationAttachment} from "./observation-material";
 
 export type ScopeItem =
+  | ObservationAttachment
   | {kind:"reference";reference:AnswerReference;number:number;messageId:string}
   | {kind:"grid"; selection:Pick<Selection,"grid"|"id"|"point">; place:string; coverageScope?:GridCoverageScope & {summary?:CoverageScopeSummary}}
   | {kind:"time"; period:[number,number]; utcWindow:[number,number]|null}
@@ -22,13 +24,14 @@ export function gridScope({grid,id,point}:Selection,place:string,coverageScope?:
 export function datasetScope(a:Asset):ScopeItem {
   return {kind:"dataset",id:a.id,title:a.title,source:a.source,version:a.version || null};
 }
-export const scopeKey=(item:ScopeItem)=>item.kind==="reference"?"reference:"+(item.reference.kind==="asset"?item.reference.id:item.reference.url):item.kind==="dataset"?"dataset:"+item.id:item.kind;
+export const scopeKey=(item:ScopeItem)=>item.kind==="observation"?"observation:"+JSON.stringify([item.artifactId,item.version]):item.kind==="reference"?"reference:"+(item.reference.kind==="asset"?item.reference.id:item.reference.url):item.kind==="dataset"?"dataset:"+item.id:item.kind;
 export function mergeScope(previous:ScopeItem[],added:ScopeItem[]) {
   const items=[...new Map([...previous,...added].map(item=>[scopeKey(item),item])).values()];
   return items.some(item=>item.kind==="grid" && item.coverageScope?.summary)
     ? items.filter(item=>item.kind!=="time") : items;
 }
 export function scopeLabel(item:ScopeItem) {
+  if(item.kind==="observation")return item.title+" · "+item.version;
   if(item.kind==="reference")return "〔"+item.number+"〕"+item.reference.title;
   if(item.kind==="time")return item.utcWindow?windowLabel(item.utcWindow):(item.period[0]===item.period[1]?item.period[0]:item.period.join("–"))+" 年";
   if(item.kind==="dataset")return item.title;
@@ -44,6 +47,7 @@ export function coverageScopeLabels({filters,candidateCount}: CoverageScopeSumma
   ];
 }
 export function scopeDetail(item:ScopeItem) {
+  if(item.kind==="observation")return [item.artifactId,item.version].join(" · ");
   if(item.kind==="reference")return item.reference.kind==="asset"?item.reference.source+" · "+item.reference.id:item.reference.url;
   if(item.kind==="dataset")return [item.source,item.version,item.id].filter(Boolean).join(" · ");
   if(item.kind==="time")return item.utcWindow?item.utcWindow.map(t=>new Date(t).toISOString()).join(" 至 ")+"（不含结束时刻）":scopeLabel(item);

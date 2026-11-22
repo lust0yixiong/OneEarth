@@ -14,11 +14,13 @@ export type TurnTarget={key:string;kind:"asset"|"web"|"excerpt"|"grid"|"time";ti
 export type TurnHistory=Array<{role:"user"|"assistant";text:string;assetIds?:string[];researchIntent?:ResearchIntent;
   conversationContext?:string;conversationReferences?:AnswerReference[];conversationEvidence?:ReadEvidence[];conversationAssertionEvidence?:import("../src/domain/assertion-evidence-memory").AssertionEvidenceMemory[]}>;
 export type TurnInput={question:string;context:DiscoveryContext;history:TurnHistory;conversationContext?:string;previousResearchIntent?:ResearchIntent;confirmedQuestion?:string;
+  observationUnavailable?:true;
   gridCoverage?:import("../src/domain/grid-coverage").GridCoverageEvidence;
   numbered?:NumberedReference; numberedRead?:ReadEvidence;
   numberedAssertion?:import("../src/domain/assertion-evidence-memory").AssertionEvidenceMemory};
 export type TurnPlan={action:TurnAction;goal:string;evidenceNeed:"none"|"existing"|"read"|"discover"|"unclear";
   gridIntent?:"none"|"count"|"catalogue"|"deeper";
+  observationUse?:"unrelated"|"unavailable";
   targets:TurnTarget[];restoredNumberedTarget?:true;reason:string;clarification:string|null;researchIntent:ResearchIntent;conversationContext:string;evidenceGap?:string};
 
 export const turnPlanSchema={type:"object",additionalProperties:false,
@@ -32,6 +34,15 @@ export const turnPlanSchema={type:"object",additionalProperties:false,
 
 export const gridTurnPlanSchema={...turnPlanSchema,required:[...turnPlanSchema.required,"gridIntent"],properties:{...turnPlanSchema.properties,
   gridIntent:{type:"string",enum:["none","count","catalogue","deeper"]}}};
+export function turnPlanningSchema(input:Pick<TurnInput,"gridCoverage"|"observationUnavailable">){
+  const base=input.gridCoverage?.status==="ready"&&input.gridCoverage.summary?gridTurnPlanSchema:turnPlanSchema;
+  return input.observationUnavailable?{...base,required:[...base.required,"observationUse"],properties:{...base.properties,
+    observationUse:{type:"string",enum:["unrelated","unavailable"]}}}:base;
+}
+const unavailableObservationInstructions=`\n此前观测资料现在未获准供本轮模型使用，旧事实和引用已移除。额外必填 observationUse：
+- unavailable：本轮需依赖此前观测文件、读据或其具体单位/记录/结果，即使原话只用“它/刚才”等指代。只能说明资料现在不可用，不能猜原文件内容、沿用旧答案或另找来源代替。
+- unrelated：本轮是与该文件事实无关的一般问题、界面操作，或另有明确对象和研究目的，继续原动作规则。
+这是按本轮目的作语义判断，不能因为出现观测/单位等词就认定需要该文件。没有文件事实时不能声称读过或作出文件结论。`;
 const gridPlanningInstructions=`\n服务器已取得所附网格的权威覆盖证据。额外必填 gridIntent，判断本轮原话要做的事，不由 action 名称推断：
 - count：只问这一覆盖结果的数量。
 - catalogue：清点此覆盖结果已命中的身份、论文题名、出处、目录元数据，或比较这些目录记录本身。口语的“把刚选那格命中的那篇给我看看”也可指目录清点；不等于已读论文原文。
@@ -139,6 +150,12 @@ export function parseTurnPlan(raw:string,input:TurnInput,available=turnTargets(i
   if(parsed && typeof parsed==="object" && !Array.isArray(parsed) && !("action" in parsed) && ("questionMode" in parsed || "dataQuestion" in parsed))
     throw Error("检索计划不能代替本轮动作。请只返回动作规划的字段。");
   const value=repairedPlan(parsed,input);
+  if(input.observationUnavailable){
+    if(!["unrelated","unavailable"].includes(value?.observationUse))throw Error("需要明确本轮是否依赖目前不可用的观测资料。");
+    if(value.observationUse==="unavailable")Object.assign(value,{action:"clarify",evidenceNeed:"unclear",targets:[],evidenceGap:null,
+      ...(input.gridCoverage?.status==="ready"&&input.gridCoverage.summary?{gridIntent:"none"}:{}),
+      clarification:"此前观测资料现在不可用，本轮不能沿用其文件事实、读据或引用来回答。可重新选择当前获准的资料；原研究存档仍可查看。"});
+  }else if(value?.observationUse!==undefined)throw Error("本轮没有服务端确认的观测资料不可用上下文。");
   const scoped=!!input.gridCoverage?.summary&&input.gridCoverage.status==="ready";
   if(scoped&&!['none','count','catalogue','deeper'].includes(value?.gridIntent))throw Error("所附网格的本轮用途缺少有效判断。");
   if(!scoped&&value?.gridIntent!==undefined)throw Error("没有可核对的权威网格，不能指定网格目录用途。");
@@ -180,12 +197,13 @@ export function parseTurnPlan(raw:string,input:TurnInput,available=turnTargets(i
   let clarification:string|null=null;
   if(value.action==="clarify"){
     if(typeof value.clarification!=="string"||!value.clarification.trim()||value.clarification.length>500)throw Error("澄清动作缺少有效问题。");
-    const issue=clarificationBlockReason(input.question,value.clarification,input as PlanningContext);if(issue)throw Error("当前条件可答，不应机械追问："+issue);
+    const issue=value.observationUse==="unavailable"?undefined:clarificationBlockReason(input.question,value.clarification,input as PlanningContext);if(issue)throw Error("当前条件可答，不应机械追问："+issue);
     if(available.some(t=>t.url&&["citation","attachment","question"].includes(t.basis))&&/请.{0,8}(?:提供|给出|发来).{0,12}(?:链接|URL|DOI)/i.test(value.clarification))throw Error("本轮已有明确来源地址，不应再次索要。");
     clarification=value.clarification.trim();
   }
   return {action:value.action,goal:value.goal.trim(),evidenceNeed:value.evidenceNeed,targets,reason:value.reason.trim(),clarification,
     ...(scoped?{gridIntent:value.gridIntent}:{}),
+    ...(input.observationUnavailable?{observationUse:value.observationUse}:{}),
     ...(restorePinned?{restoredNumberedTarget:true as const}:{}),
     researchIntent:value.researchIntent,conversationContext:value.conversationContext,
     evidenceGap:value.action==="search"?value.evidenceGap.trim():undefined};
@@ -204,7 +222,8 @@ type PlanningDeps={run:(prompt:string)=>Promise<string>;stage:(message:string)=>
 export async function prepareTurn(input:TurnInput,signal:AbortSignal,deps:PlanningDeps){
   signal.throwIfAborted();
   const available=turnTargets(input);
-  const instructions=turnPlanningInstructions+(input.gridCoverage?.status==="ready"&&input.gridCoverage.summary?gridPlanningInstructions:"");
+  const instructions=turnPlanningInstructions+(input.gridCoverage?.status==="ready"&&input.gridCoverage.summary?gridPlanningInstructions:"")+
+    (input.observationUnavailable?unavailableObservationInstructions:"");
   const coverageScope=input.context.attachedScope?.find(item=>item.kind==="grid")?.coverageScope;
   const call={id:"turn-action",kind:"tool" as const,name:"本轮目标与动作规划",input:JSON.stringify({question:input.question,
     targets:available.map(({excerpt,...t})=>({...t,hasExcerpt:!!excerpt})),coverageScope})};

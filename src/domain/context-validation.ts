@@ -6,6 +6,7 @@ import { ctdStations } from "./visualization";
 import { isValidCell, getResolution } from "h3-js";
 import type { DiscoveryContext } from "./types";
 import { caseById } from "./catalog";
+import {validObservationAttachment} from "./observation-material";
 function pair(v: unknown): v is [number, number] {
   return (
     Array.isArray(v) &&
@@ -136,6 +137,8 @@ export function validContext(v: any): v is DiscoveryContext {
       }else if(i.kind==="dataset"){
         if(![i.id,i.title,i.source].every(s=>typeof s==="string" && s.length<=2000) || !i.id || !i.title ||
           !(i.version===null || typeof i.version==="string" && i.version.length<=500))return false;
+      }else if(i.kind==="observation"){
+        if(!validObservationAttachment(i))return false;
       }else return false;
       const key=scopeKey(i);
       if(keys.has(key))return false;

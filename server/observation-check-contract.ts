@@ -1,4 +1,5 @@
 import {timingSafeEqual} from "node:crypto";
+import {observationMaterialId} from "../src/domain/observation-material";
 import type {ObservationEvidence} from "../src/domain/observation-evidence";
 export type {ObservationEvidence} from "../src/domain/observation-evidence";
 
@@ -16,12 +17,15 @@ export type ObservationCheck = {
   end: string;
 };
 
+export type ObservationDescription = Pick<ObservationCheck,"skill"|"artifactId"|"version"|"variable"> & {purpose:"describe"};
+export type ObservationRequest = ObservationCheck|ObservationDescription;
+
 export type ObservationCheckResult =
-  | {status: "verified"; matches: boolean; evidence: ObservationEvidence}
+  | {status: "verified"; matches?: boolean; evidence: ObservationEvidence}
   | {status: "not_started"|"failed"|"cancelled"|"unknown"; reason: string};
 
-export type SkillDemand = {requestId: string; researchTaskId: string; check: ObservationCheck};
-export type SkillExecutionRequest = SkillDemand & {discoveryTaskId: string; expectedSha256: string};
+export type SkillDemand = {requestId: string; researchTaskId: string; check: ObservationRequest};
+export type SkillExecutionRequest = SkillDemand & {discoveryTaskId: string; expectedSha256: string; modelAuthorized?:true};
 export type SkillResultSubmission = {requestId: string; afterSeq: number; result: ObservationCheckResult};
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -32,9 +36,7 @@ function hasKeys(value: Record<string, unknown>, keys: string[]) {
   return Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 }
 
-export function observationId(value: unknown): value is string {
-  return typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,79}$/.test(value);
-}
+export const observationId = observationMaterialId;
 
 export function observationDate(value: unknown): value is string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -53,6 +55,13 @@ export function parseObservationCheck(value: unknown): ObservationCheck|undefine
   if (skill !== observationCheckSkill || !observationId(artifactId) || !observationId(version) ||
       !observationId(variable) || !observationUnit(unit) || !observationDate(start) || !observationDate(end) || start>end) return;
   return {skill,artifactId,version,variable,unit,start,end};
+}
+
+export function parseObservationRequest(value: unknown): ObservationRequest|undefined {
+  if(!object(value)||value.purpose!=="describe")return parseObservationCheck(value);
+  if(!hasKeys(value,["skill","artifactId","version","variable","purpose"])||value.skill!==observationCheckSkill)return;
+  const target=parseObservationReadTarget({artifactId:value.artifactId,version:value.version,variable:value.variable});
+  if(target)return {skill:observationCheckSkill,purpose:"describe",...target};
 }
 
 export type ObservationReadTarget = Pick<ObservationCheck, "artifactId"|"version"|"variable">;
@@ -86,15 +95,18 @@ export function validObservationResult(value: unknown): value is ObservationChec
     return hasKeys(value, ["status","reason"]) && typeof value.status === "string" &&
       ["not_started","failed","cancelled","unknown"].includes(value.status) && observationId(value.reason);
   }
-  return hasKeys(value, ["status","matches","evidence"]) && typeof value.matches === "boolean" &&
-    validObservationEvidence(value.evidence) && (value.evidence.count > 0 || !value.matches);
+  if(!validObservationEvidence(value.evidence))return false;
+  if(hasKeys(value,["status","evidence"]))return true;
+  return hasKeys(value,["status","matches","evidence"]) && typeof value.matches==="boolean" &&
+    (value.evidence.count>0 || !value.matches);
 }
 
-export function observationResultMatchesRequest(result: ObservationCheckResult, check: ObservationCheck): boolean {
+export function observationResultMatchesRequest(result: ObservationCheckResult, check: ObservationRequest): boolean {
   if (result.status !== "verified") return true;
   const e = result.evidence;
-  return e.artifactId === check.artifactId && e.version === check.version && e.variable === check.variable &&
-    result.matches === (e.unit === check.unit && !!e.first && !!e.last && e.first <= check.start && e.last >= check.end);
+  if(e.artifactId!==check.artifactId||e.version!==check.version||e.variable!==check.variable)return false;
+  if("purpose" in check)return !Object.hasOwn(result,"matches");
+  return result.matches===(e.unit===check.unit&&!!e.first&&!!e.last&&e.first<=check.start&&e.last>=check.end);
 }
 
 export function skillServiceAuthorized(authorization: string|undefined, token = process.env.ONEEARTH_SKILL_SERVICE_TOKEN): boolean {

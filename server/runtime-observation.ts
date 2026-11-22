@@ -3,7 +3,7 @@ import {isDeepStrictEqual} from "node:util";
 import {TaskParked,type TaskStore,type Payload,type Task} from "./task-store";
 import {validateTurnStructure} from "./runtime-input";
 import {parseObservationCheck,observationSha256,validObservationResult,observationResultMatchesRequest,
-  type ObservationCheck,type ObservationCheckResult,type SkillExecutionRequest} from "./observation-check-contract";
+  type ObservationCheck,type ObservationRequest,type ObservationCheckResult,type SkillExecutionRequest} from "./observation-check-contract";
 import {observationDiscoveryClient,observationTerminal,validateObservationEvents,ObservationProtocolError,
   type ObservationBinding,type ObservationTask} from "./observation-discovery-client";
 
@@ -38,7 +38,7 @@ export async function prepareObservationInput(tasks:TaskStore,id:string,input:un
   }catch{return {error:"观测核对授权暂时无法确认。"};}
 }
 
-function response(result:ObservationCheckResult,check:ObservationCheck,elapsedMs:number){
+export function observationResponse(result:ObservationCheckResult,check:ObservationRequest,elapsedMs:number,provenance:"read"|"archive"="read"){
   let message:string;
   const references=result.status==="verified"?[{
     kind:"asset" as const,id:"observation:"+createHash("sha256").update(JSON.stringify([result.evidence.artifactId,result.evidence.version,result.evidence.variable,result.evidence.sha256])).digest("hex"),
@@ -47,26 +47,28 @@ function response(result:ObservationCheckResult,check:ObservationCheck,elapsedMs
   }]:[];
   if(result.status==="verified"){
     const e=result.evidence;
-    message="已核对「"+e.artifactId+"」的指定版本「"+e.version+"」。变量「"+e.variable+"」的单位为「"+e.unit+"」，"+
+    message=(provenance==="archive"?"此前保存的读据显示：「":"已核对「")+e.artifactId+"」的指定版本「"+e.version+"」。变量「"+e.variable+"」的单位为「"+e.unit+"」，"+
       (e.count?"非空记录共 "+e.count+" 条，起止日期为 "+e.first+" 至 "+e.last+"。":"没有非空记录。")+
-      (result.matches?"符合本次指定的单位和记录起止边界要求。":"不满足本次指定的单位「"+check.unit+"」及记录起止边界 "+check.start+" 至 "+check.end+" 的要求。");
+      ("purpose" in check?"":result.matches?"符合本次指定的单位和记录起止边界要求。":"不满足本次指定的单位「"+check.unit+"」及记录起止边界 "+check.start+" 至 "+check.end+" 的要求。");
     message+="〔1〕";
   }else if(result.status==="not_started"&&result.reason==="artifact_version_changed")message="受理时固定的观测文件版本已变更，未启动读取。";
   else if(result.status==="not_started"&&result.reason==="artifact_not_authorized")message="受理时的观测文件现已无授权，未启动读取。";
   else message=({not_started:"指定观测核对尚未启动。",failed:"指定观测核对未能完成。",cancelled:"指定观测核对已取消。",unknown:"指定观测核对的结果暂时无法确认。"})[result.status];
   return {result:{message,observationCheckResult:result,observationCheck:check,
     answerNotes:{references,sources:references.map(ref=>({id:ref.id,reason:"实际取得的指定版本观测文件读据"})),researchNotes:[],searches:[],webSources:[],
-      limitation:result.status==="verified"?"本次只核对单位和非空记录起止边界，不代表时段内连续有效或逐小时齐全。":"本轮尚无可核对的观测文件读据。",
+      limitation:result.status==="verified"?(provenance==="archive"?"沿用此前实际取得的原版本读据，本轮未重新读取文件。":"")+"本次只核对单位和非空记录起止边界，不代表时段内连续有效或逐小时齐全。":"本轮尚无可核对的观测文件读据。",
       followUp:"",reviewed:references.length,elapsedMs,executor:"运行时受权执行器"}}};
 }
+const response=observationResponse;
 
-function retainedRecords(result:ObservationCheckResult,check:ObservationCheck,elapsedMs:number){
+export function observationRetainedRecords(result:ObservationCheckResult,check:ObservationRequest,elapsedMs:number,provenance:"read"|"archive"="read"){
   if(result.status!=="verified")return {};
-  const saved=response(result,check,elapsedMs).result;
+  const saved=response(result,check,elapsedMs,provenance).result;
   const notice="以下保留此前实际取得的执行材料，不代表原发现委托已完成。\n\n"+saved.message;
   return {cancelledResult:{...saved,message:"研究已取消。"+notice,observationDelivery:"retained-after-interruption"},
     failedResult:{...saved,message:"研究推进已中断。"+notice,observationDelivery:"retained-after-interruption"}};
 }
+const retainedRecords=observationRetainedRecords;
 
 export async function recoverObservationRecord(tasks:TaskStore,task:Task){
   if(task.status!=="cancelled"&&task.status!=="failed")return;

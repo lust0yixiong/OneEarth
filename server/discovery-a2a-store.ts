@@ -4,7 +4,8 @@ import {TaskConflict, type Payload, type Task} from "./task-store";
 import {
   observationResultMatchesRequest, skillRequestKind, skillResultKind, type SkillDemand, type SkillResultSubmission,
 } from "./observation-check-contract";
-import type {ObservationCheckJob, ObservationCheckRequest} from "./discovery-observation-job";
+import type {ObservationCheckJob, ObservationCheckRequest, ObservationResearchJob} from "./discovery-observation-job";
+import {observationResearchKind, type ObservationResearchRequest} from "./observation-research-contract";
 
 export type StoredDiscoveryEvent = Payload & {seq: number; at: number; taskId: string};
 export type DiscoveryProgress = Pick<Task,"id"|"status"|"updated"> & {
@@ -17,6 +18,7 @@ export class DiscoveryTaskMissing extends Error {}
 type Submission =
   | {body:object; continuation?:DiscoveryContinuation}
   | {observation:ObservationCheckRequest}
+  | {observationResearch:ObservationResearchRequest}
   | {taskId:string; receipt:SkillResultSubmission};
 
 export async function discoveryA2aStore(pool: Pool) {
@@ -63,13 +65,14 @@ export async function discoveryA2aStore(pool: Pool) {
     await db.query("INSERT INTO discovery_events(id,at,payload) VALUES($1,$2,$3::jsonb)",[id,at,JSON.stringify(payload)]);
   }
   type StatusRow = Omit<DiscoveryProgress,"updated"|"needsInput"|"waitingSeq"|"machineWaiting"> & {
-    updated:string; waitingSeq:string|null; machineSeq:string|null; demand:SkillDemand|null;
+    updated:string; waitingSeq:string|null; machineSeq:string|null; demand:SkillDemand|null; research:boolean;
   };
   const select = `SELECT a.id, t.id AS "jobId",
     CASE WHEN a.private_task AND t.status='queued' AND t.body::jsonb->>'kind'='${skillResultKind}'
       THEN 'running' ELSE t.status END AS status,
     t.updated, a.private_task AS "privateTask",
-    terminal."waitingSeq", terminal."machineSeq", terminal.demand`;
+    terminal."waitingSeq", terminal."machineSeq", terminal.demand,
+    a.private_task AND t.body::jsonb->>'kind'='${observationResearchKind}' AS research`;
   const from = `FROM discovery_a2a_tasks a JOIN discovery_tasks t ON t.id=a.current_job_id
     LEFT JOIN LATERAL (
       SELECT CASE WHEN NOT a.private_task AND COALESCE(e.payload->'result'->>'questionCheck',e.payload->'result'->>'clarification') IS NOT NULL
@@ -79,7 +82,7 @@ export async function discoveryA2aStore(pool: Pool) {
       FROM discovery_events e WHERE e.id=t.id ORDER BY e.seq DESC LIMIT 1
     ) terminal ON t.status='complete' WHERE a.id=$1`;
   function progress(row:StatusRow):DiscoveryProgress {
-    const {updated,waitingSeq,machineSeq,demand:_,...task} = row;
+    const {updated,waitingSeq,machineSeq,demand:_,research:__,...task} = row;
     return {...task,updated:Number(updated),needsInput:waitingSeq !== null,machineWaiting:machineSeq !== null,
       ...(waitingSeq !== null ? {waitingSeq:Number(waitingSeq)} : {})};
   }
@@ -110,9 +113,11 @@ export async function discoveryA2aStore(pool: Pool) {
         if (!demand || current.machineSeq !== String(receipt.afterSeq) ||
             demand.requestId !== receipt.requestId || !observationResultMatchesRequest(receipt.result,demand.check))
           throw new DiscoveryContinuationConflict("观测核对结果与当前待续接的需求、序号或资料版本不匹配。");
-        body = {kind:skillResultKind,demand,receipt} satisfies ObservationCheckJob;
+        body = {kind:skillResultKind,demand,receipt,...(current.research ? {research:true as const} : {})} satisfies ObservationCheckJob;
       } else if ("observation" in submission) {
         body = {kind:skillRequestKind,input:submission.observation} satisfies ObservationCheckJob;
+      } else if ("observationResearch" in submission) {
+        body = {kind:observationResearchKind,input:submission.observationResearch} satisfies ObservationResearchJob;
       } else {
         if (human && (current?.privateTask || current?.jobId !== human.jobId || current.waitingSeq !== String(human.waitingSeq))) {
           throw new DiscoveryContinuationConflict("该委托已结束或已受理另一条确认。");
@@ -136,6 +141,8 @@ export async function discoveryA2aStore(pool: Pool) {
       submit(messageId,fingerprint,{body,continuation}),
     submitObservationCheck: (messageId:string, fingerprint:string, observation:ObservationCheckRequest) =>
       submit(skillMessageId(messageId),fingerprint,{observation}),
+    submitObservationResearch: (messageId:string, fingerprint:string, observationResearch:ObservationResearchRequest) =>
+      submit(skillMessageId(messageId),fingerprint,{observationResearch}),
     acceptObservationResult: (messageId:string, fingerprint:string, taskId:string, receipt:SkillResultSubmission) =>
       submit(skillMessageId(messageId),fingerprint,{taskId,receipt}),
     async hasJob(id: string) {

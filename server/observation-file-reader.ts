@@ -29,10 +29,10 @@ async function main(){
     if(length>4096)throw new ObservationArtifactError("reader_input");
     chunks.push(bytes);
   }
-  const {check:raw,registry,sha256,callId,receiptGate}=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  const {check:raw,registry,sha256,callId,receiptGate,requireModelGrant}=JSON.parse(Buffer.concat(chunks).toString("utf8"));
   const check=parseObservationReadTarget(raw);
   if(!check||typeof registry!=="string"||typeof sha256!=="string")throw new ObservationArtifactError("reader_input");
-  const evidence=await readObservationArtifact(check,registry,sha256);
+  const evidence=await readObservationArtifact(check,registry,sha256,requireModelGrant===true);
   process.stdout.write(JSON.stringify({kind:"read",sha256:evidence.sha256})+"\n");
   // The optional private evidence barrier delays output while this reader still holds its process.
   if(receiptGate!==undefined)await awaitReceiptRelease(receiptGate,callId);

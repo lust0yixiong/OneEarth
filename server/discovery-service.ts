@@ -23,8 +23,10 @@ import {discoveryA2aRouter} from "./discovery-a2a-server";
 import {discoveryA2aStore} from "./discovery-a2a-store";
 import {runSourceRead,type SourceReadJob} from "./discovery-material-operations";
 import {sourceReadKind} from "./discovery-materials-contract";
-import {runObservationCheckJob,type ObservationCheckJob} from "./discovery-observation-job";
+import {runObservationCheckJob,type ObservationCheckJob,type ObservationResearchJob} from "./discovery-observation-job";
 import {skillRequestKind,skillResultKind} from "./observation-check-contract";
+import {observationResearchKind} from "./observation-research-contract";
+import {planObservationResearch,resumeObservationResearch} from "./discovery-observation-research";
 
 const configuration = discoveryConfiguration();
 const state = process.env.ONEEARTH_STATE_DIR || path.resolve(".local/state");
@@ -50,9 +52,19 @@ app.post("/v1/discoveries", (_req,res,next) => {
   next();
 });
 taskRoutes(app, "/v1/discoveries", discoveryLegacyStore(store,delegations,configuration,prepare), prepare.legacy);
-await workTasks(store, async ({id,body}: {id:string;body:DiscoveryInput|SourceReadJob|ObservationCheckJob}, signal, emit) => {
+await workTasks(store, async ({id,body}: {id:string;body:DiscoveryInput|SourceReadJob|ObservationCheckJob|ObservationResearchJob}, signal, emit) => {
   const a2a = await delegations.hasJob(id);
   if (a2a && "kind" in body) {
+    if (body.kind === observationResearchKind) {
+      if (configuration.kind !== "configured") {
+        emit({observationResearchModel:{phase:"error",code:"model_unavailable"}});
+        return {result:{observationResearchResult:{action:"unavailable",reason:"model_unavailable"}}};
+      }
+      return planObservationResearch(body.input,configuration.model,signal,emit,(prompt,outputSchema)=>
+        runExecutor(configuration.model,prompt,signal,{outputSchema}));
+    }
+    if (body.kind === skillResultKind && body.research)
+      return resumeObservationResearch(body.demand,body.receipt.afterSeq,body.receipt.result,signal,emit);
     if (body.kind === skillRequestKind || body.kind === skillResultKind) return runObservationCheckJob(body,signal);
     if (body.kind === sourceReadKind) return runSourceRead(body,signal,emit,catalog,fetchAllowed());
   }

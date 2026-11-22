@@ -83,7 +83,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
       const now=Date.now();
       const updated=await db.query(`UPDATE ${tasks} SET status=$1,updated=$2 WHERE id=$3 AND status IN ('running','queued')`,[status,now,id]);
       if(!updated.rowCount)return false;
-      if(namespace==="runtime"&&status!=="complete"){
+      if(namespace==="runtime"&&status!=="complete"&&payload.result===undefined){
         const checkpoint=(await db.query<{checkpoint:Payload}>("SELECT checkpoint FROM runtime_steps WHERE id=$1",[id])).rows[0]?.checkpoint;
         const retained=checkpoint?.[status==="cancelled"?"cancelledResult":"failedResult"];
         if(retained)payload={...payload,result:retained};
@@ -172,6 +172,10 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
     finish,
     ...(namespace==="runtime"?{
       async step(id:string){return (await pool.query<{checkpoint:Payload}>("SELECT checkpoint FROM runtime_steps WHERE id=$1",[id])).rows[0]?.checkpoint;},
+      async clearStep(id:string){return transaction(async db=>{
+        if(!(await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id])).rowCount)return false;
+        return !!(await db.query("DELETE FROM runtime_steps WHERE id=$1",[id])).rowCount;
+      });},
       async saveStep(id:string,checkpoint:Payload,event?:Payload){return transaction(async db=>{
         const active=await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id]);
         if(!active.rowCount)return false;

@@ -6,8 +6,8 @@ import {productDatabase} from "./product-database";
 import {observationArtifact} from "./observation-artifacts";
 import {executeObservationRead,type ObservationReadReceipt} from "./observation-adapter";
 import {
-  parseObservationCheck,observationResultMatchesRequest,validObservationResult,validObservationEvidence,observationSha256,
-  type ObservationCheck,type ObservationCheckResult,type SkillExecutionRequest,
+  parseObservationRequest,observationResultMatchesRequest,validObservationResult,validObservationEvidence,observationSha256,
+  type ObservationRequest,type ObservationCheckResult,type SkillExecutionRequest,
 } from "./observation-check-contract";
 
 export {authorizeObservationDigest} from "./observation-artifacts";
@@ -18,7 +18,7 @@ type State="queued"|"running"|"waiting"|"done";
 type Lane="regular"|"reserved";
 type Outcome=ObservationCheckResult;
 type Root={
-  id:string; research_id:string; discovery_id:string; input:ObservationCheck; sha256:string;
+  id:string; research_id:string; discovery_id:string; input:ObservationRequest; sha256:string; model_authorized:boolean;
   reservation:number|null; mode:Mode; outcome:Outcome|null;
 };
 type Call={
@@ -134,6 +134,7 @@ export async function observationExecution(){
           fingerprint text NOT NULL, input jsonb NOT NULL, sha256 text NOT NULL, mode text NOT NULL,
           reservation smallint, outcome jsonb, created timestamptz NOT NULL DEFAULT now()
         );
+        ALTER TABLE observation_skill_runs ADD COLUMN IF NOT EXISTS model_authorized boolean NOT NULL DEFAULT false;
         CREATE UNIQUE INDEX IF NOT EXISTS observation_skill_reservation
           ON observation_skill_runs(reservation) WHERE reservation IS NOT NULL AND outcome IS NULL;
         CREATE TABLE IF NOT EXISTS observation_skill_calls (
@@ -241,6 +242,7 @@ export async function observationExecution(){
     if(!validObservationEvidence(e)||e.sha256!==root.sha256||
        e.artifactId!==check.artifactId||e.version!==check.version||e.variable!==check.variable)
       return {status:"failed",reason:"result_provenance"};
+    if("purpose" in check)return {status:"verified",evidence:e};
     return {status:"verified",evidence:e,
       matches:e.unit===check.unit&&e.first!==null&&e.last!==null&&e.first<=check.start&&e.last>=check.end};
   }
@@ -332,7 +334,7 @@ export async function observationExecution(){
       (kind,detail)=>transaction(async db=>{
         if(!await current(db,call))throw Error("read admission revoked");
         await event(db,call.root_id,call,kind,detail);
-      }));
+      }),call.root.model_authorized);
     if(stopped)return;
     if(!call.parent_id)throw Error("Missing observation reader parent");
     const receipt={callId:call.id,rootId:call.root_id,parentId:call.parent_id,lease:call.lease,outcome};
@@ -383,11 +385,12 @@ export async function observationExecution(){
   return {
     async submit(request:SkillExecutionRequest){
       const {requestId,researchTaskId,discoveryTaskId,expectedSha256}=request;
-      const check=parseObservationCheck(request.check);
+      const check=parseObservationRequest(request.check);
+      const modelAuthorized=request.modelAuthorized===true;
       if(!check||!observationSha256(expectedSha256)||![requestId,researchTaskId,discoveryTaskId].every(v=>typeof v==="string"&&uuid.test(v)))
         throw Error("Invalid observation execution request");
-      const fingerprint=createHash("sha256").update(JSON.stringify({researchTaskId,discoveryTaskId,check,expectedSha256})).digest("hex");
-      const grant=await observationArtifact(check,registry).catch(()=>undefined);
+      const fingerprint=createHash("sha256").update(JSON.stringify({researchTaskId,discoveryTaskId,check,expectedSha256,...(modelAuthorized?{modelAuthorized}: {})})).digest("hex");
+      const grant=await observationArtifact(check,registry,modelAuthorized).catch(()=>undefined);
       await transaction(async db=>{
         const previous=(await db.query<{fingerprint:string}>("SELECT fingerprint FROM observation_skill_runs WHERE id=$1",[requestId])).rows[0];
         if(previous){
@@ -398,9 +401,9 @@ export async function observationExecution(){
         const outcome:Outcome|null=wasCancelled?cancelled:
           !grant?{status:"not_started",reason:"artifact_not_authorized"}:
           grant.sha256!==expectedSha256?{status:"not_started",reason:"artifact_version_changed"}:null;
-        await db.query(`INSERT INTO observation_skill_runs(id,research_id,discovery_id,fingerprint,input,sha256,mode,outcome)
-          VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8::jsonb)`,
-          [requestId,researchTaskId,discoveryTaskId,fingerprint,JSON.stringify(check),expectedSha256,mode,outcome&&JSON.stringify(outcome)]);
+        await db.query(`INSERT INTO observation_skill_runs(id,research_id,discovery_id,fingerprint,input,sha256,mode,outcome,model_authorized)
+          VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8::jsonb,$9)`,
+          [requestId,researchTaskId,discoveryTaskId,fingerprint,JSON.stringify(check),expectedSha256,mode,outcome&&JSON.stringify(outcome),modelAuthorized]);
         await event(db,requestId,null,"accepted");
         if(outcome)await event(db,requestId,null,"result_saved",{outcome});
         else await insertCall(db,requestId,null,"A");

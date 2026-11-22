@@ -1,9 +1,10 @@
-import {skillRequestKind,skillResultKind,parseObservationCheck,validObservationResult,observationResultMatchesRequest,
-  type ObservationCheck,type ObservationCheckResult,type SkillDemand,type SkillResultSubmission} from "./observation-check-contract";
+import {skillRequestKind,skillResultKind,parseObservationRequest,validObservationResult,observationResultMatchesRequest,
+  type ObservationCheck,type ObservationRequest,type ObservationCheckResult,type SkillDemand,type SkillResultSubmission} from "./observation-check-contract";
+import {observationResearchKind,parseObservationResearchRequest,parseObservationResearchResult,type ObservationResearchRequest,type ObservationResearchResult} from "./observation-research-contract";
 import {isDeepStrictEqual} from "node:util";
 
 export type ObservationBinding={taskId:string;contextId:string};
-export type ObservationTask=ObservationBinding&{state:string;events:{seq:number;artifactId:string;skillDemand?:SkillDemand;result?:ObservationCheckResult}[]};
+export type ObservationTask=ObservationBinding&{state:string;events:{seq:number;artifactId:string;skillDemand?:SkillDemand;result?:ObservationCheckResult;researchResult?:ObservationResearchResult}[]};
 const states=new Set(["SUBMITTED","WORKING","COMPLETED","FAILED","CANCELED","INPUT_REQUIRED","REJECTED","AUTH_REQUIRED"].map(s=>"TASK_STATE_"+s));
 export const observationTerminal=(state:string)=>["TASK_STATE_COMPLETED","TASK_STATE_FAILED","TASK_STATE_CANCELED","TASK_STATE_REJECTED"].includes(state);
 const object=(v:unknown):v is Record<string,any>=>!!v&&typeof v==="object"&&!Array.isArray(v);
@@ -39,9 +40,9 @@ export function observationDiscoveryClient(options:{base?:string;token?:string;f
         const fingerprint=JSON.stringify([artifact.artifactId,event]);
         if(seen.has(event.seq)){if(seen.get(event.seq)!==fingerprint)throw new ObservationProtocolError("Skill 发现事件发生冲突。");continue;}
         seen.set(event.seq,fingerprint);
-        let demand:SkillDemand|undefined,result:ObservationCheckResult|undefined;
+        let demand:SkillDemand|undefined,result:ObservationCheckResult|undefined,researchResult:ObservationResearchResult|undefined;
         if(event.skillDemand!==undefined){
-          const d=event.skillDemand,check=parseObservationCheck(d?.check);
+          const d=event.skillDemand,check=parseObservationRequest(d?.check);
           if(!object(d)||!id(d.requestId)||!id(d.researchTaskId)||!check)throw new ObservationProtocolError("Skill 机器需求无效。");
           demand={requestId:d.requestId,researchTaskId:d.researchTaskId,check};
         }
@@ -49,12 +50,22 @@ export function observationDiscoveryClient(options:{base?:string;token?:string;f
           if(!validObservationResult(event.result.observationCheckResult))throw new ObservationProtocolError("Skill 发现结果无效。");
           result=event.result.observationCheckResult;
         }
-        events.push({seq:event.seq,artifactId:artifact.artifactId,...(demand?{skillDemand:demand}:{}),...(result?{result}:{})});
+        if(event.result?.observationResearchResult!==undefined){
+          researchResult=parseObservationResearchResult(event.result.observationResearchResult);
+          if(!researchResult||result)throw new ObservationProtocolError("自然观测研究结果种类或结构无效。");
+        }
+        events.push({seq:event.seq,artifactId:artifact.artifactId,...(demand?{skillDemand:demand}:{}),...(result?{result}:{}),...(researchResult?{researchResult}:{})});
       }
     }
     return {taskId:value.id,contextId:value.contextId,state:value.status.state,events:events.sort((a,b)=>a.seq-b.seq)};
   }
   return {
+    async submitResearch(messageId:string,input:ObservationResearchRequest,signal:AbortSignal){
+      const clean=parseObservationResearchRequest(input);if(!clean)throw new ObservationProtocolError("自然观测委托缺少受权资料范围。");
+      const receipt=await request("/message:send","POST",{message:{messageId,role:"ROLE_USER",parts:[{data:{kind:observationResearchKind,input:clean}}]},configuration:{returnImmediately:true}},signal);
+      if(!object(receipt)||!receipt.task||receipt.message||receipt.error)throw new ObservationProtocolError("自然观测委托的受理回执无效。");
+      return task(receipt.task);
+    },
     async submit(messageId:string,researchTaskId:string,check:ObservationCheck,signal:AbortSignal){
       const receipt=await request("/message:send","POST",{message:{messageId,role:"ROLE_USER",parts:[{data:{kind:skillRequestKind,input:{researchTaskId,check}}}]},configuration:{returnImmediately:true}},signal);
       if(!object(receipt)||!receipt.task||receipt.message||receipt.error)throw new ObservationProtocolError("Skill 发现受理回执无效。");
@@ -76,7 +87,7 @@ export function observationDiscoveryClient(options:{base?:string;token?:string;f
   };
 }
 
-export function validateObservationEvents(task:ObservationTask,researchTaskId:string,check:ObservationCheck){
+export function validateObservationEvents(task:ObservationTask,researchTaskId:string,check:ObservationRequest){
   for(const event of task.events){
     if(event.skillDemand&&(event.skillDemand.researchTaskId!==researchTaskId||!isDeepStrictEqual(event.skillDemand.check,check)))
       throw new ObservationProtocolError("Skill 机器需求不属于本研究和已授权条件。");

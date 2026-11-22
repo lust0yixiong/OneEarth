@@ -2,6 +2,7 @@ import {createHash} from "node:crypto";
 import {constants} from "node:fs";
 import {open,realpath} from "node:fs/promises";
 import path from "node:path";
+import {validObservationMaterial,type ObservationMaterial} from "../src/domain/observation-material";
 import {observationDate,observationId,observationUnit,type ObservationCheck,type ObservationReadTarget,type ObservationEvidence} from "./observation-check-contract";
 
 const maxBytes=1024*1024;
@@ -32,25 +33,59 @@ async function boundedFile(file: string) {
 }
 
 export type ObservationArtifact = {file:string;sha256:string};
+export type PinnedObservationMaterial = ObservationMaterial & {sha256:string};
 
-/** The permission lookup opens the operator's registry. Only the reader opens the observation file. */
-export async function observationArtifact(
-  check: ObservationReadTarget, registry=process.env.ONEEARTH_SKILL_REGISTRY,
-): Promise<ObservationArtifact|undefined> {
+async function loadRegistry(registry:string|undefined){
   if(!registry||!path.isAbsolute(registry))return;
-  const registeredFile=await realpath(registry);
-  const base=path.dirname(registeredFile);
-  const entries:unknown=JSON.parse((await boundedFile(registeredFile)).toString("utf8"));
+  const file=await realpath(registry);
+  const entries:unknown=JSON.parse((await boundedFile(file)).toString("utf8"));
   if(!object(entries)||!Array.isArray(entries.artifacts))throw new ObservationArtifactError("registry_invalid");
-  const matches=entries.artifacts.filter(e=>object(e)&&e.id===check.artifactId&&e.version===check.version);
-  if(matches.length!==1)return;
-  const match=matches[0] as Record<string,unknown>;
-  if(!Array.isArray(match.variables)||!match.variables.every(observationId)||!match.variables.includes(check.variable))return;
-  if(typeof match.path!=="string"||path.isAbsolute(match.path)||match.path.includes("\0")||
+  return {file,entries:entries.artifacts.filter(object)};
+}
+
+function registryGrant(match:Record<string,unknown>,registeredFile:string):ObservationArtifact|undefined{
+  const base=path.dirname(registeredFile);
+  if(!Array.isArray(match.variables)||!match.variables.every(observationId)||
+     typeof match.path!=="string"||path.isAbsolute(match.path)||match.path.includes("\0")||
      typeof match.sha256!=="string"||!/^[0-9a-f]{64}$/.test(match.sha256))return;
   const file=path.resolve(base,match.path);
   if(!file.startsWith(base+path.sep)||file===registeredFile)return;
   return {file,sha256:match.sha256};
+}
+
+/** The permission lookup opens the operator's registry. Only the reader opens the observation file. */
+export async function observationArtifact(
+  check: ObservationReadTarget, registry=process.env.ONEEARTH_SKILL_REGISTRY, requireModelGrant=false,
+): Promise<ObservationArtifact|undefined> {
+  const current=await loadRegistry(registry);
+  if(!current)return;
+  const matches=current.entries.filter(e=>e.id===check.artifactId&&e.version===check.version);
+  if(matches.length!==1)return;
+  const entry=matches[0];
+  if((requireModelGrant&&entry.modelVisible!==true)||!Array.isArray(entry.variables)||!entry.variables.includes(check.variable))return;
+  return registryGrant(entry,current.file);
+}
+
+/** Title and variable names are operator-approved metadata; raw values are never opened here. */
+export async function observationModelMaterials():Promise<PinnedObservationMaterial[]>{
+  if((process.env.ONEEARTH_SKILL_SERVICE_TOKEN?.length??0)<32)return [];
+  const registry=await loadRegistry(process.env.ONEEARTH_SKILL_REGISTRY);
+  if(!registry)return [];
+  const counts=new Map<string,number>();
+  for(const e of registry.entries){
+    if(!observationId(e.id)||!observationId(e.version))continue;
+    const key=JSON.stringify([e.id,e.version]);
+    counts.set(key,(counts.get(key)??0)+1);
+  }
+  const materials:PinnedObservationMaterial[]=[];
+  for(const e of registry.entries){
+    if(e.modelVisible!==true||!observationId(e.id)||!observationId(e.version)||
+       counts.get(JSON.stringify([e.id,e.version]))!==1)continue;
+    const grant=registryGrant(e,registry.file);
+    const material={artifactId:e.id,version:e.version,title:e.title??e.id,variables:e.variables};
+    if(grant&&validObservationMaterial(material))materials.push({...material,sha256:grant.sha256});
+  }
+  return materials;
 }
 
 export async function authorizeObservationDigest(check: ObservationCheck): Promise<string|undefined> {
@@ -60,9 +95,9 @@ export async function authorizeObservationDigest(check: ObservationCheck): Promi
 }
 
 export async function readObservationArtifact(
-  check: ObservationReadTarget, registry: string, expectedSha256: string,
+  check: ObservationReadTarget, registry: string, expectedSha256: string, requireModelGrant=false,
 ): Promise<ObservationEvidence> {
-  const grant=await observationArtifact(check,registry);
+  const grant=await observationArtifact(check,registry,requireModelGrant);
   if(!grant||grant.sha256!==expectedSha256)throw new ObservationArtifactError("authorization_changed");
   const actual=await realpath(grant.file);
   const base=path.dirname(await realpath(registry));

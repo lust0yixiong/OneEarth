@@ -183,8 +183,14 @@ test("concurrent preparation rejected after another request commits still replay
 });
 test("a completed response checkpoint preserves its first generated elapsed time across restart before finish",async t=>{
   const f=await fixture(t),{id}=await f.submit();await f.start();await until(()=>f.jobs.size===1);await f.stop();
-  f.results.set([...f.jobs.keys()][0],result);await delay(20);let task=f.store.claim();assert.equal(task?.id,id);await f.coordinator.run(task!,new AbortController().signal,()=>{});
-  task=f.store.claim();assert.equal(task?.id,id);const generated=await f.coordinator.run(task!,new AbortController().signal,()=>{});assert.ok("result" in generated);
+  f.results.set([...f.jobs.keys()][0],result);
+  // A short transport timeout may legitimately park and reconcile. Cut at the
+  // durable completion checkpoint, not at an assumed number of network steps.
+  const started=Date.now();
+  while(!f.store.step(id)?.completedResult){
+    if(Date.now()-started>5000)assert.fail("completion checkpoint was not saved");
+    await delay(20);const task=f.store.claim();if(task)await f.coordinator.run(task,new AbortController().signal,()=>{});
+  }
   const snapshot=structuredClone(f.store.step(id)?.completedResult);assert.ok((snapshot as any).answerNotes.elapsedMs>0);await delay(80);
   const sent=f.requests.length;await f.start();await until(()=>f.store.get(id)?.status==="complete");assert.deepEqual(f.store.terminal(id)?.result,snapshot);assert.equal(f.requests.length,sent);
 });

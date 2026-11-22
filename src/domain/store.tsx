@@ -2,7 +2,7 @@ import { canReplyToDiscoveryClarification, discoveryClarificationResult, loadRes
 import {datasetScope,mergeScope,scopedQuestionContext,scopeDetail,scopeLabel,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
 import {rememberReadEvidence} from "./read-evidence";
-import {conversationReferenceMemory} from "./reference-memory";
+import {conversationReferenceMemory,modelHistoryMessages} from "./reference-memory";
 import {researchRegionCamera,validResearchRegion,sameResearchRegion,type ResearchRegion,type ResearchRegionLayer} from "./research-region";
 import {answerMapBatch,answerFilters,initialAnswerCamera,gridCamera,evidenceCamera,evidenceSelection} from "./answer-map";
 import { globeCases,regionalIds,layerFrameCount,datasetLayers,regionalForDataset,type RegionalId } from "./regional-cases";
@@ -1237,23 +1237,25 @@ function useWorkspaceValue(initialState: State) {
       const current = latest.current;
       const until = current.messages.findIndex(m => m.id === attempt.userMessageId);
       const preceding = until < 0 ? current.messages : current.messages.slice(0,until);
+      const promptMessages=modelHistoryMessages(preceding);
+      const assistantHistory=promptMessages.filter(m=>m.role==="assistant");
       let conversationEvidence:import("./types").ReadEvidence[]=[];
-      for(const message of preceding.filter(m=>m.role==="assistant" && !m.failed))
+      for(const message of assistantHistory)
         conversationEvidence=message.conversationEvidence ?? rememberReadEvidence(conversationEvidence,message.answerNotes?.searches);
-      const latestAssistant=preceding.filter(m=>m.role==="assistant" && !m.failed).at(-1)?.id;
-      const conversationAssertionEvidence=preceding.filter(m=>m.role==="assistant" && !m.failed && m.conversationAssertionEvidence!==undefined).at(-1)?.conversationAssertionEvidence;
-      const conversationReferences=conversationReferenceMemory(preceding);
+      const latestAssistant=assistantHistory.at(-1)?.id;
+      const conversationAssertionEvidence=assistantHistory.filter(m=>m.conversationAssertionEvidence!==undefined).at(-1)?.conversationAssertionEvidence;
+      const conversationReferences=conversationReferenceMemory(promptMessages);
       const previousAnswer = current.messages.slice().reverse().find(message => message.role==="assistant" && !message.failed && message.answerNotes);
       const payload = {query:q, context:attempt.context, config:readChatModel(), deepseekTools:readDeepSeekTools(),
         conversationId:current.sessionId, turnId:attempt.userMessageId, previousTaskId:attempt.clarificationReply?undefined:previousAnswer?.id,
         ...(attempt.questionDecision?{questionDecision:attempt.questionDecision}:{}),
         ...(attempt.clarificationReply?{clarificationReply:attempt.clarificationReply}:{}),
-        history:preceding.filter(m=>!m.failed).slice(-8).map(m=>{
+        history:promptMessages.slice(-8).map(m=>{
           const notes=m.answerNotes;
           const text=notes?.references
             ? m.text.replace(/〔(\d+)〕/g,(marker,n)=>notes.references?.[Number(n)-1] ? marker+"（"+notes.references[Number(n)-1].title+"）" : marker)
             : [m.text,...(notes?.sources || []).map(source=>(assetById.get(source.id)?.title || source.id)+" "+source.reason),...(notes?.webSources || []).map(h=>h.title+" "+h.url),notes?.limitation,notes?.followUp].filter(Boolean).join("\n");
-          const attached=m.attachedScope?.map(i=>scopeLabel(i)+"（"+scopeDetail(i)+"）").join("；");
+          const attached=m.attachedScope?.filter(i=>i.kind!=="observation").map(i=>scopeLabel(i)+"（"+scopeDetail(i)+"）").join("；");
           return {role:m.role,text:(attached?text.slice(0,950)+"\n当轮用户引用："+attached:text).slice(0,1600),
             ...(m.role==="assistant" && m.conversationContext!==undefined?{conversationContext:m.conversationContext}:{}),
             ...(m.role==="assistant" && m.researchIntent?{researchIntent:m.researchIntent}:{}),

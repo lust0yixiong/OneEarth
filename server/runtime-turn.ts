@@ -17,7 +17,7 @@ import path from "node:path";
 import {gridCoverageSummary,questionGridEvidence,verifiedGridContext} from "./question-grid";
 import {gridQueryLimits,gridCataloguePaperIds,gridCatalogueAnswer} from "./grid-catalogue-answer";
 import {ExecutorFailure} from "./executor-failure";
-import {prepareTurn,turnMetadata,turnPlanSchema,gridTurnPlanSchema,TurnPlanningFailure,type TurnPlan} from "./turn-planning";
+import {prepareTurn,turnMetadata,turnPlanningSchema,TurnPlanningFailure,type TurnPlan} from "./turn-planning";
 import {randomUUID} from "node:crypto";
 import {researchExecutor,discoveryProtocol} from "./research-executor";
 import {discoveryConfirmation} from "./discovery-bindings";
@@ -62,7 +62,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
   questionDecision?: import("../src/domain/types").QuestionDecision;
   deepseekTools?: import("../src/domain/deepseek-tools").DeepSeekTools;
   clarificationReply?:ClarificationReply;
-}, signal: AbortSignal, publish: (payload:Record<string, unknown>) => void): Promise<Record<string, unknown>> {
+}, signal: AbortSignal, publish: (payload:Record<string, unknown>) => void, internal:{observationUnavailable?:boolean}={}): Promise<Record<string, unknown>> {
   const {tasks, push, coverage, researchRegionService, adminBoundaryDir, canonicalCache} = services;
   const cachedPapers=runtimeTurnPapers();
   const haina=runtimeTurnHaina();
@@ -285,16 +285,19 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       ...turnMetadata(query,{previousResearchIntent:planningIntent,history,conversationContext})} as TurnPlan,retrieval:undefined as import("./data-search").DataSearchResult|undefined}:
       navigation ? navigationTurn(navigation) : await prepareTurn({
       question:decision?.dataQuestion||query, context, history, conversationContext,gridCoverage,
+      ...(internal.observationUnavailable?{observationUnavailable:true as const}:{}),
       previousResearchIntent:planningIntent,confirmedQuestion:decision?.dataQuestion,numbered:selected,
       numberedRead:ref?.kind==="web"?savedReadings.find(read=>read.url===ref.url):undefined,
       numberedAssertion:ref?.kind==="asset"?prior?.conversationAssertionEvidence?.find(read=>read.assetId===ref.id):undefined,
     }, signal, {
-      run: prompt => executor.model(prompt, {outputSchema:gridCoverage?.status==="ready"&&gridCoverage.summary?gridTurnPlanSchema:turnPlanSchema}),
+      run: prompt => executor.model(prompt, {outputSchema:turnPlanningSchema({gridCoverage,observationUnavailable:internal.observationUnavailable?true:undefined})}),
       stage, report,
       search:p=>scopeUnverified||p.gridIntent==="count"||p.gridIntent==="catalogue"||gridLimits?.currentCoverageOnly||gridLimits?.noDiscovery?Promise.resolve(undefined):find(p),
     });
     if(clarification)prepared.retrieval=await find(prepared.plan);
     const turn=prepared.plan;
+    if(turn.observationUse==="unavailable")return {result:{message:turn.clarification!,clarification:true,runTrace,
+      ...turnMetadata(query,{history,conversationContext}),observationMaterialsUnavailable:true}};
     const gridQuestion=turn.gridIntent==="count"||turn.gridIntent==="catalogue"?turn.gridIntent:gridLimits?.currentCoverageOnly?"catalogue":undefined;
     if(gridQuestion&&gridCoverage){
       const archivedIds=gridCataloguePaperIds(gridCoverage).filter(id=>cachedPapers.get(id));

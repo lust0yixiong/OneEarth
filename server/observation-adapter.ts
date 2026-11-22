@@ -9,7 +9,7 @@ type Notify=(kind:string,detail:Record<string,unknown>)=>Promise<void>;
 export type ObservationReadReceipt = {status:"read";evidence:ObservationEvidence}|ObservationFailure;
 
 export async function executeObservationRead(check:ObservationReadTarget,registry:string,sha256:string,
-  callId:string,parentSignal:AbortSignal,notify:Notify):Promise<ObservationReadReceipt>{
+  callId:string,parentSignal:AbortSignal,notify:Notify,requireModelGrant=false):Promise<ObservationReadReceipt>{
   const signal=AbortSignal.any([parentSignal,AbortSignal.timeout(25000)]);
   signal.throwIfAborted();
   const processEnv:NodeJS.ProcessEnv={LANG:"C.UTF-8"};
@@ -25,7 +25,7 @@ export async function executeObservationRead(check:ObservationReadTarget,registr
   child.stdin.on("error",()=>{});
   try{
     await notify("reader_spawned",{pid:child.pid,executor:"node-readonly"});
-    child.stdin.end(JSON.stringify({check,registry,sha256,callId,receiptGate:process.env.ONEEARTH_SKILL_RECEIPT_GATE_DIR}));
+    child.stdin.end(JSON.stringify({check,registry,sha256,callId,requireModelGrant,receiptGate:process.env.ONEEARTH_SKILL_RECEIPT_GATE_DIR}));
     let buffer="",raw,resultReceived=false,read=false;
     child.stdout.setEncoding("utf8");
     for await(const chunk of child.stdout){
