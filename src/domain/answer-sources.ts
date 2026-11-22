@@ -26,6 +26,9 @@ export function citationDetails(ref:AnswerReference,notes?:Partial<AnswerNotes>)
   }
   const a=assetById.get(ref.id),record=paperRecords.get(ref.id),tabs=record?.need.tabs || a?.tabs || [];
   const type=referenceCitationType(ref,a,observationById(ref.id));
+  if(ref.evidenceLevel==="catalogue-record")
+    return {type,channel:type==="paper"?"文献资料目录":literatureText(a?.source||ref.source||"资料目录"),
+      evidence:"所附网格内可定位的已保存目录条目"};
   if(type==="paper"){
     const evidence=[tabs.some(t=>t.label==="官方元数据" && t.rows?.length)?"官方元数据":"",
       tabs.some(t=>t.label==="论文用法（本页）" && t.rows?.length)?"论文用法":"",

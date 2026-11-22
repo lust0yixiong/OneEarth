@@ -494,28 +494,33 @@ async function loadInitialSession(): Promise<State> {
     }
     state.saved = await readFavorites();
     const researchId=url.searchParams.get("research");
-    if(researchId&&!state.messages.some(message=>message.id===researchId)){
+    const cachedResearch=researchId?state.messages.find(message=>message.id===researchId):undefined;
+    const needsArchivedCatalogue=cachedResearch?.answerNotes?.references
+      ?.some(reference=>reference.kind==="asset"&&reference.evidenceLevel==="catalogue-record");
+    if(researchId&&(!cachedResearch||needsArchivedCatalogue)){
       try{
         const saved=await loadResearchRecord(researchId);
         const reply=saved.result;
         if(reply.paperRecords)registerPapers(reply.paperRecords,false);
         if(reply.hainaRecords?.length&&reply.hainaCatalog)
           registerHaina(reply.hainaRecords,reply.hainaCatalog.synced,reply.hainaCatalog.endpoint,false);
-        const stored=await readSession(saved.conversationId);
-        state.clarificationReply=stored?.workspace.clarificationReply ?? null;
-        const messages:Message[]=[
-          {id:saved.turnId,role:"user",text:saved.question,time:saved.created},
-          {id:saved.id,role:"assistant",text:reply.message,time:saved.updated,replyTo:saved.turnId,
-            researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
-            conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
-            answerNotes:reply.answerNotes,runTrace:reply.runTrace,researchRegion:reply.researchRegion,
-            gridCoverage:reply.gridCoverage,
-            ...(discoveryClarificationResult(reply)?{clarification:true,discoveryClarification:true}:{})},
-        ];
-        state.sessionId=saved.conversationId;
-        state.messages=mergeMessages(stored?.messages||[],messages);
         state.chatOpen=true;
-        await writeSession(state.sessionId,saved.question,captureWorkspace(state),state.messages);
+        if(!cachedResearch){
+          const stored=await readSession(saved.conversationId);
+          state.clarificationReply=stored?.workspace.clarificationReply ?? null;
+          const messages:Message[]=[
+            {id:saved.turnId,role:"user",text:saved.question,time:saved.created},
+            {id:saved.id,role:"assistant",text:reply.message,time:saved.updated,replyTo:saved.turnId,
+              researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
+              conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
+              answerNotes:reply.answerNotes,runTrace:reply.runTrace,researchRegion:reply.researchRegion,
+              gridCoverage:reply.gridCoverage,
+              ...(discoveryClarificationResult(reply)?{clarification:true,discoveryClarification:true}:{})},
+          ];
+          state.sessionId=saved.conversationId;
+          state.messages=mergeMessages(stored?.messages||[],messages);
+          await writeSession(state.sessionId,saved.question,captureWorkspace(state),state.messages);
+        }
       }catch(error){
         state.sessionError=error instanceof Error?error.message:"研究记录暂时无法打开。";
       }

@@ -151,17 +151,23 @@ export function SourceDrawer({refs,title,message,archived,question,close}:{refs:
       }
       const a=assetById.get(r.id),url=safeUrl(a?.url),doi=doiFor(r.id);
       const hasPaperEvidence=details.type==="paper";
+      const catalogueRecord=r.evidenceLevel==="catalogue-record";
       const layer=a && (regionalForDataset(a.datasetId)||(a.datasetId==="gfs-wind"?"gfs-wind":undefined));
       return <section className="oe-network-dataset" data-reference-type={details.type} key={r.id}>
-        {archived && paperId(r.id) && <SavedPaperEvidence assetId={r.id} entries={message.conversationAssertionEvidence}/>}
-        {hasPaperEvidence?<PaperEvidenceCard reference={r} deferCurrentEvidence={archived}/>:<button className="oe-source-card" onClick={()=>inspect(r)}>
+        {archived && !catalogueRecord && paperId(r.id) && <SavedPaperEvidence assetId={r.id} entries={message.conversationAssertionEvidence}/>}
+        {catalogueRecord && <button type="button" className="oe-source-card" aria-label={"打开本轮目录条目："+r.title} onClick={()=>inspect(r)}>
+          <b><CitationIcon type={details.type}/><span>{r.title} <ArrowUpRight size={13}/></span></b>
+          <small>{details.evidence}</small>
+        </button>}
+        {hasPaperEvidence?<PaperEvidenceCard reference={r} deferCurrentEvidence={archived||catalogueRecord}/>:!catalogueRecord&&<button className="oe-source-card" onClick={()=>inspect(r)}>
           <b><CitationIcon type={details.type}/><span>{r.title} <ArrowUpRight size={13}/></span></b>
           <small>{details.channel} · {a?.source || r.source}</small>
           {a?.description && <p>{a.description}</p>}
           {a?.profile?.coverage && <small>{a.profile.coverage}</small>}
           {doi && <small>DOI {doi}</small>}
         </button>}
-        {url?<a className="oe-publisher-link" href={url.href} target="_blank" rel="noreferrer">来源入口 · {url.hostname} ↗</a>:<small>本轮未保存来源链接</small>}
+        {url?<a className="oe-publisher-link" href={url.href} target="_blank" rel="noreferrer">来源入口 · {url.hostname} ↗</a>
+          :<small>{catalogueRecord?"目录条目暂无原站地址":"本轮未保存来源链接"}</small>}
         {mapAction(r)}
         {layer && <button className="chat-layer-link" onClick={()=>{close();openVisualization(layer,null);}}>在数据地球打开图层</button>}
         {a && <EntityVisualization asset={a}/>}

@@ -15,8 +15,9 @@ import { modelReply } from "./research-answer";
 import { validHistory } from "./turn-history";
 import path from "node:path";
 import {gridCoverageSummary,questionGridEvidence,verifiedGridContext} from "./question-grid";
+import {gridQueryLimits,gridCataloguePaperIds,gridCatalogueAnswer} from "./grid-catalogue-answer";
 import {ExecutorFailure} from "./executor-failure";
-import {prepareTurn,turnMetadata,turnPlanSchema,TurnPlanningFailure,type TurnPlan} from "./turn-planning";
+import {prepareTurn,turnMetadata,turnPlanSchema,gridTurnPlanSchema,TurnPlanningFailure,type TurnPlan} from "./turn-planning";
 import {randomUUID} from "node:crypto";
 import {researchExecutor,discoveryProtocol} from "./research-executor";
 import {discoveryConfirmation} from "./discovery-bindings";
@@ -123,8 +124,10 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         questionCheck:{originalQuestion:body.query,proposedQuestion:checked.proposedQuestion!},runtimeQuestionCheck:true,runTrace}};
       if(checked.action==="clarify")return {result:{message:checked.clarification!,clarification:true,runTrace}};
     }
+    const gridLimits=gridCoverage&&!clarification&&!decision?gridQueryLimits(query):undefined;
     const prior = await priorResult(tasks,body.conversationId,body.previousTaskId);
     const candidatePaperIds=[...(context.candidateIds||[]),...(context.attachedScope?.flatMap(s=>s.kind==="dataset"?[s.id]:[])||[]),
+      ...(gridCoverage?gridCataloguePaperIds(gridCoverage):[]),
       ...(prior?.answerNotes?.references?.flatMap(r=>r.kind==="asset"?[r.id]:[])||[])];
     const archived=await runtimeMaterialHistory(tasks,body.conversationId,[body.previousTaskId,decision?.checkMessageId,body.clarificationReply?.parentTaskId],
       {paperIds:candidatePaperIds.filter(paperId),includeSources:!prior});
@@ -281,24 +284,48 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       reason:"研究者明确补充原委托，沿已受理发现身份和等待水位继续。",clarification:null,
       ...turnMetadata(query,{previousResearchIntent:planningIntent,history,conversationContext})} as TurnPlan,retrieval:undefined as import("./data-search").DataSearchResult|undefined}:
       navigation ? navigationTurn(navigation) : await prepareTurn({
-      question:decision?.dataQuestion||query, context, history, conversationContext,
+      question:decision?.dataQuestion||query, context, history, conversationContext,gridCoverage,
       previousResearchIntent:planningIntent,confirmedQuestion:decision?.dataQuestion,numbered:selected,
       numberedRead:ref?.kind==="web"?savedReadings.find(read=>read.url===ref.url):undefined,
       numberedAssertion:ref?.kind==="asset"?prior?.conversationAssertionEvidence?.find(read=>read.assetId===ref.id):undefined,
     }, signal, {
-      run: prompt => executor.model(prompt, {outputSchema:turnPlanSchema}),
+      run: prompt => executor.model(prompt, {outputSchema:gridCoverage?.status==="ready"&&gridCoverage.summary?gridTurnPlanSchema:turnPlanSchema}),
       stage, report,
-      search:p=>scopeUnverified?Promise.resolve(undefined):find(p),
+      search:p=>scopeUnverified||p.gridIntent==="count"||p.gridIntent==="catalogue"||gridLimits?.currentCoverageOnly||gridLimits?.noDiscovery?Promise.resolve(undefined):find(p),
     });
     if(clarification)prepared.retrieval=await find(prepared.plan);
     const turn=prepared.plan;
+    const gridQuestion=turn.gridIntent==="count"||turn.gridIntent==="catalogue"?turn.gridIntent:gridLimits?.currentCoverageOnly?"catalogue":undefined;
+    if(gridQuestion&&gridCoverage){
+      const archivedIds=gridCataloguePaperIds(gridCoverage).filter(id=>cachedPapers.get(id));
+      const papers=gridQuestion==="catalogue"?await loadPapers(gridCataloguePaperIds(gridCoverage)):[];
+      const other=gridCoverage.status==="ready"?gridCoverage.sourceIds.flatMap(id=>!paperId(id)&&assetById.get(id)?[assetById.get(id)!]:[]):[];
+      const reply=gridCatalogueAnswer(gridCoverage,gridQuestion,papers,other,archivedIds);
+      if(gridLimits?.currentCoverageOnly&&(turn.gridIntent==="deeper"||turn.gridIntent==="none"||turn.action==="clarify")){
+        reply.clarification=true;
+        reply.message="当前覆盖结果仅支持目录定位，尚不足以判断论文原文、方法或科学结论。以下保留可核对的目录身份；本轮没有另行搜索或读取原文。\n\n"+reply.message;
+      }
+      const used=reply.answerNotes?.references?.flatMap(r=>r.kind==="asset"?[r.id]:[])||[];
+      const incomplete=gridCoverage.status==="ready"&&gridQuestion==="catalogue"&&gridCoverage.count>0&&
+        (!gridCoverage.sourceIds.length||gridCoverage.sourceIds.some(id=>!used.includes(id)));
+      report({id:"grid-catalogue-answer",kind:"tool",name:"按权威覆盖范围整理目录条目",status:reply.clarification||incomplete?"partial":"done",
+        input:JSON.stringify({plannedAction:turn.action,scopeId:gridCoverage.status==="ready"?gridCoverage.scopeId:undefined,revision:gridCoverage.revision}),
+        output:JSON.stringify({mode:gridQuestion,papers:reply.paperRecords?.map(p=>p.id)||[],archivedIds,level:"catalogue-location",discoveryDelegated:false,sourceRead:false})});
+      if(reply.answerNotes){reply.answerNotes.elapsedMs=Date.now()-runTrace.started;reply.answerNotes.executor=executor.name==="codex"?"Codex":"Claude Code";}
+      const hainaRecords=haina.records().filter(r=>used.includes("haina:"+r.id)),hainaCatalog=haina.status();
+      if(hainaRecords.length&&!hainaCatalog&&reply.answerNotes)reply.answerNotes.limitation+="\n已保留原档海纳对象，但未取得对应目录状态；不能据此声称当前海纳目录已核实。";
+      return {result:literatureDisplay({...reply,runTrace,modelExecutor:executor.name,researchIntent:turn.researchIntent,
+        conversationContext:turn.conversationContext,conversationEvidence,conversationAssertionEvidence,
+        hainaRecords,...(hainaCatalog?{hainaCatalog}:{})})};
+    }
+    if(gridCoverage&&gridLimits?.noDiscovery&&turn.action==="search")return {result:{message:"本轮已限定不另行搜索，尚未执行新发现。可依据已有材料继续，或明确要读取的具体来源。",clarification:true,gridCoverage,runTrace}};
     let retrieved=prepared.retrieval;
     let readRuns:SearchRun[]=[];
     const readTargets=(plan:TurnPlan,question:string,callPrefix?:string)=>executor.read(plan,question,{stage,report,callPrefix,
       options:{onAccepted:async binding=>{await tasks.append(taskId,{sourceReadBinding:binding});},
         onCheckpoint:async binding=>{await tasks.append(taskId,{sourceReadBinding:binding});}},onResult:retainMaterials});
     await regionTask;
-    if(gridCoverage&&!gridCoverage.summary&&(turn.action==="search" || turn.action==="clarify")){
+    if(gridCoverage&&!gridCoverage.summary&&(turn.action==="search" || turn.action==="clarify" || turn.action==="read")){
       return {result:literatureDisplay({message:gridCoverageSummary(gridCoverage),clarification:true,gridCoverage,runTrace,
         researchIntent:turn.researchIntent,conversationContext:turn.conversationContext})};
     }
