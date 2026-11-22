@@ -38,6 +38,8 @@ node scripts/macos-product-service.mjs restart
 
 ## 服务与数据
 
+模块职责、核心接口和 ECS 部署前需要验证的边界见[架构与接口审查](docs/架构与接口现状.md)。
+
 | 程序 | 职责 |
 | --- | --- |
 | 网页入口 | 保留 React 界面、Canvas 球体和来源预览，转发同源任务和图层请求 |
