@@ -1,5 +1,21 @@
 # Mac mini 产品验收
 
+## Mac mini 日常入口的 KEO 文件读取
+
+2026-11-22 23:30:44（上海时间），[5474](http://127.0.0.1:5474) 完成常驻切换。签收源码为 `a5b7d8dbdba41e6139740d4612e20023e84ceaf6`，源码归档为 `490d3d36e350cf296b736fcef854d5079bdef98a`。正式目录为 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.9-a5b7d8d`。3,424 件构建清单 SHA-256 为 `71de7af70f7cc0079caa0adcd9861a961daf21ff1ad331e6b214fe135a8548f2`。在线首页 SHA-256 为 `d2ff9a2448919ee80d620f1c911d3f76a8e96b4481275c92a18cecbcb1b4166a`，入口实际引用的 JavaScript 和 CSS 逐项与发布目录一致。健康接口仍报告 `0.2.0-rc.9`。
+
+切换沿用原回环端口、sandbox、模型及凭据引用、primary PostgreSQL 和 Garage。启动项仅换应用发布路径及追加私有能力配置引用。停受理后确认运行时和发现队列排空。首次停写已完成三库与对象恢复，森林校验将字节缓冲区与字节数比较，保护流程恢复上一发布，数据和记录保留。修正后重新停写，另取最新备份并在 PostgreSQL 56635 和 S3 6412 实际恢复。三库、5,950 个对象、197 项论文当前映射和目录修订吻合。森林图层在恢复桶中按内容哈希取得，四个本地 SQLite 及保存状态在隔离目录通过恢复核对。切换前后的实际数据库和对象进程保持原 PID。
+
+新增材料分开备份。用补充包在独立目录恢复 NOAA 原件及授权登记后，签收只读子进程在原 sandbox 下打开同 SHA 文件，核对发布源、文件版本和实际读据。撤权、异版本和错误摘要三项对照均为零文件读取。正式原件和登记放在 `storage-primary/observation-materials/`，目录权限 `0700`，原件与登记 `0400`，私有能力配置 `0600`。
+
+切换前，primary 里无隔离试验的旧 KEO 任务及相应的原件、元数据或精确发布目录引用。停写备份及复原后，主程只新增一条[操作者公开来源登记](http://127.0.0.1:5474/?research=45d03965-a122-4fdd-9170-e5b8f05ba327)，写入一个完成态任务、一个终态事件和一个 NOAA 官方目录引用，模型调用为零。该来源卡的登记连接到相同 SHA-256 的正式原件。
+
+独立上线复核通过。Chrome 从来源卡提交唯一[真实自然追问](http://127.0.0.1:5474/?research=c3f9505c-c412-46e6-b38a-e23084374ad8)。发现侧真实 DeepSeek `deepseek-flash` 选择 `read/describe WSPD`，同一 A2A Task `465640e9-8ff4-4db8-b3ec-4c89e2aeab0e` 完成规划和接收回执。C 进程 28533 实际读取一次 SHA-256 为 `8db086dc9eda14dfc5be010a8522187fd93df55ff493e520ff66b982118428dd` 的原件，得到 `WSPD` 单位 `m/s`，130,402 条计入统计，首末为 2004-06-16 20:00 和 2025-03-28 18:00（UTC）。本轮未应用 QC 筛选。正文引用、来源抽屉和同浏览器配置刷新均重开同一归档，刷新零新增研究。以浏览器提交为起点，实际文件读取、服务端终态和首段可见分别用时 10.747、11.574、11.717 秒。运行时数据库受理至终态用时 11.550 秒。
+
+独立测试核对前后旧论文和网页研究原始响应一致，浏览器刷新仍可逐字打开原存摘录。森林图层为原 14,648 字节、370×303，SHA-256 一致，条件 GET 返回 304。独立证据索引位于 `~/Library/Application Support/OneEarth Next/iterations/keo-0107-primary-independent/primary-keo-independent-acceptance.json`，SHA-256 为 `270c4b2ee8354616e09bf95458444edff81c96b6aedfee0a5e5ea54b45255e5f`。
+
+主程记录位于 `~/Library/Application Support/OneEarth Next/iterations/primary-keo-cutover-20261122/`。准确常驻身份与在线资源见 `primary-release-identity.json`，原件恢复见 `material-restore-verified.json`，首次保护回退见根目录 `cutover.ndjson`，最终切换和恢复见 `retry/`，正式读取见 `primary-keo-research-trace.json`。从证据根运行 `shasum -a 256 -c cutover-proof.sha256` 校验冻结要件。回退恢复预留的上一发布和启动项，并沿用届时 primary，保留切换后写入的研究记录。
+
 ## Mac mini SN-0107 原始观测文件回验
 
 **真实文件级追问通过 Mac mini 隔离阶段签收。** 候选源码 `a5b7d8dbdba41e6139740d4612e20023e84ceaf6`，构建清单 SHA-256 `71de7af70f7cc0079caa0adcd9861a961daf21ff1ad331e6b214fe135a8548f2`（3,424 文件）。独立测试从该源码重建 [6764](http://127.0.0.1:6764)，校验源码差异的 20 个文件和完整构建清单。常驻 5474 运行 rc.9。
