@@ -451,3 +451,7 @@
 .oe-findings small { display: block; color: #63776c; font-size: 11px; line-height: 1.5; }
 .oe-findings .oe-findings-note { color: #748376; font-size: 11px; margin-top: 12px; }
 
+
+.oe-observation-source-actions {display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 12px;padding:8px 0;font-size:12px;color:#315947;}
+.oe-observation-source-actions small {flex-basis:100%;overflow-wrap:anywhere;}
+.oe-observation-source-actions button,.oe-observation-source-actions a {text-decoration:underline;}

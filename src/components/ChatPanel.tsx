@@ -1,6 +1,6 @@
 import { loadRemoteAssetIds } from "../domain/datasets";
 import {QuestionScope} from "./QuestionScope";
-import {ObservationMaterialPicker} from "./ObservationMaterialPicker";
+import {ObservationCatalogueContext,ObservationMaterialPicker,usePublishedObservationCatalogue} from "./ObservationMaterialPicker";
 import {GridCoverageRecord} from "./GridCoverageRecord";
 import {scopeKey} from "../domain/question-scope";
 import {useWebPreview} from "./use-web-preview";
@@ -170,6 +170,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     sessionSummaries,
     inspectAsset,
   } = useWorkspace();
+  const observationCatalogue=usePublishedObservationCatalogue(s.chatOpen);
   const sourceHits=useMemo(()=>new Map(s.messages.map(m=>[m.id,m.answerNotes?.webSources])),[s.messages]);
   const previewWeb=useWebPreview(s.messages.flatMap(m=>historyIds.has(m.id)?[]:m.answerNotes?.webSources || []),undefined,[],
     link=>sourceHits.get(link.closest<HTMLElement>(".message[data-message-id]")?.dataset.messageId || ""));
@@ -374,7 +375,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
         : c?.id === "Q02"
           ? ["DEM 和冰川边界是否同地？", "限定 DEM 为 10 米以内"]
           : ["这批资料有哪些可核对的内容？", "怎么获取这些资料？", "查看覆盖范围"];
-  return (
+  return <ObservationCatalogueContext.Provider value={observationCatalogue}>
     <aside
       id="oneearth-chat-panel"
       className="chat-panel"
@@ -552,5 +553,5 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
       {composerSources && <SourceDrawer refs={sourcesFor(literatureDisplay(composerSources)).refs} message={composerSources} archived={historyIds.has(composerSources.id)}
         title="本条回答的来源与依据" question={questions.get(composerSources.id)?.text} close={()=>setComposerSources(null)}/>}
     </aside>
-  );
+  </ObservationCatalogueContext.Provider>;
 }

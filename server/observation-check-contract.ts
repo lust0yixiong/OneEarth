@@ -1,6 +1,8 @@
 import {timingSafeEqual} from "node:crypto";
 import {observationMaterialId} from "../src/domain/observation-material";
 import type {ObservationEvidence} from "../src/domain/observation-evidence";
+import {validObservationNetcdfEvidence} from "../src/domain/observation-evidence";
+import {validObservationArtifactSource} from "../src/domain/observation-source";
 export type {ObservationEvidence} from "../src/domain/observation-evidence";
 
 export const observationCheckSkill = "oneearth.observation-check@1";
@@ -79,12 +81,15 @@ export function observationSha256(value: unknown): value is string {
 }
 
 export function validObservationEvidence(value: unknown): value is ObservationEvidence {
-  if (!object(value) || !hasKeys(value, ["artifactId","version","sha256","variable","unit","count","first","last"]))
+  const required=["artifactId","version","sha256","variable","unit","count","first","last"];
+  if (!object(value) || !required.every(key=>Object.hasOwn(value,key))||Object.keys(value).some(key=>![...required,"netcdf","artifactSource"].includes(key)))
     return false;
   const {artifactId,version,sha256,variable,unit,count,first,last} = value;
   if (!observationId(artifactId) || !observationId(version) || !observationId(variable) || !observationUnit(unit) ||
       !observationSha256(sha256) || typeof count !== "number" ||
       !Number.isSafeInteger(count) || count < 0) return false;
+  if(value.netcdf!==undefined&&!validObservationNetcdfEvidence(value.netcdf,count,first as string|null,last as string|null))return false;
+  if(value.artifactSource!==undefined&&!validObservationArtifactSource(value.artifactSource))return false;
   return count === 0 ? first === null && last === null
     : observationDate(first) && observationDate(last) && first <= last;
 }

@@ -86,7 +86,12 @@ export function observationOrdinaryInput(body:any,unavailable:boolean,observatio
 export function observationMaterialsRoutes(authority:ObservationAuthority=observationModelMaterials){
   const router=Router();
   router.get("/api/observation-materials",async(_req,res)=>{
-    try{res.set("Cache-Control","no-store").json({materials:(await authority()).map(({artifactId,version,title,variables})=>({artifactId,version,title,variables}))});}
+    try{
+      const entries=await authority();
+      const materials=entries.map(({artifactId,version,title,variables})=>({artifactId,version,title,variables}));
+      const sourceBindings=entries.flatMap(entry=>entry.sourceBinding?[entry.sourceBinding]:[]);
+      res.set("Cache-Control","no-store").json({materials,...(sourceBindings.length?{sourceBindings}:{})});
+    }
     catch{res.status(503).set("Cache-Control","no-store").json({error:"可供对话使用的观测资料暂时无法读取。"});}
   });return router;
 }

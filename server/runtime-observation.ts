@@ -48,15 +48,26 @@ export function observationResponse(result:ObservationCheckResult,check:Observat
   if(result.status==="verified"){
     const e=result.evidence;
     message=(provenance==="archive"?"此前保存的读据显示：「":"已核对「")+e.artifactId+"」的指定版本「"+e.version+"」。变量「"+e.variable+"」的单位为「"+e.unit+"」，"+
-      (e.count?"非空记录共 "+e.count+" 条，起止日期为 "+e.first+" 至 "+e.last+"。":"没有非空记录。")+
+      (e.count?(e.netcdf?"非缺测记录共 ":"非空记录共 ")+e.count+" 条，起止日期为 "+e.first+" 至 "+e.last+"。":e.netcdf?"没有具有有效时间的非缺测记录。":"没有非空记录。")+
       ("purpose" in check?"":result.matches?"符合本次指定的单位和记录起止边界要求。":"不满足本次指定的单位「"+check.unit+"」及记录起止边界 "+check.start+" 至 "+check.end+" 的要求。");
     message+="〔1〕";
+    if(e.netcdf){
+      const n=e.netcdf;
+      if(e.artifactSource)message+="\n\n受信发布版本："+e.artifactSource.versionLabel+"。";
+      const roles=[n.standardName?"standard_name="+n.standardName:null,n.longName?"long_name="+n.longName:null].filter(Boolean);
+      if(roles.length)message+="\n文件变量角色："+roles.join("；")+"。";
+      if(n.firstUtc)message+="\n非缺测记录最早 UTC："+n.firstUtc+"；最晚 UTC："+n.lastUtc+"。以上日期来自这些记录，不是文件的全局覆盖。";
+      message+="\n本次填充值标记：["+n.fillValues.join(", ")+"]；missing_value 标记：["+n.missingValues.join(", ")+"]。";
+      message+="\n逐值检查 "+n.totalSamples+" 条：填充值/缺测标记剔除 "+n.excluded.missingValue+" 条，非有限值剔除 "+n.excluded.nonFinite+" 条，文件声明有效范围外剔除 "+n.excluded.outsideValidRange+" 条，时间无效剔除 "+n.excluded.invalidTime+" 条。";
+      if(n.relatedVariables.length)message+="\n同一原件的已登记关联变量（仅元数据，未统计这些变量的记录时段）："+n.relatedVariables.map(v=>v.name+"："+[v.standardName,v.longName,v.unit?"units="+v.unit:null].filter(Boolean).join("；")).join("；\n")+"。";
+    }
   }else if(result.status==="not_started"&&result.reason==="artifact_version_changed")message="受理时固定的观测文件版本已变更，未启动读取。";
   else if(result.status==="not_started"&&result.reason==="artifact_not_authorized")message="受理时的观测文件现已无授权，未启动读取。";
   else message=({not_started:"指定观测核对尚未启动。",failed:"指定观测核对未能完成。",cancelled:"指定观测核对已取消。",unknown:"指定观测核对的结果暂时无法确认。"})[result.status];
   return {result:{message,observationCheckResult:result,observationCheck:check,
     answerNotes:{references,sources:references.map(ref=>({id:ref.id,reason:"实际取得的指定版本观测文件读据"})),researchNotes:[],searches:[],webSources:[],
-      limitation:result.status==="verified"?(provenance==="archive"?"沿用此前实际取得的原版本读据，本轮未重新读取文件。":"")+"本次只核对单位和非空记录起止边界，不代表时段内连续有效或逐小时齐全。":"本轮尚无可核对的观测文件读据。",
+      limitation:result.status==="verified"?(provenance==="archive"?"沿用此前实际取得的原版本读据，本轮未重新读取文件。":"")+"本次只核对单位和非空记录起止边界，不代表时段内连续有效或逐小时齐全。"+
+        (result.evidence.netcdf?"NetCDF 统计只保留具有有效时间的非缺测值；先按原始存储值剔除 _FillValue/missing_value、非有限值及文件声明 valid_min/valid_max/valid_range 外值，再应用 scale_factor/add_offset。未按关联 QC 标志筛选，不能称为质量控制后有效观测；按文件 CF 时间单位/历法换算 UTC，未另行修正闰秒。"+(result.evidence.netcdf.relatedVariablesTruncated?"关联变量元数据仅列前20项。":""):""):"本轮尚无可核对的观测文件读据。",
       followUp:"",reviewed:references.length,elapsedMs,executor:"运行时受权执行器"}}};
 }
 const response=observationResponse;

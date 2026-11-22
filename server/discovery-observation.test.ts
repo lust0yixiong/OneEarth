@@ -71,11 +71,27 @@ assert.equal(schema.additionalProperties,false);
 assert.match(prompt[0],/JSON null for every inapplicable field/);
 const target = {artifactId:input.materials[0].artifactId,version:input.materials[0].version,variable:"temperature",purpose:"describe"};
 let plan = {...blank};
-if (input.question === "请看这个文件的单位和记录数。") plan = {...blank,...target,action:"read"};
-if (input.question === "刚才有多少条？" && input.evidence.length) plan = {...blank,...target,action:"reuse"};
+if (input.question === "这个文件用哪个变量记录水温，单位和有值的首末？") {
+  assert.match(prompt.join("\\n"),/primary direct measurement of that quantity/);
+  assert.deepEqual(input.materials[0].variables,["temperature_qc","time","temperature"]);
+  assert.deepEqual(input.evidence,[]);
+  plan = {...blank,...target,action:"read"};
+}
+if (input.question === "刚才有多少条？" && input.evidence.length) {
+  const [archived] = input.evidence;
+  assert.equal(archived.unit,"K");
+  assert.ok(archived.count===0 || archived.count===2);
+  assert.equal(archived.first,archived.count ? "2025-01-01" : null);
+  assert.equal(archived.last,archived.count ? "2025-01-31" : null);
+  plan = {...blank,...target,action:"reuse"};
+}
 if (input.question === "归档记录是否符合摄氏度要求？") plan = {...blank,...target,action:"reuse",purpose:"check",
   unit:"C",start:"2025-01-01",end:"2025-01-31"};
 if (input.question === "这个文件的数据怎么样？") plan = {...blank,action:"clarify",missing:"variable"};
+if (input.question === "这个文件的温度变量是哪个？") {
+  assert.deepEqual(input.materials[0].variables,["temperature_air","temperature_water"]);
+  plan = {...blank,action:"clarify",missing:"variable"};
+}
 if (input.question === "Fixture returns an unregistered variable") plan = {...blank,...target,action:"read",variable:"unregistered"};
 if (input.question === "Fixture returns a malformed response") {process.stdout.write("not JSON");process.exit(0);}
 if (input.question === "Fixture returns a provider failure") {process.stderr.write("Error: 401 Unauthorized fixture-private-text");process.exit(1);}
@@ -260,9 +276,10 @@ process.stdout.write(JSON.stringify(plan));
 
   await t.test("natural research selects reads, consumes receipts, and answers from archive", async () => {
     assert.equal(result.status,"verified");
-    const material = {artifactId:check.artifactId,version:check.version,title:"Small observation file",variables:[check.variable]};
+    const material = {artifactId:check.artifactId,version:check.version,title:"Small observation file",
+      variables:["temperature_qc","time",check.variable]};
     const publicEvidence = modelObservationEvidence(result.evidence);
-    const request = {researchTaskId:randomUUID(),question:"请看这个文件的单位和记录数。",materials:[material],evidence:[]};
+    const request = {researchTaskId:randomUUID(),question:"这个文件用哪个变量记录水温，单位和有值的首末？",materials:[material],evidence:[]};
     const sendResearch = (value:unknown,messageId=randomUUID(),authorization?:string) =>
       send(observationResearchKind,value,messageId,undefined,authorization,false);
     await status(await sendResearch(request,randomUUID(),""),401);
@@ -281,7 +298,7 @@ process.stdout.write(JSON.stringify(plan));
     assert.deepEqual(modelInput?.input,{questionLength:request.question.length,
       materials:[{artifactId:material.artifactId,version:material.version,variables:material.variables}],evidence:[]});
     assert.equal(events(natural).find(event=>event.observationResearchModel?.phase==="decision")?.observationResearchModel?.action,"read");
-    assert.doesNotMatch(JSON.stringify(natural),/expectedSha256|fixture-only|请看这个文件/);
+    assert.doesNotMatch(JSON.stringify(natural),/expectedSha256|fixture-only|这个文件用哪个变量记录水温/);
     assert.equal((await jobs(natural.id)).length,1);
 
     await stopService?.();
@@ -323,6 +340,12 @@ process.stdout.write(JSON.stringify(plan));
     assert.deepEqual(await withoutRead("归档记录是否符合摄氏度要求？",[publicEvidence]),
       {action:"answer",basedOn:"archive",evidence:publicEvidence,matches:false});
     assert.equal((await withoutRead("这个文件的数据怎么样？"))?.action,"clarify");
+    const ambiguous = (await status(await sendResearch({...request,researchTaskId:randomUUID(),
+      question:"这个文件的温度变量是哪个？",materials:[{...material,variables:["temperature_air","temperature_water"]}]}),200)).task as Document;
+    assert.equal(ambiguous.status.state,"TASK_STATE_COMPLETED");
+    assert.equal(events(ambiguous).at(-1)?.result?.observationResearchResult?.action,"clarify");
+    assert.equal(events(ambiguous).some(event=>event.skillDemand),false);
+    assert.equal((await jobs(ambiguous.id)).length,1);
     assert.deepEqual(await withoutRead("海水为什么是咸的？"),{action:"general"});
     assert.equal((await withoutRead("Fixture returns an unregistered variable"))?.action,"clarify");
     assert.deepEqual(await withoutRead("Fixture returns a malformed response"),{action:"unavailable",reason:"invalid_plan"});

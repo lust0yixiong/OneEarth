@@ -2,7 +2,7 @@ import {validObservationMaterial,type ObservationMaterial} from "../src/domain/o
 import {observationId,validObservationEvidence,type ObservationEvidence} from "./observation-check-contract";
 
 export const observationResearchKind = "oneearth.observation.research.request.v1";
-export type ModelObservationEvidence = Omit<ObservationEvidence,"sha256">;
+export type ModelObservationEvidence = Omit<ObservationEvidence,"sha256"|"artifactSource">;
 export type ObservationResearchRequest = {
   researchTaskId:string;
   question:string;
@@ -26,12 +26,13 @@ function fields(value:Record<string,unknown>, keys:string[]) {
 }
 
 export function modelObservationEvidence(evidence:ObservationEvidence):ModelObservationEvidence {
-  const {sha256:_,...safe}=evidence;
+  const {sha256:_,artifactSource:__,...safe}=evidence;
   return safe;
 }
 
 export function validModelObservationEvidence(value:unknown):value is ModelObservationEvidence {
-  return object(value)&&!Object.hasOwn(value,"sha256")&&validObservationEvidence({...value,sha256:"0".repeat(64)});
+  return object(value)&&!Object.hasOwn(value,"sha256")&&!Object.hasOwn(value,"artifactSource")&&
+    validObservationEvidence({...value,sha256:"0".repeat(64)});
 }
 
 export function parseObservationResearchRequest(value:unknown):ObservationResearchRequest|undefined {

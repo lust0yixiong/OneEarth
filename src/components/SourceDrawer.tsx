@@ -17,6 +17,8 @@ import {CitationIcon} from "./CitationIcon";
 import {citationTypeLabels} from "../domain/citation-types";
 import {useSourcePreviewHost,usePreviewPosition} from "./SourcePreviewHost";
 import {savedWebDocument} from "../domain/web-preview";
+import {observationAttachment,useObservationCatalogue} from "./ObservationMaterialPicker";
+import {ObservationFileEvidence} from "./ObservationFileEvidence";
 
 function safeUrl(raw:string|undefined) {
   try{
@@ -72,7 +74,8 @@ export function SourceDrawer({refs,title,message,archived,question,close}:{refs:
     return categories.map(category=>({...category,sources:sources.filter(s=>s.details.type===category.type)}));
   },[refs,message.answerNotes,revision]);
   const dialog=useRef<HTMLDialogElement>(null);
-  const {state:s,patch,inspectAsset,openVisualization,flyToEvidence}=useWorkspace();
+  const {state:s,patch,inspectAsset,openVisualization,flyToEvidence,attachScope}=useWorkspace();
+  const {byReferenceUrl}=useObservationCatalogue();
   const [tab,setTab]=useState<CitationType>(()=>groups.find(g=>g.sources.length)?.type || "data");
   useEffect(()=>{
     if(!groups.some(g=>g.type===tab && g.sources.length))setTab(groups.find(g=>g.sources.length)?.type || "data");
@@ -141,12 +144,26 @@ export function SourceDrawer({refs,title,message,archived,question,close}:{refs:
         return url && <section className="oe-web-source" data-reference-type={details.type} key={r.url}>
           <a className="oe-source-card" href={url.href} target="_blank" rel="noreferrer">
             <b><CitationIcon type={details.type}/><span>{r.title} <ArrowUpRight size={13}/></span></b>
-            <small>{details.channel} · {url.hostname}{details.material && " · "+details.material}</small>{doi && <small>DOI {doi}</small>}
+            <small>{details.channel} · {url.hostname}{details.material && " · "+(archived?"归档链接类型 ":"")+details.material}</small>{doi && <small>DOI {doi}</small>}
           </a>
           {evidence && <button type="button" className="saved-web-evidence-action" data-source-url={r.url} onClick={()=>{
             setHost(previewHost.current);
             patch({inspector:null,evidence,previewKind:"text"});
           }}>查看已保存依据</button>}
+          {Array.from(byReferenceUrl.get(r.url) ?? [],([key,{material,dataUrl,catalogUrl,versionLabel}])=>{
+            const attached=s.draftScope?.some(item=>item.kind==="observation" &&
+              item.artifactId===material.artifactId && item.version===material.version);
+            const disabled=s.pending || s.attachingMapScope || !!s.clarificationReply || attached;
+            return <div className="oe-observation-source-actions" key={key}>
+              <small>{material.title} · {versionLabel}（{material.version}）</small>
+              <button type="button" disabled={disabled} onClick={()=>{
+                attachScope(observationAttachment(material));
+                continueChat();
+              }}>{attached?"已附加此文件版本":"用已验证文件版本提问"}</button>
+              <a href={dataUrl} data-external target="_blank" rel="noreferrer">打开发布方文件入口</a>
+              <a href={catalogUrl} data-external target="_blank" rel="noreferrer">打开发布目录</a>
+            </div>;
+          })}
         </section>;
       }
       if (r.evidenceLevel==="observation-file") {
@@ -155,11 +172,7 @@ export function SourceDrawer({refs,title,message,archived,question,close}:{refs:
           <div className="oe-source-card">
             <b><CitationIcon type={details.type}/><span>{r.title}</span></b>
             <small>{details.evidence}</small>
-            {evidence ? <>
-              <small>文件版本 {evidence.version} · 变量 {evidence.variable} · 单位 {evidence.unit}</small>
-              <small>{evidence.count ? "非空记录 "+evidence.count+" 条 · "+evidence.first+" 至 "+evidence.last : "无非空记录"}</small>
-              <small style={{overflowWrap:"anywhere"}}>SHA-256 {evidence.sha256}</small>
-            </> : <small>这份档案未保存详细读取依据。</small>}
+            {evidence ? <ObservationFileEvidence evidence={evidence}/> : <small>这份档案未保存详细读取依据。</small>}
           </div>
         </section>;
       }

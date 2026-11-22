@@ -7,6 +7,7 @@ import {parseObservationRequest,observationResultMatchesRequest,validObservation
   type ObservationRequest,type ObservationEvidence,type ObservationCheckResult} from "./observation-check-contract";
 import {modelObservationEvidence,type ObservationResearchResult} from "./observation-research-contract";
 import {observationDiscoveryClient,observationTerminal,ObservationProtocolError,type ObservationTask,type ObservationBinding} from "./observation-discovery-client";
+import {provenanceForBinding} from "../src/domain/observation-source";
 
 type Step=Payload&{kind:"observation-research-step.v1";phase:"submit"|"discovery"|"engine"|"deliver"|"general";
   ordinaryFallback?:boolean;hasAttachments?:boolean;observationParent?:boolean;
@@ -31,7 +32,9 @@ export function runtimeObservationResearch(options:{tasks:TaskStore;engine?:Runt
   async function park(id:string,state:Step,event?:Payload,delay=pollMs){await tasks.park!(id,state,now()+delay,event);return new TaskParked();}
   async function authorized(state:Step){
     const current=await authority();
-    return state.materials.length>0&&state.materials.every(m=>observationSha256(m.sha256)&&current.some(c=>observationKey(c)===observationKey(m)&&c.sha256===m.sha256&&m.variables.every(v=>c.variables.includes(v))));
+    return state.materials.length>0&&state.materials.every(m=>observationSha256(m.sha256)&&current.some(c=>
+      observationKey(c)===observationKey(m)&&c.sha256===m.sha256&&m.variables.every(v=>c.variables.includes(v))&&
+      isDeepStrictEqual(provenanceForBinding(c.sourceBinding),provenanceForBinding(m.sourceBinding))));
   }
   function grant(state:Step,check:ObservationRequest){
     const material=state.materials.find(m=>observationKey(m)===observationKey(check));
@@ -130,12 +133,15 @@ export function runtimeObservationResearch(options:{tasks:TaskStore;engine?:Runt
         if(state.phase==="discovery")return await adopt(task.id,state,await client.snapshot(state.binding,signal),root.created);
         const check=parseObservationRequest(state.check);
         if(!check||!state.requestId||state.afterSeq===undefined||grant(state,check).sha256!==state.expectedSha256)throw new ObservationProtocolError("自然委托缺少受权需求身份、水位或文件摘要。");
+        const source=provenanceForBinding(grant(state,check).sourceBinding);
         if(state.phase==="engine"){
           if((await tasks.get(task.id))?.status!=="running")return new TaskParked();
           if(!engine)return park(task.id,{...state,phase:"deliver",result:{status:"not_started",reason:"execution_unconfigured"},attempts:0},undefined,0);
           await engine.submit({researchTaskId:task.id,discoveryTaskId:state.binding.taskId,requestId:state.requestId,check,expectedSha256:state.expectedSha256!,modelAuthorized:true});
           const result=await engine.result(state.requestId);if(!result)return park(task.id,state);
           if(!validObservationResult(result)||!observationResultMatchesRequest(result,check)||(result.status==="verified"&&result.evidence.sha256!==state.expectedSha256))throw new ObservationProtocolError("执行器结果不属于初次受理的观测需求和文件摘要。");
+          if(result.status==="verified"&&!isDeepStrictEqual(source,result.evidence.artifactSource))
+            throw new ObservationProtocolError("执行器返回的资料来源与初次受理记录不同。");
           // A grant can be revoked while this short query is in flight.
           if(!await authorized(state))return park(task.id,{...state,phase:"deliver",result:{status:"not_started",reason:"artifact_not_authorized"},attempts:0},undefined,0);
           return park(task.id,{...state,phase:"deliver",result,...observationRetainedRecords(result,check,elapsed(root.created)),attempts:0},
