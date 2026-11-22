@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import type { Router } from "express";
+import { TaskCancelled } from "./task-cancellation";
 
 export const taskIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export type TaskStatus = "queued" | "running" | "complete" | "failed" | "cancelled";
@@ -192,7 +193,7 @@ export async function workTasks(store: TaskStore, run: (task: {id:string; body:a
         if(checking)return;
         checking=true;
         try{
-          if((await store.get(task.id))?.status==="cancelled")controller.abort();
+          if((await store.get(task.id))?.status==="cancelled")controller.abort(new TaskCancelled());
         }catch{controller.abort();}
         finally{checking=false;}
       },200);

@@ -57,6 +57,7 @@ test("a source-based answer without a persisted-source citation is repaired with
     },
     async discover(){throw Error("no discovery in a reply based on stored evidence");},
     async read(){throw Error("no unread source access in a reply based on stored evidence");},
+    async close(){},
   };
   const result=await modelReply(question,context,{message:"依据既有材料"},[],executor,new AbortController().signal,undefined,
     [],"",undefined,undefined,undefined,{plan,searches:[],priorEvidence});

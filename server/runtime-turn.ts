@@ -402,5 +402,5 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     if(err instanceof AnswerReferenceError)runTrace.calls.push({id:"synthesis-validation",kind:"tool",name:"回答引用校验",input:"核对本轮来源编号与正文引用",status:"failed",error,output:JSON.stringify(synthesisFailureDiagnostic(err))});
     for(const call of runTrace.calls) if(call.status==="running") {call.status="failed";call.error=error;}
     return {error,code,executorDiagnostic,runTrace};
-  }
+  } finally { await executor.close(); }
 }
