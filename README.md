@@ -62,7 +62,9 @@ node scripts/macos-product-service.mjs restart
 
 ## 备份和恢复
 
-应用停写或无活动任务时备份产品数据库与对象，备份目录内包含研究记录，应仅交付已授权数据。初始化另一个 PostgreSQL 实例、Garage 服务和空桶，并在独立配置下恢复。恢复在独立目标中完成，全部通过后再启动应用。若恢复中断，保留失败目标用于排查，使用新的空目标重跑。
+在 v0.2.0-rc.5 上，先等研究任务与目录发布完成，再停止应用和目录导入进程后备份。备份包含三个产品数据库、图层对象及 `ONEEARTH_STATE_DIR/paper-evidence.sqlite` 的一致快照。该快照保存论文目录选用的当前版本及历史内容 ID。已初始化的空目录也可备份。发布文件缺失时报错。备份含研究记录与论文材料，存放在授权的数据目录。
+
+初始化独立 PostgreSQL 实例、Garage 服务和空桶，使用新的空应用状态目录恢复，成功后再启动应用。若恢复中断，保留失败目标用于排查，使用新的空目标重跑。旧格式可以导入；其目录只能从已完成的发现任务有限重建，原先直接发布或导入的目录集合与版本顺序无法由旧备份核对。
 
 ```sh
 export ONEEARTH_PG_BIN_DIR=/path/to/Postgres.app/Contents/Versions/18/bin
@@ -75,3 +77,11 @@ ONEEARTH_PORT=5574 ONEEARTH_DISCOVERY_PORT=5575 ONEEARTH_SPATIAL_PORT=5576 \
 ```
 
 `scripts/accept-product-restore.mjs` 使用干净的浏览器会话比对原始实例和恢复实例中的同一任务、来源和森林图层。产品数据库和对象服务配置可替换为 ECS 的独立 PostgreSQL、PostGIS 与 S3 兼容服务。云环境的连通性、并发、生产认证与切换留待第二阶段实测。
+
+已取得经确认的完整文献目录导出时，可用部署配置向当前产品发布。
+
+```sh
+node --env-file="$deploy_config" --import tsx scripts/sync-assertion-catalog.ts --import /path/to/catalog.json
+```
+
+全量导入替换当前目录并保留历史内容 ID。只读 PostgreSQL 同步脚本也采用 `ONEEARTH_STATE_DIR` 指定的位置。省略该配置时，两种同步脚本默认写项目的 `.local/paper-evidence.sqlite` 暂存文件。
