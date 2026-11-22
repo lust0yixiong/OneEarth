@@ -36,7 +36,10 @@ export function EvidenceReader() {
   ) : null;
 }
 function Reader({ doc: storedDoc }: { doc: EvidenceDocument }) {
-  const doc=useMemo(()=>literatureDisplay(storedDoc),[storedDoc]);
+  const doc=useMemo(()=>{
+    const display=literatureDisplay(storedDoc);
+    return {...display,tabs:display.tabs.map((tab,i)=>storedDoc.tabs[i].savedWebExcerpt?storedDoc.tabs[i]:tab)};
+  },[storedDoc]);
   const { state: s, patch } = useWorkspace();
   const previewWeb=useWebPreview();
   const positionStyle=usePreviewPosition(s.inspector?110:0);
@@ -103,6 +106,7 @@ function Reader({ doc: storedDoc }: { doc: EvidenceDocument }) {
     patch({ citation: citeMaterial(doc, citationPart, page), evidence: null, chatOpen: true });
   }
   const original = materialUrl(doc, part, page);
+  const publisher = webUrl(part.savedWebExcerpt?.publisherUrl);
   return (
     <div
       ref={host} onClick={previewWeb}
@@ -166,7 +170,7 @@ function Reader({ doc: storedDoc }: { doc: EvidenceDocument }) {
             ) : (
               <FileText size={12} />
             )}{" "}
-            {doc.tabs.filter((p) => p.kind === t.kind).length > 1
+            {t.savedWebExcerpt || doc.tabs.filter((p) => p.kind === t.kind).length > 1
               ? t.label
               : {
                   table: "表格",
@@ -352,7 +356,7 @@ function Reader({ doc: storedDoc }: { doc: EvidenceDocument }) {
         ) : part.kind === "text" ? (
           <>
             <p>{part.before}</p>
-            <blockquote>{part.quote || part.body}</blockquote>
+            <blockquote className={part.savedWebExcerpt?"saved-web-excerpt":undefined}>{part.quote || part.body}</blockquote>
             <p>{part.after}</p>
           </>
         ) : part.kind==="web" && webUrl(original) ? (
@@ -376,11 +380,14 @@ function Reader({ doc: storedDoc }: { doc: EvidenceDocument }) {
       </div>
       <div className="evidence-bottom">
         {original && (
-          <a href={original} title={doc.title} data-external={remoteSource?true:undefined} target="_blank" rel="noreferrer">
-            {remoteSource?"在新标签页打开原始来源":"预览原始来源"}
+          <a href={original} title={doc.title} data-external={remoteSource || part.savedWebExcerpt?true:undefined} target="_blank" rel="noreferrer">
+            {remoteSource || part.savedWebExcerpt?"在新标签页打开原始来源":"预览原始来源"}
             <ExternalLink size={12} />
           </a>
         )}
+        {publisher && <a href={publisher.href} data-external target="_blank" rel="noreferrer">
+          打开记录中的发布页 <ExternalLink size={12}/>
+        </a>}
         {part.kind === "table" && part.rows!.length > pageSize && (
           <div className="table-pagination">
             <button

@@ -1,11 +1,11 @@
 import {assetById} from "../src/domain/datasets";
 import type {AnswerReference,DiscoveryContext,ReadEvidence,ToolCall} from "../src/domain/types";
-import {validResearchIntent,type ResearchIntent} from "../src/domain/research-intent";
+import {researchIntentSchema,validResearchIntent,type ResearchIntent} from "../src/domain/research-intent";
 import {isWorkspaceCommand} from "../src/domain/research-question";
 import {navigationTarget} from "./place-lookup";
 import {restoredIntent,clarificationBlockReason,type PlanningContext} from "./plan-adaptation";
 import type {NumberedReference} from "./follow-up-reference";
-import {dataSearchInstructions,dataSearchSchema,type DataSearchResult} from "./data-search";
+import type {DataSearchResult} from "./data-search";
 
 export type TurnAction="respond"|"read"|"search"|"clarify"|"workspace";
 export type TurnTarget={key:string;kind:"asset"|"web"|"excerpt"|"grid"|"time";title:string;
@@ -17,23 +17,22 @@ export type TurnInput={question:string;context:DiscoveryContext;history:TurnHist
   numbered?:NumberedReference; numberedRead?:ReadEvidence;
   numberedAssertion?:import("../src/domain/assertion-evidence-memory").AssertionEvidenceMemory};
 export type TurnPlan={action:TurnAction;goal:string;evidenceNeed:"none"|"existing"|"read"|"discover"|"unclear";
-  targets:TurnTarget[];restoredNumberedTarget?:true;reason:string;clarification:string|null;researchIntent:ResearchIntent;conversationContext:string;searchPlan:string|undefined};
+  targets:TurnTarget[];restoredNumberedTarget?:true;reason:string;clarification:string|null;researchIntent:ResearchIntent;conversationContext:string;evidenceGap?:string};
 
-const intentSchema=(dataSearchSchema.properties as any).researchIntent;
 export const turnPlanSchema={type:"object",additionalProperties:false,
-  required:["action","goal","evidenceNeed","targets","reason","clarification","researchIntent","conversationContext","searchPlan"],properties:{
+  required:["action","goal","evidenceNeed","targets","reason","clarification","researchIntent","conversationContext","evidenceGap"],properties:{
     action:{type:"string",enum:["respond","read","search","clarify","workspace"]},goal:{type:"string",minLength:1,maxLength:1200},
     evidenceNeed:{type:"string",enum:["none","existing","read","discover","unclear"]},
     targets:{type:"array",maxItems:8,items:{type:"string",maxLength:2300}},reason:{type:"string",minLength:1,maxLength:600},
-    clarification:{type:["string","null"],maxLength:500},researchIntent:intentSchema,conversationContext:{type:"string",maxLength:1600},
-    searchPlan:{...dataSearchSchema,type:["object","null"]},
+    clarification:{type:["string","null"],maxLength:500},researchIntent:researchIntentSchema,conversationContext:{type:"string",maxLength:1600},
+    evidenceGap:{type:["string","null"],maxLength:500},
   }};
 
-/** The embedded search-plan contract must not leak into the turn-plan level. */
 export const turnPlanOutputContract=`
-最终输出要求：只返回一个 JSON 对象，表示本轮的“目标与动作规划”。顶层字段恰好是 action、goal、evidenceNeed、targets、reason、clarification、researchIntent、conversationContext、searchPlan，不要增加、省略或改名。上文“检索规划规范”的 JSON 结构只能作为 searchPlan 的值；action 不是 search 时 searchPlan 必须为 null。questionMode、dataQuestion、dataNeed、conversationPeriod、conversationWindow、hainaQueries、paper、web 只能出现在 searchPlan 内部，不能成为顶层字段，也不能用检索计划代替动作规划。researchIntent 的 purpose 与 task 必须是字符串，不能为 null；即使只是问候也写一句概括，未知的地区或时段填 null。`;
+最终输出要求：只返回一个 JSON 对象，表示本轮的目标和动作。字段为 action、goal、evidenceNeed、targets、reason、clarification、researchIntent、conversationContext、evidenceGap。只有 search 需要用自然语言写明缺少的证据，其他动作的 evidenceGap 为 null。检索词、渠道分工和改题方案由发现服务处理。researchIntent 的 purpose 与 task 为字符串，未知的地区或时段填 null。`;
 export const turnPlanningInstructions=`先决定本轮要做什么，再决定是否检索。只返回规定 JSON，不直接写最终答复。
 本轮原话/confirmedQuestion是固定目标；goal只归纳目标，不得把解释、整理或操作改写成找数据。引用对象是待处理对象，附了对象本身不意味着要搜索。history中的推荐不是用户已经选定的产品，历史标题也不等于已读全文。
+有 confirmedQuestion 时，用户已经做出选择，按这个问题继续。此前的改题提议和等待确认要求已经处理。
 action规则：
 - respond：一般概念/能力说明、问候，或根据本轮摘录和历史已读材料解释、翻译、改写、总结、比较、核算、追问。已有内容足够完成本轮目标时优先复用；evidenceNeed为none或existing。不要为简单解释重新查三个库，也不要因为有地名/年份/数据集名就检索。
 - read：目标明确且缺的是指定对象的正文/详情/具体页，或用户要求重新核对该对象。只选已提供的目标key，evidenceNeed=read；先读它，不以其他来源代替，不重跑全渠道发现。
@@ -43,10 +42,11 @@ action规则：
 targets只能取availableTargets中的key；没有明确引用不猜具体对象。basis=workspace只是浏览上下文，不自动视为用户选择；basis=history只是以前出现过，需要结合原话指代。numbered 指服务器按上一条回答解析出的稳定引用，只用于确定对象。即使同一个编号，解释已有摘录、打开来源补读缺失正文、用来源作线索查找独立新资料，是三个不同动作。按本轮目标选择动作。编号来源由服务器稳定绑定，模型可以回传该对象，也可以省略它；targets 不得编造新的对象键。
 - 已有内容就足够且用户仅要求依照既有内容时，用 respond。已读或有摘录只说明过去存在这些材料；需要核对被截断、未保留的段落或明确要求实际打开网页时，用 read 读取精确地址。不要把打开网页核对内容交给 workspace。
 - 要求找到另一项独立资料时，用 search。编号目标是检索线索，不能拿旧来源充作新发现；继续遵守用户的范围与问题转换前确认。只读取这一来源的要求不能变成跨渠道发现。
+同名来源可能是同一资料的文献用法、目录页或不同版本。能用实际相关的既有证据回答时选 respond，让回答按具体来源引用。不同版本或研究区会改变结论且本轮无法确定时再澄清，不按名称位置猜测。
+地图附加范围只给出查询条件和身份。用户问所附范围的目录匹配数或成员时，选择 read 并选取附带的 grid 对象。只解释网格概念时按已有材料回答。
 数字编号缺少确切对应关系时应澄清。read最多选3个可读来源；不要为凑依据访问无关链接。
-researchIntent与conversationContext只记用户表达及确认的目的、条件和未知点，当前明确修改覆盖旧条件；新话题不沿用无关区域/年份。保留事实依据和来源身份；通用知识解释不伪装成本轮查获结果。若本轮要求改变问题，必须进入search并用questionMode=reframe先求证，不能直接执行转换。
-仅action=search时填写searchPlan，其余必须为null。searchPlan只需为本轮缺口生成参数，遵守下面的检索规划规范（这些规范仅在search分支生效，不是每轮检索要求）：
-`+dataSearchInstructions+turnPlanOutputContract;
+researchIntent与conversationContext只记用户表达及确认的目的、条件和未知点，当前明确修改覆盖旧条件；新话题不沿用无关区域/年份。保留事实依据和来源身份；通用知识解释不伪装成本轮查获结果。若用户要求先改题并确认，选择 search，让发现服务按原话提出待确认问题。
+`+turnPlanOutputContract;
 
 function publicUrl(value:string|undefined){try{const u=new URL(value||"");return /^https?:$/.test(u.protocol)&&!u.username&&!u.password?u.href:undefined;}catch{return;}}
 export function turnTargets(input:TurnInput):TurnTarget[]{
@@ -126,7 +126,7 @@ function repairedPlan(value:any,input:TurnInput){
 export function parseTurnPlan(raw:string,input:TurnInput,available=turnTargets(input)):TurnPlan {
   const parsed=JSON.parse(raw.trim().replace(/^```(?:json)?\s*|\s*```$/gi,""));
   if(parsed && typeof parsed==="object" && !Array.isArray(parsed) && !("action" in parsed) && ("questionMode" in parsed || "dataQuestion" in parsed))
-    throw Error("你返回的是检索计划，不是动作规划：顶层必须包含 action、goal、evidenceNeed、targets、reason、clarification、researchIntent、conversationContext、searchPlan，检索参数只能放在 searchPlan 内。");
+    throw Error("检索计划不能代替本轮动作。请只返回动作规划的字段。");
   const value=repairedPlan(parsed,input);
   const actions:TurnAction[]=["respond","read","search","clarify","workspace"];
   if(!value||!actions.includes(value.action)||typeof value.goal!=="string"||!value.goal.trim()||value.goal.length>1200||
@@ -151,8 +151,11 @@ export function parseTurnPlan(raw:string,input:TurnInput,available=turnTargets(i
   if(pinned&&value.action==="read"&&targets.some(t=>t!==pinned&&!["attachment","citation","question"].includes(t.basis)))
     throw Error("定向读取只能读取所指来源和本轮另外明确附上的对象。");
   if(value.action==="read"&&(!targets.length||targets.length>3||targets.some(t=>t.kind==="web"&&!t.url)))throw Error("读取动作需要一至三个确切对象；缺少对象应先澄清。");
-  if(value.action!=="search"&&value.searchPlan!=null)throw Error("本轮未选择发现检索，不能附带执行检索参数。");
-  if(value.action==="search"&&value.searchPlan!=null&&(typeof value.searchPlan!=="object"||Array.isArray(value.searchPlan)))throw Error("检索计划必须是对象。");
+  if(["searchPlan","initialPlan","paper","hainaQueries","web"].some(key=>Object.hasOwn(value,key)))
+    throw Error("本轮动作规划不能附带内部检索参数。");
+  if(value.action==="search"&&(typeof value.evidenceGap!=="string"||!value.evidenceGap.trim()||value.evidenceGap.length>500))
+    throw Error("发现动作需要用自然语言说明本轮缺少的证据。");
+  if(value.action!=="search"&&value.evidenceGap!=null)throw Error("只有发现动作可交付证据缺口。");
   if(value.action==="workspace"&&!isWorkspaceCommand(input.confirmedQuestion||input.question)&&
     !/^\s*(?:S2\s*L\d+|H3\s*R\d+|(?:请)?(?:把|将).{0,25}(?:改为|改成|设为|切换到)).*$/i.test(input.question))
     throw Error("用户没有明确授权界面操作；解释或比较问题不能被转换为操作。");
@@ -166,7 +169,7 @@ export function parseTurnPlan(raw:string,input:TurnInput,available=turnTargets(i
   return {action:value.action,goal:value.goal.trim(),evidenceNeed:value.evidenceNeed,targets,reason:value.reason.trim(),clarification,
     ...(restorePinned?{restoredNumberedTarget:true as const}:{}),
     researchIntent:value.researchIntent,conversationContext:value.conversationContext,
-    searchPlan:value.action==="search"&&value.searchPlan?JSON.stringify(value.searchPlan):undefined};
+    evidenceGap:value.action==="search"?value.evidenceGap.trim():undefined};
 }
 
 export class TurnPlanningFailure extends Error {
@@ -177,11 +180,14 @@ export class TurnPlanningFailure extends Error {
 }
 
 type PlanningDeps={run:(prompt:string)=>Promise<string>;stage:(message:string)=>void;report:(call:ToolCall)=>void;
-  search:(plan:TurnPlan)=>Promise<DataSearchResult>};
+  search:(plan:TurnPlan)=>Promise<DataSearchResult|undefined>};
 /** The search dependency is unreachable until a validated turn plan requests it. */
 export async function prepareTurn(input:TurnInput,signal:AbortSignal,deps:PlanningDeps){
   signal.throwIfAborted();
-  const available=turnTargets(input),call={id:"turn-action",kind:"tool" as const,name:"本轮目标与动作规划",input:JSON.stringify({question:input.question,targets:available.map(({excerpt,...t})=>({...t,hasExcerpt:!!excerpt}))})};
+  const available=turnTargets(input);
+  const coverageScope=input.context.attachedScope?.find(item=>item.kind==="grid")?.coverageScope;
+  const call={id:"turn-action",kind:"tool" as const,name:"本轮目标与动作规划",input:JSON.stringify({question:input.question,
+    targets:available.map(({excerpt,...t})=>({...t,hasExcerpt:!!excerpt})),coverageScope})};
   deps.stage("正在结合本轮目标与引用对象决定动作");deps.report({...call,status:"running"});
   const {numberedRead:_,numberedAssertion:__,...planningInput}=input;
   const payload={...planningInput,context:{...input.context,citation:input.context.citation?{...input.context.citation,body:input.context.citation.body.slice(0,2400),notice:"仅展示本轮引用的有界预览；不是完整来源"}:null},availableTargets:available,history:input.history.map(({conversationEvidence,...t})=>({...t,
@@ -204,8 +210,8 @@ export async function prepareTurn(input:TurnInput,signal:AbortSignal,deps:Planni
   // weaker model routes it as explanation or search; the place itself is resolved later.
   const navigation=navigationTarget(input.confirmedQuestion||input.question);
   if(navigation && plan.action!=="workspace")
-    plan={...plan,action:"workspace",evidenceNeed:"none",targets:[],clarification:null,searchPlan:undefined};
-  deps.report({...call,status:"done",output:JSON.stringify({...plan,targets:plan.targets.map(({excerpt,...t})=>({...t,hasExcerpt:!!excerpt})),searchPlan:plan.searchPlan?"已生成，进入检索分支后校验":undefined})});
+    plan={...plan,action:"workspace",evidenceNeed:"none",targets:[],clarification:null,evidenceGap:undefined};
+  deps.report({...call,status:"done",output:JSON.stringify({...plan,targets:plan.targets.map(({excerpt,...t})=>({...t,hasExcerpt:!!excerpt}))})});
   return {plan,retrieval:plan.action==="search"?await deps.search(plan):undefined};
 }
 

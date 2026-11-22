@@ -7,9 +7,10 @@ import type {CitationDetails} from "../domain/answer-sources";
 import type {AnswerReference} from "../domain/types";
 
 const safeUrl=(raw:string)=>{try{const u=new URL(raw);return /^https?:$/.test(u.protocol)&&!u.username&&!u.password?u.href:undefined;}catch{return undefined;}};
-export function CitationLink({reference,number,label,details,inspect,hover,inCell,focused,quote,selected}:{
+export function CitationLink({reference,number,label,details,inspect,hover,inCell,focused,quote,selected,openSaved}:{
   reference:AnswerReference;number:number;label:string;details:CitationDetails;inspect:(id:string)=>void;
   quote?:(reference:AnswerReference,number:number)=>void;selected?:boolean;
+  openSaved?:()=>void;
   hover?:(id:string|null)=>void;inCell?:boolean;focused?:boolean;
 }){
   const [open,setOpen]=useState(false),[position,setPosition]=useState({left:12,top:12});
@@ -62,6 +63,10 @@ export function CitationLink({reference,number,label,details,inspect,hover,inCel
       title={selected?"已引用，可继续提问":"引用并追问"} onClick={()=>{hide();quote(reference,number);}}>
       {selected?<Check size={13}/>:<MessageCirclePlus size={13}/>}
     </button>}</span>
+    {openSaved && reference.kind==="web" && <button type="button" className="saved-web-evidence-action"
+      data-source-url={reference.url} onClick={()=>{hide();openSaved();}}>
+      查看已保存依据
+    </button>}
     {open && createPortal(<div ref={tooltip} id={tooltipId} className="oe-citation-tooltip" role="tooltip" style={position}
       onPointerEnter={cancelClose} onPointerLeave={delayedClose}>
       <div className="oe-citation-tooltip-heading"><span>引用详情</span><span>〔{number}〕</span></div>

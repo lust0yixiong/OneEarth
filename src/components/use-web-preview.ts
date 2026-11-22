@@ -6,7 +6,7 @@ import {webDocument,webUrl} from "../domain/web-preview";
 
 // Handle ordinary link activation within research surfaces; keep native copy-link,
 // modified clicks and file downloads available.
-export function useWebPreview(hits?:WebHit[],onOpen?:()=>void,urls:string[]=[]) {
+export function useWebPreview(hits?:WebHit[],onOpen?:()=>void,urls:string[]=[],hitsForLink?:(link:HTMLAnchorElement)=>WebHit[]|undefined) {
   const {patch}=useWorkspace();
   const targets=JSON.stringify([...new Set([...(hits?.map(h=>h.url)||[]),...urls])].slice(-32));
   useEffect(()=>{
@@ -28,7 +28,8 @@ export function useWebPreview(hits?:WebHit[],onOpen?:()=>void,urls:string[]=[]) 
       return;
     }
     event.preventDefault();
-    const hit=hits?.find(hit=>webUrl(hit.url)?.href===url.href);
+    const candidates=hitsForLink?hitsForLink(link):hits;
+    const hit=candidates?.find(hit=>webUrl(hit.url)?.href===url.href);
     onOpen?.();
     patch({evidence:webDocument(url,hit?.title || link.title || link.textContent?.trim() || url.hostname,hit?.snippet),previewKind:"web"});
   };

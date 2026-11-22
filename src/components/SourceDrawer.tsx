@@ -15,6 +15,7 @@ import {PaperEvidenceCard} from "./PaperEvidenceCard";
 import {CitationIcon} from "./CitationIcon";
 import {citationTypeLabels} from "../domain/citation-types";
 import {useSourcePreviewHost,usePreviewPosition} from "./SourcePreviewHost";
+import {savedWebDocument} from "../domain/web-preview";
 
 function safeUrl(raw:string|undefined) {
   try{
@@ -113,10 +114,17 @@ export function SourceDrawer({refs,title,message,question,close}:{refs:AnswerRef
     {groups.find(g=>g.type===tab)?.sources.map(({reference:r,details})=>{
       if(r.kind==="web"){
         const url=safeUrl(r.url),doi=message.answerNotes?.webSources?.find(hit=>hit.url===r.url)?.doi;
-        return url && <a className="oe-source-card" data-reference-type={details.type} key={r.url} href={url.href} target="_blank" rel="noreferrer">
-          <b><CitationIcon type={details.type}/><span>{r.title} <ArrowUpRight size={13}/></span></b>
-          <small>{details.channel} · {url.hostname}</small>{doi && <small>DOI {doi}</small>}
-        </a>;
+        const evidence=savedWebDocument(r,message);
+        return url && <section className="oe-web-source" data-reference-type={details.type} key={r.url}>
+          <a className="oe-source-card" href={url.href} target="_blank" rel="noreferrer">
+            <b><CitationIcon type={details.type}/><span>{r.title} <ArrowUpRight size={13}/></span></b>
+            <small>{details.channel} · {url.hostname}</small>{doi && <small>DOI {doi}</small>}
+          </a>
+          {evidence && <button type="button" className="saved-web-evidence-action" data-source-url={r.url} onClick={()=>{
+            setHost(previewHost.current);
+            patch({inspector:null,evidence,previewKind:"text"});
+          }}>查看已保存依据</button>}
+        </section>;
       }
       const a=assetById.get(r.id),url=safeUrl(a?.url),doi=doiFor(r.id);
       const hasPaperEvidence=details.type==="paper";

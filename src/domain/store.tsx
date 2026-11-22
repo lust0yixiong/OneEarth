@@ -99,7 +99,8 @@ type Inspector =
 export interface State {
   researchRegion?:ResearchRegionLayer|null;
   draftScope: ScopeItem[] | null;
-  flight?: {id:string;camera:Camera;kind?:"research-region"|"place";label?:string}|null;
+  attachingMapScope?: boolean;
+  flight?: {id:string;camera:Camera;kind?:"research-region"|"place"|"grid";label?:string}|null;
   mapFocus?: {answerId:string;assetId:string;locked:boolean}|null;
   sessionId: string;
   resumeLinkedWorkspace: boolean;
@@ -504,7 +505,8 @@ async function loadInitialSession(): Promise<State> {
           {id:saved.id,role:"assistant",text:reply.message,time:saved.updated,replyTo:saved.turnId,
             researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
             conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
-            answerNotes:reply.answerNotes,runTrace:reply.runTrace,researchRegion:reply.researchRegion},
+            answerNotes:reply.answerNotes,runTrace:reply.runTrace,researchRegion:reply.researchRegion,
+            gridCoverage:reply.gridCoverage},
         ];
         state.sessionId=saved.conversationId;
         state.messages=mergeMessages(stored?.messages||[],messages);
@@ -957,7 +959,13 @@ function useWorkspaceValue(initialState: State) {
       ...(target && matchMedia("(max-width: 600px)").matches?{chatOpen:false}:{})});
   },[patch]);
   const flyToGrid = useCallback((selection:Selection) => {
-    patch({view:"earth",selection,...(matchMedia("(max-width: 600px)").matches?{chatOpen:false}:{}),gridSystem:selection.grid.system,flight:{id:randomId(),camera:gridCamera(selection)}});
+    patch({
+      view:"earth",
+      selection,
+      ...(matchMedia("(max-width: 600px)").matches?{chatOpen:false}:{}),
+      gridSystem:selection.grid.system,
+      flight:{id:randomId(),camera:gridCamera(selection),kind:"grid"},
+    });
   },[patch]);
   const flyToEvidence = useCallback((message:Message,assetId:string) => {
     const s=latest.current;
@@ -1556,7 +1564,7 @@ function useWorkspaceValue(initialState: State) {
           researchIntent:r.researchIntent,conversationContext:r.conversationContext,
           conversationEvidence:r.conversationEvidence,
           conversationAssertionEvidence:r.conversationAssertionEvidence,
-          runTrace:r.runTrace, answerNotes:r.answerNotes,
+          runTrace:r.runTrace, answerNotes:r.answerNotes, gridCoverage:r.gridCoverage,
           replyTo: attempt.userMessageId,
           ...(historicalReply ? { historicalReply: true, context: "原问题 · " + q + " · " + context } : {}),
           ...(r.gap ? {dataSupport:r.gap.dataSupport} : {}),
@@ -1653,7 +1661,13 @@ function useWorkspaceValue(initialState: State) {
     [add, patch],
   );
   const attachScope=(...items:ScopeItem[])=>{
-    const merged=mergeScope(latest.current.draftScope || [],items);
+    const previous=latest.current.draftScope || [];
+    if (items.some(item=>item.kind==="time") && !items.some(item=>item.kind==="grid") &&
+        previous.some(item=>item.kind==="grid" && item.coverageScope?.summary)) {
+      patch({error:"已附加范围包含原时段。要改用其他时段，请重新附加地图范围。"});
+      return;
+    }
+    const merged=mergeScope(previous,items);
     if(merged.length>10){patch({error:"一次最多引用 10 个对象，请先移除一项。"});return;}
     patch({draftScope:merged,chatOpen:true,inspector:null,evidence:null});
   };
@@ -1750,7 +1764,7 @@ function useWorkspaceValue(initialState: State) {
     async (query: string) => {
       const q = query.trim(),
         s = latest.current;
-      if (!q || s.pending || request.current) return;
+      if (!q || s.pending || s.attachingMapScope || request.current) return;
       // Explicit workspace commands remain local after attachments are removed.
       // Ordinary science questions do not acquire an area or year just by browsing.
       const useComposerScope=!isWorkspaceCommand(q) && (s.draftScope!==null || (!s.caseId && !s.citation &&

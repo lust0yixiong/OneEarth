@@ -18,8 +18,9 @@ interface Props {
   details?:CitationDetails[];
   inCell?:ReadonlySet<string>; focused?:string; limitation?:string; open?:(refs:AnswerReference[])=>void;
   animate?:boolean; onComplete?:()=>void;
+  savedActions?: ReadonlyMap<string,()=>void>;
 }
-export function AnswerContent({quote,selectedReferences,text,references,details,inspect,hover,inCell,focused,limitation,open,onComplete}:Props) {
+export function AnswerContent({quote,selectedReferences,text,references,details,inspect,hover,inCell,focused,limitation,open,onComplete,savedActions}:Props) {
   const blocks=useMemo(()=>answerBlocks(text),[text]);
   // The server returns a fully validated answer, not model token deltas.
   // Display available text and its source actions in the same paint.
@@ -48,6 +49,7 @@ export function AnswerContent({quote,selectedReferences,text,references,details,
         const id=ref.kind==="asset"?ref.id:undefined;
         const label=parts[i-1]?.trimEnd().endsWith(ref.title)?part:citationLabel(ref.title)+part;
         return <CitationLink key={i} reference={ref} number={+marker[1]} label={label} details={details?.[+marker[1]-1] || citationDetails(ref)}
+          openSaved={ref.kind==="web"?savedActions?.get(ref.url):undefined}
           quote={quote} selected={selectedReferences?.some(r=>r.kind===ref.kind && (r.kind==="asset" && ref.kind==="asset"?r.id===ref.id:r.kind==="web" && ref.kind==="web" && r.url===ref.url))} inspect={inspect} hover={hover} inCell={!!id&&inCell?.has(id)} focused={!!id&&focused===id}/>;
       }
       if(part.startsWith("**")&&part.endsWith("**"))return <strong key={i}>{inline(part.slice(2,-2))}</strong>;

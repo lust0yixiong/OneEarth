@@ -1,6 +1,7 @@
 import { createPortal } from "react-dom";
 import {ResearchRegionLayer} from "./ResearchRegionLayer";
 import {gridScope,timeScope} from "../domain/question-scope";
+import {attachCoverageScope,CoverageScopeChanged} from "../domain/coverage-attachment";
 import {RainfallControls} from "./RainfallControls";
 import {useCatalogRevision} from "./use-catalog-revision";
 import {answerEvidence} from "../domain/answer-map";
@@ -193,6 +194,16 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
     anchor: null,
   });
   const [gridList, setGridList] = useState<CandidateSet | null>(null);
+  const scopeRequest=useRef<AbortController | null>(null);
+  useEffect(()=>{
+    return ()=>{
+      if (scopeRequest.current) {
+        scopeRequest.current.abort();
+        scopeRequest.current=null;
+        patch({attachingMapScope:false});
+      }
+    };
+  },[s.sessionId,patch]);
   const [hover,setHover]=useState<GridHover|null>(null);
   const listButton = useRef<HTMLButtonElement>(null);
   const closeGridList = () => {
@@ -369,6 +380,10 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   const selectedBatch=useMemo(()=>selectedScope?{...selectedScope,camera:s.camera}:null,[selectedScope,s.camera]);
   const sceneMode=s.mapResult?.metric==="scenes";
   const countedCatalog=catalogMode && !sceneMode && !s.dataView && !s.visualization;
+  const indexedScope=catalogMode && !s.dataView && !s.visualization;
+  const coverageSelection=frame.coverageSelection;
+  const selectedCoverage=coverageSelection?.selection === s.selection &&
+    coverageSelection?.filters === s.filters && coverageSelection?.batch === s.mapResult ? coverageSelection : undefined;
   const selectedCount=s.selection && frame.coloredSelection===s.selection.grid.key+"/"+s.selection.id?frame.coloredProducts:undefined;
   const countLegend=(pushMode || s.mapResult?.ids.some(id=>!!observationById(id)))?"格内已核观测记录数":"格内已核观测景数";
   const showOverview=!!s.mapResult || pushMode || !!s.filters.type || !catalogMode;
@@ -376,6 +391,37 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   const selectedScenes=useMemo(()=>selectedScope ? checkedScenes(selectedScope) : [],[selectedScope]);
   const outsideFrozen =
     !!s.mapResult && outsideMappedSelection(s.mapResult, s.selection);
+  async function askSelectedScope() {
+    const selection=s.selection;
+    if (!selection || scopeRequest.current || s.pending) return;
+    const place=geoOrientation(selection.point).split("（")[0];
+    if (!indexedScope) {
+      attachScope(gridScope(selection,place),...timeScope(s.filters));
+      return;
+    }
+    if (!selectedCoverage) {
+      patch({error:"覆盖未知，暂时无法附加此范围。请等待地图读取后重试。"});
+      return;
+    }
+    const controller=new AbortController();
+    scopeRequest.current=controller;
+    patch({attachingMapScope:true});
+    try {
+      const scoped=await attachCoverageScope(s.filters,s.mapResult,selection,selectedCoverage.revision,
+        AbortSignal.any([controller.signal,AbortSignal.timeout(8000)]));
+      if (!controller.signal.aborted) attachScope(gridScope(scoped.selection,place,scoped.coverageScope));
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      if (error instanceof CoverageScopeChanged) renderer.current?.invalidateCoverage();
+      patch({error:error instanceof Error && !["TimeoutError","TypeError"].includes(error.name)
+        ? error.message : "覆盖未知，暂时无法附加此范围。请重试。"});
+    } finally {
+      if (scopeRequest.current===controller) {
+        scopeRequest.current=null;
+        patch({attachingMapScope:false});
+      }
+    }
+  }
   const cellGroups = useMemo(()=>spatialGroups(selectedAssets, {
     lookups: s.mapResult?.lookups,
     caseId: s.caseId || s.mapResult?.caseId,
@@ -1110,11 +1156,10 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
               查看数据
             </button>
             <button
-              onClick={() => {
-                attachScope(gridScope(s.selection!,geoOrientation(s.selection!.point).split("（")[0]),...timeScope(s.filters));
-              }}
+              disabled={s.attachingMapScope || s.pending || (indexedScope && outsideFrozen)}
+              onClick={() => void askSelectedScope()}
             >
-              用此范围提问
+              {s.attachingMapScope ? "正在附加范围…" : indexedScope ? "用此范围提问" : "引用位置提问"}
               <ArrowUpRight size={12} />
             </button>
           </div>

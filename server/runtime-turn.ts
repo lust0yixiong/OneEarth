@@ -2,7 +2,7 @@ import {literatureText,literatureDisplay} from "../src/domain/literature-label";
 import { requestPerformance } from "./request-performance";
 import type { TaskStore } from "./task-store";
 import type { researchRegions } from "./research-region";
-import type { coverageIndex } from "./coverage-index";
+import type { spatialCoverageClient } from "./spatial-coverage-client";
 import type { paperCache } from "./earthnano";
 import type { hainaService } from "./haina-search";
 import type { constellationService } from "./constellations";
@@ -10,7 +10,7 @@ import { assetById, registerObservations, registerPapers } from "../src/domain/d
 import { modelReply } from "./research-answer";
 import { validHistory } from "./turn-history";
 import path from "node:path";
-import {questionGridEvidence} from "./question-grid";
+import {gridCoverageSummary,questionGridEvidence,verifiedGridContext} from "./question-grid";
 import {ExecutorFailure} from "./executor-failure";
 import {prepareTurn,turnMetadata,turnPlanSchema,TurnPlanningFailure,type TurnPlan} from "./turn-planning";
 import {randomUUID} from "node:crypto";
@@ -22,6 +22,7 @@ import {conversationScope,scopedReply} from "./conversation-scope";
 import {discoverConversation} from "./conversation-discovery";
 import { priorResult } from "./runtime-input";
 import { numberedReference } from "./follow-up-reference";
+import { parentResearchEvidence } from "./parent-research-evidence";
 import {AnswerReferenceError,synthesisFailureDiagnostic} from "./scientific-answer";
 import {scopeLabel} from "../src/domain/question-scope";
 import {navigationTarget,parseCoordinates,photonLookup,wikipediaLookup,placeVariants,canonicalPlaceNames,placeLookupSchema,geocoderEnabled,type NavigationTarget,type PlaceHit} from "./place-lookup";
@@ -39,7 +40,7 @@ export interface RuntimeServices {
   cachedPapers: ReturnType<typeof paperCache>;
   haina: ReturnType<typeof hainaService>;
   push: ReturnType<typeof constellationService>;
-  coverage: ReturnType<typeof coverageIndex>;
+  coverage: ReturnType<typeof spatialCoverageClient>;
   researchRegionService: ReturnType<typeof researchRegions>;
   adminBoundaryDir: string;
   canonicalCache: Map<string,{at:number;names:string[]}>;
@@ -57,7 +58,8 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
   deepseekTools?: import("../src/domain/deepseek-tools").DeepSeekTools;
 }, signal: AbortSignal, publish: (payload:Record<string, unknown>) => void): Promise<Record<string, unknown>> {
   const {tasks, cachedPapers, haina, push, coverage, researchRegionService, adminBoundaryDir, canonicalCache} = services;
-  const {query, context, history, questionDecision: decision} = body;
+  const {query,history,questionDecision:decision}=body;
+  let context=body.context;
   const controller = {signal};
   const executor=researchExecutor(body.config,body.deepseekTools,signal);
   const runTrace:RunTrace = {started:Date.now(),stages:[],calls:[],timings:requestPerformance.getStore()};
@@ -74,9 +76,26 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     if(i<0)runTrace.calls.push(call);else runTrace.calls[i]=call;
     event({call,traceStarted:runTrace.started});
   }
+  async function readCoverage(scope:typeof context) {
+    const evidence = await questionGridEvidence(scope,coverage,signal);
+    if (evidence) report({id:"question-grid",kind:"tool",name:"读取所引网格的覆盖修订",input:evidence.cellId,
+      status:evidence.status==="ready"?"done":"partial",output:gridCoverageSummary(evidence)});
+    return evidence;
+  }
   try {
     event({conversationId:body.conversationId,turnId:body.turnId, ...(decision ? {continuedFrom:decision.checkMessageId} : {})});
     stage("正在理解问题");
+    const gridCoverage=await readCoverage(context);
+    if(gridCoverage){
+      const time=context.attachedScope?.find(item=>item.kind==="time");
+      const authoritative=gridCoverage.summary?.filters;
+      if(authoritative&&time&&(JSON.stringify(time.period)!==JSON.stringify(authoritative.period)||
+        JSON.stringify(time.utcWindow)!==JSON.stringify(authoritative.utcWindow??null))){
+        return {result:literatureDisplay({message:"附加的时间和已确认网格范围的时间不一致。请保留一个范围后继续。",clarification:true,runTrace})};
+      }
+      context=verifiedGridContext(context,gridCoverage);
+    }
+    const scopeUnverified=!!gridCoverage&&!gridCoverage.summary;
     const existing = cachedPaperIds(context).flatMap(id => cachedPapers.get(id) || []);
     registerPapers(existing,false);
     const conversationContext=validHistory(history)
@@ -102,7 +121,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       const plan:TurnPlan={action:"workspace",goal,evidenceNeed:"none",targets:[],
         reason:"用户明确要求定位或移动地图视野；这是界面操作，直接定位，不进入数据检索。",
         clarification:null,researchIntent:{...meta.researchIntent,region:coordinate?null:target.place.slice(0,1200)},
-        conversationContext:(meta.conversationContext||query).slice(0,1600),searchPlan:undefined};
+        conversationContext:(meta.conversationContext||query).slice(0,1600)};
       stage("正在定位「"+target.place+"」");
       report({id:"turn-action",kind:"tool",name:"本轮目标与动作规划",input:JSON.stringify({question:query,targets:[]}),status:"done",
         output:JSON.stringify({action:"workspace",goal,reason:plan.reason})});
@@ -132,7 +151,8 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         const result = await executor.discover(discoveryId, {
           query, decision, continuation,
           continuedFrom:decision?.checkMessageId,
-          initialPlan:continuation?undefined:turn.searchPlan, conversationContext, previousResearchIntent:planningIntent,
+          researchGoal:decision?.dataQuestion||turn.goal, evidenceGap:continuation?.focus||turn.evidenceGap,
+          conversationContext, previousResearchIntent:planningIntent,
           history, currentDatasets, conversationEvidence,
           scope:{filters:context.filters,selection:context.selection,caseId:context.caseId,citation:context.citation,attachedScope:context.attachedScope},
           references:rememberConversationReferences(history.filter(t=>t.role==="assistant").at(-1)?.conversationReferences||[],
@@ -165,19 +185,23 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       }
     }
     const prepared = navigation ? navigationTurn(navigation) : await prepareTurn({
-      question:query, context, history, conversationContext,
+      question:decision?.dataQuestion||query, context, history, conversationContext,
       previousResearchIntent:planningIntent,confirmedQuestion:decision?.dataQuestion,numbered:selected,
       numberedRead:ref?.kind==="web"?prior?.conversationEvidence?.find(read=>read.url===ref.url):undefined,
       numberedAssertion:ref?.kind==="asset"?prior?.conversationAssertionEvidence?.find(read=>read.assetId===ref.id):undefined,
     }, signal, {
       run: prompt => executor.model(prompt, {outputSchema:turnPlanSchema}),
       stage, report,
-      search:find,
+      search:p=>scopeUnverified?Promise.resolve(undefined):find(p),
     });
     const turn=prepared.plan;
     let retrieved=prepared.retrieval;
     let readRuns:SearchRun[]=[];
     await regionTask;
+    if(gridCoverage&&!gridCoverage.summary&&(turn.action==="search" || turn.action==="clarify")){
+      return {result:literatureDisplay({message:gridCoverageSummary(gridCoverage),clarification:true,gridCoverage,runTrace,
+        researchIntent:turn.researchIntent,conversationContext:turn.conversationContext})};
+    }
     if(!retrieved?.questionCheck&&!retrieved?.clarification&&(retrieved||turn.action==="read")){
       const targetQuery=decision?.dataQuestion||query;
       if(turn.action==="read")readRuns=await executor.read(turn,targetQuery,{stage,report});
@@ -189,7 +213,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
           read:(targets,focus,step)=>executor.read({...turn,action:"read",targets},targetQuery+"\n"+focus,
             {stage,report,callPrefix:"research-read-"+step+"-"}),
           discover:focus=>find(turn,{previousId:taskId,focus}),stage,report,
-        });
+        },decision);
         if(outcome.clarification)return {result:literatureDisplay({
           message:outcome.clarification,clarification:true,runTrace,researchRegion,
           researchIntent:retrieved?.plan.researchIntent||turn.researchIntent,
@@ -203,6 +227,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     if(turn && turn.action!=="search"){
       const complete=(reply:DiscoveryResponse)=>{
         reply.runTrace=literatureDisplay(runTrace);
+        if(gridCoverage)reply.gridCoverage=gridCoverage;
         return {result:literatureDisplay(reply)};
       };
       const continuity={researchIntent:turn.researchIntent,conversationContext:turn.conversationContext,conversationEvidence,conversationAssertionEvidence};
@@ -309,15 +334,13 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         return complete({...operation,...(!actionable&&!navigationHandled?{message:"本轮没有执行界面切换。可点击引用打开预览，或明确指定要切换的网格、时段或图层。"}:{}),...continuity});
       }
       let summary="本轮只处理已指定对象和已有内容，没有执行数据发现检索。";
-      if(turn.action==="read" && turn.targets.some(t=>t.kind==="grid")){
-        const grid=await questionGridEvidence(context,coverage,controller.signal);
-        summary+=grid?"所引网格与时段的目录定位索引匹配 "+grid.count+" 种数据集；这不是观测条数，也不证明有当地有效测量。":"本轮未取得所引网格的索引，不能声称本格有观测。";
-        report({id:"question-grid",kind:"tool",name:"读取所引网格索引",input:context.selection?.id||"",status:grid?"done":"failed",output:summary});
-      }
+      const priorEvidence=context.citation||context.attachedScope?.some(item=>item.kind!=="reference")
+        ?undefined:parentResearchEvidence(prior,turn,targetQuery);
+      if(gridCoverage)summary+="\n"+gridCoverageSummary(gridCoverage);
       if(pinnedIds.length)report({id:"referenced-material",kind:"tool",name:"采用所引资料的已存内容",input:pinnedIds.join("、"),
         status:pinnedIds.every(id=>assetById.has(id))?"done":"partial",output:"已存资料身份 "+pinnedIds.filter(id=>assetById.has(id)).length+" 项；没有重新检索文献库或海纳。"});
-      const reply=await modelReply(targetQuery,context,{message:summary},history,executor,signal,
-        stage,pinnedPapers,"",undefined,undefined,report,{plan:turn,searches:readRuns});
+      const reply=await modelReply(targetQuery,context,{message:summary,gridCoverage},history,executor,signal,
+        stage,pinnedPapers,"",undefined,undefined,report,{plan:turn,searches:readRuns,priorEvidence});
       if(pinnedPapers.length)reply.paperRecords=literatureDisplay(pinnedPapers);
       reply.hainaRecords=pinnedIds.flatMap(id=>id.startsWith("haina:")?haina.records().filter(r=>String(r.id)===id.slice(6)):[]);
       if(reply.answerNotes)reply.answerNotes.elapsedMs=Date.now()-runTrace.started;
@@ -329,6 +352,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
           researchIntent:retrieved.plan.researchIntent,conversationContext:retrieved.plan.conversationContext,conversationEvidence,conversationAssertionEvidence}
         : {message:retrieved.clarification!,clarification:true,runTrace,researchIntent:retrieved.plan.researchIntent,conversationContext:retrieved.plan.conversationContext,conversationEvidence,conversationAssertionEvidence};
       reply.researchRegion=researchRegion;
+      if(gridCoverage)reply.gridCoverage=gridCoverage;
       return {result:reply};
     }
     if(retrieved&&readRuns.length)retrieved={...retrieved,searches:[...retrieved.searches,...readRuns]};
@@ -338,29 +362,20 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     const lookupQuery=[decision?.dataQuestion || query,retrieved?.plan.conversationContext].filter(Boolean).join("\n");
     const catalogCall={id:"catalog",kind:"tool" as const,name:"OneEarth 数据目录",input:lookupQuery};
     report({...catalogCall,status:"running"});
-    const scopedContext=conversationScope(context,retrieved?.plan);
-    let gridEvidence;
-    if(context.attachedScope?.some(i=>i.kind==="grid")){
-      stage("正在核对所引网格的目录定位依据");
-      gridEvidence=await questionGridEvidence(scopedContext,coverage,controller.signal).catch(()=>undefined);
-      controller.signal.throwIfAborted();
-      const detail=gridEvidence?"该网格与所选时段下，目录内有 "+gridEvidence.count+" 种可定位数据集。索引关联不证明有当地有效观测。":"暂未取得网格索引，不能判断格内数量。";
-      report({id:"question-grid",name:"所引网格定位依据",input:scopedContext.selection!.id,kind:"tool",status:gridEvidence?"done":"failed",output:detail});
-      if(gridEvidence && !scopedContext.candidateIds?.length && gridEvidence.ids.length){
-        scopedContext.candidateIds=gridEvidence.ids;scopedContext.inCandidateScope=true;
-      }
+    const scopedContext=gridCoverage?{...context}:conversationScope(context,retrieved?.plan);
+    if(gridCoverage?.status==="ready" && !scopedContext.candidateIds?.length && gridCoverage.sourceIds.length){
+      scopedContext.candidateIds=gridCoverage.sourceIds.slice(0,32);scopedContext.inCandidateScope=true;
     }
-    const observation=discoverObservations(lookupQuery,scopedContext,push);
+    const observation=gridCoverage?undefined:discoverObservations(lookupQuery,scopedContext,push);
     const constellationFeed=observation?.pushFeed || push.latest();
     registerObservations(constellationFeed.records,!observation);
-    const discovery=retrieved?discoverConversation(decision?.dataQuestion || query,scopedContext,retrieved.plan.conversationContext):discover(query,scopedContext);
-    const result=scopedReply(observation || await resolveSceneQuery(lookupQuery,discovery),scopedContext,retrieved?.plan);
-    if(context.attachedScope?.some(i=>i.kind==="grid"))result.message+="\n"+(gridEvidence?
-      "OneEarth 本格目录定位索引匹配 "+gridEvidence.count+" 种数据集（不是观测条数）；对应来源记录示例 ID："+gridEvidence.ids.join("、"):"本格目录定位名单尚未取得，不能声称有本地观测。");
-    report({...catalogCall,status:"done",output:result.message});
+    const localResult=()=>retrieved?discoverConversation(decision?.dataQuestion || query,scopedContext,retrieved.plan.conversationContext):discover(query,scopedContext);
+    const result=gridCoverage?{message:gridCoverageSummary(gridCoverage),gridCoverage}:
+      scopedReply(observation || await resolveSceneQuery(lookupQuery,localResult()),scopedContext,retrieved?.plan);
+    report({...catalogCall,status:gridCoverage?.status==="unknown"?"partial":"done",output:result.message});
     {
       const paperTrace=retrieved!.sourceStatus.map(s=>s.source+" "+(s.status==="done"?"完成":s.status==="partial"?"部分完成":"未完成")+" · "+s.count+" 项").join("；");
-      const reply:DiscoveryResponse=await modelReply(query,scopedContext,result,history,executor,signal,
+      const reply:DiscoveryResponse=await modelReply(decision?.dataQuestion||query,scopedContext,result,history,executor,signal,
         stage,retrieved!.papers,paperTrace,
         !context.filters.source || context.filters.source==="constellation"?constellationFeed:undefined,retrieved,report);
       if(retrieved!.papers.length)reply.paperRecords=literatureDisplay(retrieved!.papers);

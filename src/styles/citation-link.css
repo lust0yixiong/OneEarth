@@ -18,3 +18,12 @@
 .citation-followup:hover {background:#dceadf;}
 .citation-followup:focus-visible {outline:2px solid #488b65;outline-offset:1px;}
 @media(hover:none) {.citation-followup {visibility:visible;}}
+.answer-prose .saved-web-evidence-action,.oe-web-source .saved-web-evidence-action {
+  color:#236046;font-size:12px;line-height:1.5;padding:2px 5px;border-radius:4px;
+  background:#edf4ee;white-space:nowrap;
+}
+.answer-prose .saved-web-evidence-action {margin-inline:3px;}
+.oe-web-source:has(.saved-web-evidence-action) {padding-bottom:10px;border-bottom:1px solid var(--line);}
+.oe-web-source:has(.saved-web-evidence-action) .oe-source-card {border-bottom:0;padding-bottom:4px;}
+.saved-web-evidence-action:hover,.saved-web-evidence-action:focus-visible {text-decoration:underline;}
+.evidence-body blockquote.saved-web-excerpt {white-space:pre-wrap;overflow-wrap:anywhere;}

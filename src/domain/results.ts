@@ -1,4 +1,4 @@
-import {globalProduct,productKey,regionHit,regionRecords} from "./product-distribution";
+import {globalProduct,productKey,regionHit,regionRecords,timeFits} from "./product-distribution";
 import {countBand,countBands} from "./distribution-heat";
 import { paperRecords } from "./paper-record";
 import {accessMembership} from "./data-access";
@@ -209,6 +209,7 @@ export function catalogGrid(
   grid: GridSpec,
   filters: Filters,
   result?: CandidateSet | null,
+  references?: { cell: string; records: Map<string, Set<string>> },
 ) {
   if (catalogEvidenceGrid(grid, result).key !== grid.key)
     return new Map<string, Set<string>>();
@@ -220,15 +221,21 @@ export function catalogGrid(
     grid.key,
     filters,
     result?.ids, result?.metric,
-    result?.lookups?.map(l => [l.assetId, l.point, l.matched]),
+    result?.lookups?.map(l => [l.assetId, l.point, l.matched, l.years, l.items.map(i => [i.id, i.datetime])]),
     result?.caseId,
     result?.layer,
     result?.selection?.grid.key,
     result?.selection?.id,
   ]);
-  const cached = cachedGrids.get(key);
+  const cached = references ? undefined : cachedGrids.get(key);
   if (cached) return cached;
   const cells = new Map<string, Set<string>>();
+  function reference(cell: string, member: string, record: string) {
+    if (references?.cell !== cell) return;
+    const ids = references.records.get(member) ?? new Set<string>();
+    ids.add(record);
+    references.records.set(member, ids);
+  }
   // Saved references may be absent from the discoverable feed. Group their
   // exact registered IDs once; do not scan every catalogue group per batch ID.
   // Received observations are handled by the separate pushed path below.
@@ -256,6 +263,7 @@ export function catalogGrid(
       result?.layer || "all",
       grid,
     )) {
+      if (references && cell !== references.cell) continue;
       if (selection?.grid.key === grid.key && cell !== selection.id) continue;
       // indexFor already applies these filters in the evidence grid, and the
       // selected cell was checked above. Do not intersect separate entry
@@ -265,7 +273,14 @@ export function catalogGrid(
       );
       if (!ids.length) continue;
       const bucket = cells.get(cell) || new Set<string>();
-      ids.forEach(a=>{if(result?.metric==="scenes")return;const key=productKey(a);if(key && !globalProduct(a,filters))bucket.add(key);});
+      for (const asset of ids) {
+        if (result?.metric === "scenes") continue;
+        const member = productKey(asset);
+        if (member && !globalProduct(asset, filters)) {
+          bucket.add(member);
+          reference(cell, member, asset.id);
+        }
+      }
       if(bucket.size)cells.set(cell,bucket);
     }
   }
@@ -274,26 +289,43 @@ export function catalogGrid(
     if (r.geometry.type!=="Point") continue;
     if (!visibleObservation(r,filters,result?.layer || "all")) continue;
     for (const id of observationCells(r,grid)) {
+      if (references && id !== references.cell) continue;
       if(result?.selection && result.selection.id!==id) continue;
       const bucket=cells.get(id)||new Set<string>();
-      bucket.add(result?.metric==="scenes" ? r.key : a.datasetId);
+      const member = result?.metric === "scenes" ? r.key : a.datasetId;
+      bucket.add(member);
+      reference(id, member, a.id);
       cells.set(id,bucket);
     }
   }
   for (const l of result?.lookups || []) {
     if (!l.matched || !result!.ids.includes(l.assetId) || !lookupInPeriod(l,filters)) continue;
     const id = cellAt(l.point, grid);
+    if (references && id !== references.cell) continue;
     if (result?.selection && id !== result.selection.id) continue;
     const asset = assetById.get(l.assetId);
     if (!asset || !needVisible(asset.caseId, asset.needIndex, filters)) continue;
     const bucket = cells.get(id) || new Set<string>();
-    if(result?.metric==="scenes"){
-      for(const i of l.items) if((!filters.period||+i.datetime.slice(0,4)>=filters.period[0]&&+i.datetime.slice(0,4)<=filters.period[1]) && withinWindow(i.datetime,filters.utcWindow)) bucket.add(asset.datasetId+"/"+i.id);
-    } else if(productKey(asset)) bucket.add(productKey(asset)!);
+    if (result?.metric === "scenes") {
+      for (const item of l.items) {
+        if (!timeFits(item.datetime, filters)) continue;
+        const member = asset.datasetId + "/" + item.id;
+        bucket.add(member);
+        reference(id, member, asset.id);
+      }
+    } else {
+      const member = productKey(asset);
+      if (member) {
+        bucket.add(member);
+        reference(id, member, asset.id);
+      }
+    }
     cells.set(id, bucket);
   }
-  if (cachedGrids.size > 20) cachedGrids.clear();
-  cachedGrids.set(key, cells);
+  if (!references) {
+    if (cachedGrids.size > 20) cachedGrids.clear();
+    cachedGrids.set(key, cells);
+  }
   return cells;
 }
 export function makeCandidates(scope: Omit<CandidateSet, "ids">) {

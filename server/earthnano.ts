@@ -59,6 +59,8 @@ export function paperCache(file: string) {
   const publish = db.prepare("INSERT INTO dataset_catalog VALUES (?,?) ON CONFLICT(ds_key) DO UPDATE SET id=excluded.id");
   const state = db.prepare("SELECT payload FROM dataset_catalog_state WHERE key='current'");
   const setState = db.prepare("INSERT INTO dataset_catalog_state VALUES ('current',?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload");
+  const dataVersion = db.prepare("PRAGMA data_version");
+  const publishedIds = db.prepare("SELECT ds_key,id FROM dataset_catalog ORDER BY ds_key");
   if (!state.get()) {
     const seen = new Set<string>();
     db.exec("BEGIN IMMEDIATE");
@@ -99,6 +101,8 @@ export function paperCache(file: string) {
         } catch { return []; }
       });
     },
+    dataVersion: () => Number(dataVersion.get()!.data_version),
+    publishedIds: () => publishedIds.all().map(row => [String(row.ds_key), String(row.id)]),
     page(cursor = "", limit = 250) {
       const rows=db.prepare("SELECT c.ds_key,e.payload FROM dataset_catalog c JOIN evidence e ON e.id=c.id WHERE c.ds_key>? ORDER BY c.ds_key LIMIT ?").all(cursor,limit+1);
       const hasMore=rows.length>limit, selected=rows.slice(0,limit);

@@ -49,7 +49,7 @@ test('one hydration batch retains both historical references for the same datase
 test('coverage scope hydrates a saved local paper record on demand without publishing it',async()=>{
  const r=record('d','doi:10.9999/hydrated-saved-point',[-66.9,18.4]),directory=await mkdtemp(path.join(tmpdir(),'saved-coverage-'));
  const index=coverageIndex(path.join(directory,'coverage.sqlite'));const requests:string[][]=[];
- const app=express();app.use(express.json());app.use('/coverage',coverageRouter(index,ids=>{requests.push(ids);registerPapers(ids.includes(r.id)?[r]:[],false);}));
+ const app=express();app.use(express.json());app.use('/coverage',coverageRouter(index,{revision:()=>"a".repeat(64),hydrateBatch:ids=>{requests.push(ids);registerPapers(ids.includes(r.id)?[r]:[],false);}}));
  const server=app.listen(0,'127.0.0.1');await new Promise<void>(resolve=>server.once('listening',resolve));
  const address=server.address();assert.ok(address&&typeof address!=='string');const url='http://127.0.0.1:'+address.port+'/coverage/';
  const post=async(route:string,body:unknown)=>{const res=await fetch(url+route,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});assert.equal(res.status,200);return res.json();};

@@ -47,7 +47,7 @@ test("the same numbered source reaches model planning with its real read coverag
         assert.match(prompt,/已有截断的节选/);
         assert.match(prompt,/"excerptTruncated":true/);
         return JSON.stringify({action,evidenceNeed,targets:[same.key],goal:i.question,...turnMetadata(i.question,i),
-          reason:"依据本轮目标决定动作",clarification:null,searchPlan:null});
+          reason:"依据本轮目标决定动作",clarification:null,evidenceGap:action==="search"?"需要额外来源印证资料用法":null});
       },
       search:async()=>{delegated++;return {} as never;},stage:()=>{},report:()=>{},
     });
@@ -76,7 +76,7 @@ test("a valid model action can omit a single server-bound reference without repl
       run:async()=>{
         plans++;
         return JSON.stringify({action,evidenceNeed,targets:[],goal:question,...turnMetadata(question,i),
-          reason:"依据本轮研究目标",clarification:null,searchPlan:null});
+          reason:"依据本轮研究目标",clarification:null,evidenceGap:action==="search"?"需要一篇独立研究":null});
       },
       search:async plan=>{delegated++;assert.equal(plan.targets[0].url,website.url);return {} as never;},stage:()=>{},report:()=>{},
     });
@@ -95,7 +95,7 @@ test("unknown targets, conflicting reads and forbidden discovery remain blocked"
     context:{caseId:null,filters:emptyFilters(),selection:null,camera:{center:[105,25],zoom:1,reason:"test"},
       gridSystem:"h3",layer:"all",citation:null}};
   const draft={action:"read",evidenceNeed:"read",goal:question,reason:"处理指定来源",
-    ...turnMetadata(question,i),clarification:null,searchPlan:null};
+    ...turnMetadata(question,i),clarification:null,evidenceGap:null};
   assert.throws(()=>parseTurnPlan(JSON.stringify({...draft,targets:["web:https://example.org/invented"]}),i),/引用对象无效/);
   assert.throws(()=>parseTurnPlan(JSON.stringify({...draft,targets:["web:"+attached.url]}),i),/定向读取只能/);
   assert.throws(()=>parseTurnPlan(JSON.stringify({...draft,action:"search",evidenceNeed:"discover",targets:[]}),i),/不做新检索/);
@@ -109,7 +109,7 @@ test("a final invalid plan exposes a user action, with validation details only i
   const attempts:string[]=[];
   await assert.rejects(()=>prepareTurn(i,new AbortController().signal,{
     run:async()=>JSON.stringify({action:"search",evidenceNeed:"discover",goal:question,reason:"需要新资料",
-      ...turnMetadata(question,i),clarification:null,searchPlan:null,targets:["unknown-extra-target"]}),
+      ...turnMetadata(question,i),clarification:null,evidenceGap:null,targets:["unknown-extra-target"]}),
     search:async()=>assert.fail("invalid scope cannot call discovery"),stage:()=>{},report:call=>{
       if(call.status==="failed")attempts.push(call.output!);
     },

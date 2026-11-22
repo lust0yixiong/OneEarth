@@ -1,4 +1,4 @@
-import type {SearchRun, ToolCall} from "../src/domain/types";
+import type {QuestionDecision, SearchRun, ToolCall} from "../src/domain/types";
 import type {DataSearchResult} from "./data-search";
 import type {TurnPlan, TurnTarget} from "./turn-planning";
 import {mergeWebEvidence} from "./merge-web-evidence";
@@ -95,7 +95,7 @@ function joinedDiscovery(previous:DataSearchResult,next:DataSearchResult):DataSe
     sourceStatus:[...statuses.values()]};
 }
 
-export async function continueResearch(question:string,plan:TurnPlan,material:Materials,signal:AbortSignal,deps:Dependencies):Promise<Outcome>{
+export async function continueResearch(question:string,plan:TurnPlan,material:Materials,signal:AbortSignal,deps:Dependencies,confirmation?:QuestionDecision):Promise<Outcome>{
   let {retrieval}=material;
   const reads=[...material.reads];
   const gaps=new Set<string>();
@@ -104,7 +104,7 @@ export async function continueResearch(question:string,plan:TurnPlan,material:Ma
   for(let step=1;step<=limit+1;step++){
     signal.throwIfAborted();
     const {view,allowed}=materialView({retrieval,reads},plan.targets);
-    const actions=["answer","clarify"];
+    const actions=confirmation?["answer"]:["answer","clarify"];
     if(step<=limit){
       if(allowed.size)actions.push("read");
       if(discoveryAllowed&&gaps.size<1)actions.push("discover");
@@ -117,7 +117,10 @@ export async function continueResearch(question:string,plan:TurnPlan,material:Ma
     deps.report({...call,status:"running"});
     let decision:Decision;
     try{
-      const input={question,goal:plan.goal,actions,attemptedDiscoveryGaps:[...gaps],materials:view};
+      const input={question,goal:confirmation?.dataQuestion||plan.goal,
+        confirmation:confirmation&&{choice:confirmation.choice,question:confirmation.dataQuestion,
+          note:"用户已确认本轮目标。按已确认范围使用实际材料，缺口可在答复中说明。"},
+        actions,attemptedDiscoveryGaps:[...gaps],materials:view};
       decision=decisionFrom(await deps.model(instructions+"\n"+JSON.stringify(input)),allowed,actions,gaps);
     }catch(error){
       signal.throwIfAborted();
@@ -138,6 +141,10 @@ export async function continueResearch(question:string,plan:TurnPlan,material:Ma
     gaps.add(focus.normalize("NFKC").toLowerCase());
     try{
       const next=await deps.discover(focus,step);
+      if(confirmation&&(next.questionCheck||next.clarification)){
+        retrieval={...retrieval!,issues:[...retrieval!.issues,"补充发现需要新的范围选择，已保留此前材料。"]};
+        break;
+      }
       if(next.questionCheck) return {retrieval,reads,clarification:"补查需要调整当前问题。请明确希望改变的研究条件。"};
       if(next.clarification)return {retrieval,reads,clarification:next.clarification};
       retrieval=joinedDiscovery(retrieval!,next);

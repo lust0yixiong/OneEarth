@@ -59,7 +59,7 @@ import type {
   Coordinate,
 } from "../domain/types";
 export interface Scene {
-  flight?:{kind?:"research-region"|"place"}|null;
+  flight?:{kind?:"research-region"|"place"|"grid"}|null;
   researchRegion?:import("../domain/research-region").ResearchRegionLayer|null;
   observationGlobe?:boolean;
   onObservationPick?:(x:number,y:number)=>void;
@@ -94,6 +94,7 @@ export interface FrameInfo {
   clusterKeys?: string[];
   coloredProducts?: number;
   coloredSelection?: string;
+  coverageSelection?: {selection: Selection; filters: Filters; batch: Scene["mapResult"]; revision: string};
   productCell?: { level: string; count: number; anchor: { x: number; y: number } | null };
   gridLabel: string;
   level: number;
@@ -159,7 +160,12 @@ export function createRenderer(
   let regionView:{revision:number;filters:Filters;batch:Scene["mapResult"];regions:ReturnType<typeof regionRecords>}|undefined;
   let focusView:{batch:Scene["mapResult"];filters:Filters;layer:MapLayer;revision:number;evidence:ReturnType<typeof answerEvidence>}|undefined;
   const motion=createCameraMotion({read:()=>getScene().camera,commit:onCamera,
-    changed:()=>{markInteraction();schedule();},canFly:()=>!disposed && (!getScene().pending || getScene().flight?.kind==="research-region" || getScene().flight?.kind==="place"),
+    changed:()=>{markInteraction();schedule();},
+    canFly:()=>{
+      const {pending,flight}=getScene();
+      // A pending answer must not interrupt an explicit grid navigation.
+      return !disposed && (!pending || flight?.kind==="grid" || flight?.kind==="research-region" || flight?.kind==="place");
+    },
     flightChanged:flying=>{canvas.dataset.flying=String(flying);if(flying)hoverIntent?.cancel();}});
   const stopFlight=motion.stopFlight,flyTo=motion.flyTo;
   let interacting = false,pendingNavigation=false;
@@ -278,6 +284,7 @@ export function createRenderer(
     }
     let clusterKeys: string[] | undefined;
     let coloredProducts: number | undefined;
+    let coverageSelection: FrameInfo["coverageSelection"];
     let coloredSelection: string | undefined;
     let productCell: FrameInfo["productCell"];
     let loading = "",
@@ -416,7 +423,7 @@ export function createRenderer(
         const viewportPending=!frozen && coverageViewport.pending;
         canvas.dataset.viewportPending=String(viewportPending);
         const ids=visible.map(cell=>cell.id);
-        if(scene.selection?.grid.key===evidenceGrid.key && !ids.includes(scene.selection.id))ids.unshift(scene.selection.id);
+        if(!frozen && scene.selection?.grid.key===evidenceGrid.key && !ids.includes(scene.selection.id))ids.unshift(scene.selection.id);
         const coverage=coverageClient.read(evidenceGrid,ids,scene.filters,scene.mapResult,scene.paperFeed?.loading?0:catalogRevision(),interacting);
         const cells=coverage.cells;
         canvas.dataset.coveragePending=String(coverage.pending||viewportPending);
@@ -428,13 +435,18 @@ export function createRenderer(
             regionView={revision:catalogRevision(),filters:scene.filters,batch:scene.mapResult,regions:regionRecords(scene.filters,scene.mapResult)};
           regions=regionView.regions;
         }
-        if (!pushMode && scene.selection) {
+        if (scene.selection && (!frozen || (frozen.id===scene.selection.id && frozen.grid.key===scene.selection.grid.key))) {
           // A retained selection keeps its original grid when navigation zooms
           // to another level. Its headline still reads the indexed exact count.
           const selected=scene.selection.grid.key===evidenceGrid.key ? coverage : !frozen ?
             selectedCoverageClient.read(scene.selection.grid,[scene.selection.id],scene.filters,scene.mapResult,scene.paperFeed?.loading?0:catalogRevision(),interacting) : undefined;
-          coloredSelection=scene.selection.grid.key+"/"+scene.selection.id;
-          coloredProducts=selected?.ready.has(scene.selection.id)?selected.cells.get(scene.selection.id)??0:undefined;
+          if (selected?.revision) coverageSelection={
+            selection:scene.selection,filters:scene.filters,batch:scene.mapResult,revision:selected.revision,
+          };
+          if(!pushMode) {
+            coloredSelection=scene.selection.grid.key+"/"+scene.selection.id;
+            coloredProducts=selected?.ready.has(scene.selection.id)?selected.cells.get(scene.selection.id)??0:undefined;
+          }
           if(selected?.pending && !loading)loading=selected.error || "正在读取所选网格计数…";
         }
         for (const areaCase of scene.mapResult?.selection ? [] : ["Q07"]) {
@@ -745,7 +757,7 @@ export function createRenderer(
       if (p[0] >= 0 && p[0] <= width && p[1] >= 0 && p[1] <= height)
         anchor = { x: p[0], y: p[1] };
     }
-    onFrame({ answerPins,clusterKeys, coloredProducts, coloredSelection, productCell, gridLabel: g.label, level: band, visibleCells, loading, anchor });
+    onFrame({ answerPins,clusterKeys, coloredProducts, coloredSelection, coverageSelection, productCell, gridLabel: g.label, level: band, visibleCells, loading, anchor });
     canvas.dataset.painted = "true";
     canvas.dataset.focusWidth = String(width - (scene.rightInset || 0));
   }
@@ -861,6 +873,10 @@ export function createRenderer(
   schedule();
   return {
     render: schedule,
+    invalidateCoverage() {
+      coverageClient.invalidate();
+      selectedCoverageClient.invalidate();
+    },
     clearHover:cancelHover,
     get observationRevision(){return observationRevision;},
     projectVisible(point:Coordinate){

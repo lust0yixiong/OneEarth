@@ -1,26 +1,51 @@
-import {cellAt} from "../src/domain/spatial";
+import {cellAt,emptyFilters} from "../src/domain/spatial";
 import {dateEvidence} from "../src/domain/time-window";
-import {setTimeout as pause} from "node:timers/promises";
-import {catalogGrid} from "../src/domain/results";
-import {assets} from "../src/domain/datasets";
-import {productKey,regionRecords} from "../src/domain/product-distribution";
+import type {GridCoverageEvidence} from "../src/domain/grid-coverage";
 import type {DiscoveryContext} from "../src/domain/types";
-import {coverageScope,coverageProducts,type coverageIndex} from "./coverage-index";
+import type {spatialCoverageClient} from "./spatial-coverage-client";
 
-// Run after question confirmation. Use the same two spatial indexes as the globe.
-export async function questionGridEvidence(ctx:DiscoveryContext,index:ReturnType<typeof coverageIndex>,signal:AbortSignal){
-  const cell=ctx.attachedScope?.find(i=>i.kind==="grid")?.selection;
-  if(!cell)return;
-  const scope=coverageScope(regionRecords(ctx.filters));
-  for(let i=0;i<6;i++){
-    signal.throwIfAborted();
-    const hit=await index.read(cell.grid,[cell.id],scope.geometries);
-    if(!hit.hits.length){await pause(120,undefined,{signal});continue;}
-    const keys=coverageProducts(scope.products,hit.hits[0][1],catalogGrid(cell.grid,ctx.filters).get(cell.id));
-    const chosen=ctx.attachedScope!.filter(i=>i.kind==="dataset").map(i=>i.id);
-    const ids=assets.filter(a=>keys.has(productKey(a) || "")).sort((a,b)=>Number(chosen.includes(b.id))-Number(chosen.includes(a.id))).slice(0,32).map(a=>a.id);
-    return {count:keys.size,ids};
+export async function questionGridEvidence(ctx:DiscoveryContext,coverage:ReturnType<typeof spatialCoverageClient>,
+    signal:AbortSignal):Promise<GridCoverageEvidence|undefined>{
+  const attached = ctx.attachedScope?.find(item=>item.kind==="grid");
+  if (!attached) return;
+  signal.throwIfAborted();
+  const {selection,coverageScope} = attached;
+  if (!coverageScope)
+    return {cellId:selection.id,gridKey:selection.grid.key,status:"unknown",reason:"unavailable"};
+  return coverage({cell:selection,scope:coverageScope},signal);
+}
+
+export function verifiedGridContext(context:DiscoveryContext,evidence:GridCoverageEvidence):DiscoveryContext {
+  const summary=evidence.summary;
+  const attachments=context.attachedScope||[];
+  const datasets=attachments.filter(item=>item.kind==="dataset");
+  const referenceIds=attachments.flatMap(item=>item.kind==="reference"&&item.reference.kind==="asset"?[item.reference.id]:[]);
+  const candidateIds=[...new Set([...datasets.map(item=>item.id),...referenceIds])];
+  const candidateScope={candidateIds,inCandidateScope:candidateIds.length>0,
+    candidateVersions:Object.fromEntries(datasets.flatMap(item=>item.version?[[item.id,item.version]]:[]))};
+  if (!summary) {
+    const time=attachments.find(item=>item.kind==="time");
+    return {...context,...candidateScope,filters:{...emptyFilters(),period:time?.period??null,utcWindow:time?.utcWindow??null},
+      caseId:null,layer:"all",selection:null,attachedScope:attachments.filter(item=>item.kind!=="grid")};
   }
+  const {filters,selection,caseId,layer}=summary;
+  const place="经度 "+selection.point[0].toFixed(4)+"°，纬度 "+selection.point[1].toFixed(4)+"°";
+  return {...context,...candidateScope,filters,selection,caseId,layer,gridSystem:selection.grid.system,
+    camera:{...context.camera,center:selection.point},
+    attachedScope:attachments.map(item=>item.kind==="grid"&&item.coverageScope
+      ?{kind:"grid",selection,place,coverageScope:{id:item.coverageScope.id,revision:item.coverageScope.revision,summary}}:item)};
+}
+
+export function gridCoverageSummary(evidence:GridCoverageEvidence){
+  if (evidence.status==="ready") {
+    const ids = evidence.sourceIds.slice(0,32);
+    const units=evidence.summary?.metric==="scenes"?" 条影像目录记录":" 种目录数据集";
+    return "所引网格和筛选范围匹配 "+evidence.count+units+"（覆盖修订 "+evidence.revision+"）。这是目录定位信息，不能证明有当地有效观测。"+
+      (ids.length ? " 对应来源记录示例 ID："+ids.join("、") : "");
+  }
+  if (evidence.reason==="expired") return "覆盖未知。所引网格的覆盖范围已失效，请重新选用当前范围。";
+  if (evidence.reason==="pending") return "覆盖未知。所引网格的目录定位结果还在准备。";
+  return "覆盖未知。暂时无法读取所引网格的目录定位结果。";
 }
 
 // Product-level samples in other cells must never be interpreted as local readings.

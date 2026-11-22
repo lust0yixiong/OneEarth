@@ -13,6 +13,7 @@ import {RunDetails} from "./RunDetails";
 import {SourceDrawer} from "./SourceDrawer";
 import {AnswerFooter} from "./AnswerFooter";
 import {sourcesFor,citationDetails} from "../domain/answer-sources";
+import {savedWebDocument} from "../domain/web-preview";
 import {loadRemoteAssetIds} from "../domain/datasets";
 import type {ReactNode} from "react";
 import { AnswerContent } from "./AnswerContent";
@@ -23,7 +24,7 @@ import { emptyFilters } from "../domain/spatial";
 import { useWorkspace } from "../domain/store";
 import type { AnswerReference, Message } from "../domain/types";
 
-export function AnswerBody({message,question,animate,children,onQuote,onReady}:{message:Message;question:string;animate:boolean;children?:ReactNode;onQuote?:(reference:AnswerReference,number:number)=>void;onReady?:(id:string)=>void}){
+export function AnswerBody({message,question,animate,children,onQuote,onReady,showLiveMembership=true}:{message:Message;question:string;animate:boolean;children?:ReactNode;onQuote?:(reference:AnswerReference,number:number)=>void;onReady?:(id:string)=>void;showLiveMembership?:boolean}){
   const m=useMemo(()=>literatureDisplay(message),[message]);
   const {state:s,inspectAsset,openVisualization,patch,focusAnswerEvidence}=useWorkspace();
   const revision=useCatalogRevision();
@@ -37,9 +38,9 @@ export function AnswerBody({message,question,animate,children,onQuote,onReady}:{
   const locations=useMemo(()=>mapBatch?answerEvidence(mapBatch):new Map(),[mapBatch,revision]);
   const active=s.mapResult?.answerId===m.id;
   const selection=s.selection || unselected;
-  const membership=useGridMembership(active && !!s.selection && s.mapResult?.metric!=="scenes",selection,s.filters,s.mapResult);
+  const membership=useGridMembership(showLiveMembership && active && !!s.selection && s.mapResult?.metric!=="scenes",selection,s.filters,s.mapResult);
   const inCell=new Set(batch?.ids.filter(id=>{
-    const a=assetById.get(id),key=a && productKey(a);return !!key && membership.members?.has(key);
+    const a=assetById.get(id),key=a && productKey(a);return showLiveMembership && !!key && membership.members?.has(key);
   }));
   const hover=(id:string|null)=>focusAnswerEvidence(m,id);
   const inspect=async(id:string)=>{
@@ -51,6 +52,15 @@ export function AnswerBody({message,question,animate,children,onQuote,onReady}:{
   };
   const {inline:inlineRefs,refs:references}=useMemo(()=>sourcesFor(m),[m,revision]);
   const referenceDetails=useMemo(()=>inlineRefs.map(ref=>citationDetails(ref,notes)),[inlineRefs,notes,revision]);
+  const savedActions=useMemo(()=>{
+    const actions=new Map<string,()=>void>();
+    for (const ref of inlineRefs) {
+      if (ref.kind!=="web") continue;
+      const evidence=savedWebDocument(ref,message);
+      if (evidence) actions.set(ref.url,()=>patch({evidence,previewKind:"text",inspector:null}));
+    }
+    return actions;
+  },[inlineRefs,message,patch]);
   const [drawer,setDrawer]=useState<{refs:AnswerReference[];title:string}|null>(null);
   const shown=new Set([
     ...(notes?.sources.map(a=>a.id) || []),
@@ -66,8 +76,9 @@ export function AnswerBody({message,question,animate,children,onQuote,onReady}:{
   return <>
     <RunDetails trace={m.runTrace} runs={notes?.searches} stage={notes?.paperTrace || notes?.basis} failed={m.failed}/>
     <AnswerContent text={m.text} quote={onQuote} selectedReferences={s.draftScope?.flatMap(i=>i.kind==="reference"?[i.reference]:[]) || []} references={inlineRefs} details={referenceDetails} inspect={inspect} hover={hover} inCell={active?inCell:undefined} focused={active?s.mapFocus?.assetId:undefined}
-      limitation={notes?.limitation} onComplete={finish} animate={animate && !m.failed} open={refs=>setDrawer({refs,title:"本段来源与依据"})}/>
-    {ready && <><AnswerMapContext message={m} locations={locations} cellCount={inCell.size} loading={!membership.members} error={membership.error}/>
+      limitation={notes?.limitation} onComplete={finish} animate={animate && !m.failed} open={refs=>setDrawer({refs,title:"本段来源与依据"})}
+      savedActions={savedActions}/>
+    {ready && <><AnswerMapContext message={m} locations={locations} cellCount={inCell.size} loading={!membership.members} error={membership.error} showCellRelation={showLiveMembership}/>
     {notes?.followUp && <p className="answer-question">{notes.followUp}</p>}
     {batch && remaining.length>0 && <details className="chat-role" onToggle={e=>setExpanded(e.currentTarget.open)}>
       <summary>{references.length ? "其他候选资料" : "本轮候选资料"}（{remaining.length}）<ChevronDown size={12}/></summary>
@@ -82,6 +93,6 @@ export function AnswerBody({message,question,animate,children,onQuote,onReady}:{
     {m.activity && <button className="activity-link" onClick={()=>patch({evidence:m.activity!,previewKind:"trace"})}>查看完整执行记录 <ArrowUpRight size={12}/></button>}
     {!m.failed && <AnswerFooter message={m} question={question} refs={references} open={()=>setDrawer({refs:references,title:"本条回答的来源与依据"})}/>}
     </>}
-    {drawer && <SourceDrawer {...drawer} message={m} question={question} close={()=>setDrawer(null)}/>}
+    {drawer && <SourceDrawer {...drawer} message={message} question={question} close={()=>setDrawer(null)}/>}
   </>;
 }

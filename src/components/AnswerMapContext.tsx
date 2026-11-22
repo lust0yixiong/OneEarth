@@ -3,7 +3,7 @@ import {MapPin,LocateFixed} from "lucide-react";
 import {useWorkspace} from "../domain/store";
 import {answerEvidence,evidenceCamera,evidenceAction,coverageTimeNote,type MappedEvidence} from "../domain/answer-map";
 import type {Message} from "../domain/types";
-export function AnswerMapContext({message,locations:savedLocations,cellCount,loading,error}:{message:Message;locations:Map<string,MappedEvidence>;cellCount:number;loading:boolean;error:string}) {
+export function AnswerMapContext({message,locations:savedLocations,cellCount,loading,error,showCellRelation=true}:{message:Message;locations:Map<string,MappedEvidence>;cellCount:number;loading:boolean;error:string;showCellRelation?:boolean}) {
   const {state:s,activateAnswer,flyToGrid,flyToEvidence,patch}=useWorkspace();
   const currentBatch=useMemo(()=>s.mapResult?{...s.mapResult,filters:s.filters,layer:s.layer}:null,[s.mapResult,s.filters,s.layer]);
   const active=s.mapResult?.answerId===message.id;
@@ -27,7 +27,7 @@ export function AnswerMapContext({message,locations:savedLocations,cellCount,loa
     </div>
     <small>{locations.size?[local?local+" 项数据位置":"",range?range+" 项目录范围":"",global?global+" 项全球覆盖":"",unlocated?unlocated+" 项位置待核":""].filter(Boolean).join(" · ") || "本轮资料的数据位置待核":"正在读取资料的空间范围…"}。{local || range ? "球上编号对应正文引用。" : global ? "全球覆盖资料以球体外圈标示。" : ""}</small>
     {(!!unverified || !!outside) && <p className="answer-location-note" role="status">{[unverified?unverified+" 项官方覆盖时段未核":"",outside?outside+" 项官方覆盖时段与当前时段不匹配":""].filter(Boolean).join("；")}。官方位置或空间范围仍可查看，不代表当前时段有观测，亦不计为格内实测。</p>}
-    {active && s.selection && s.mapResult?.metric!=="scenes" && <p className="answer-cell-relation" role="status">{error?error:loading?"正在核对所选网格与本轮资料…":"所选网格关联 "+cellCount+" 项本轮资料，已标记对应引用"}</p>}
+    {showCellRelation && active && s.selection && s.mapResult?.metric!=="scenes" && <p className="answer-cell-relation" role="status">{error?error:loading?"正在核对所选网格与本轮资料…":"所选网格关联 "+cellCount+" 项本轮资料，已标记对应引用"}</p>}
     {active && focusKind==="unlocated" && <p className="answer-location-note" role="status">这份资料尚无已核实的坐标或覆盖范围，暂不能定位。</p>}
     {active && coverageTimeNote(focusEvidence) && <p className="answer-location-note" role="status">{coverageTimeNote(focusEvidence)}</p>}
     {focusTarget && s.mapFocus?.locked && <button onClick={()=>flyToEvidence(message,s.mapFocus!.assetId)}><LocateFixed size={13}/>{evidenceAction(focusEvidence)}</button>}

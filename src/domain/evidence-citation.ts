@@ -20,7 +20,7 @@ export function citeMaterial(
   page: number,
 ): Citation {
   // Early excerpts stored their row offset only in the material label.
-  const legacy = !doc.locator && doc.id.includes("-excerpt-");
+  const legacy = !doc.locator && !part.savedWebExcerpt && doc.id.includes("-excerpt-");
   const legacyRange = legacy && part.label.match(/ · 第 (\d+)–(\d+) 行$/);
   const material =
     doc.locator?.material ||

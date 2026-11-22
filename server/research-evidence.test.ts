@@ -8,7 +8,7 @@ import type {SearchRun,ToolCall} from "../src/domain/types";
 const question="Which monthly precipitation data can be compared?";
 const plan:TurnPlan={action:"search",evidenceNeed:"discover",goal:question,targets:[],reason:"find sources",
   clarification:null,researchIntent:{purpose:question,task:question,region:null,time:null,months:[]},
-  conversationContext:question,searchPlan:undefined};
+  conversationContext:question};
 const address="https://example.org/research-data";
 const start:DataSearchResult={
   plan:{questionMode:"preserve",dataQuestion:question,dataNeed:null,hainaQueries:[],paper:{name:"",facets:[],region:[]},web:[]},
@@ -23,6 +23,25 @@ test("sufficient evidence completes without calling either acquisition tool",asy
   });
   assert.equal(result.retrieval,start);
   assert.equal(JSON.parse(trace.at(-1)!.output!).action,"answer");
+});
+
+test("a completed confirmation cannot be requested again by the evidence reviewer",async()=>{
+  const trace:ToolCall[]=[];
+  const confirmedPlan={...plan,goal:"Ask the user whether to convert the earlier question"};
+  const result=await continueResearch(question,confirmedPlan,{retrieval:start,reads:[]},new AbortController().signal,{
+    model:async prompt=>{
+      const input=JSON.parse(prompt.slice(prompt.lastIndexOf("\n{")+1));
+      assert.equal(input.goal,question);
+      assert.equal(input.confirmation.choice,"proposed");
+      assert.equal(input.confirmation.question,question);
+      assert.equal(input.actions.includes("clarify"),false);
+      return JSON.stringify({action:"clarify",reason:"Repeat confirmation",gap:null,targets:[],clarification:"Please confirm."});
+    },
+    read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:call=>trace.push(call),
+  },{choice:"proposed",originalQuestion:confirmedPlan.goal,dataQuestion:question,checkMessageId:"ca419cd3-a9a1-4947-9a6b-1ac3dbd984c6"});
+  assert.equal(result.retrieval,start);
+  assert.equal(result.clarification,undefined);
+  assert.equal(JSON.parse(trace.at(-1)!.output!).fallback,"answer-with-available-materials");
 });
 
 test("the next decision sees materials actually returned by the selected source",async()=>{

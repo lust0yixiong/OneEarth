@@ -3,7 +3,8 @@ import {coverageBatchKey} from "../domain/coverage";
 import type { CandidateSet, Filters, GridSpec } from "../domain/types";
 
 type GridCache={grid:GridSpec;ready:Set<string>;counts:Map<string,number>};
-type Scope={key:string;id?:string;grids:Map<string,GridCache>};
+type Scope={key:string;id?:string;revision?:string;grids:Map<string,GridCache>};
+class ExpiredCoverageScope extends Error {}
 /** The rendering path only reads counts. Intersections and persistent caches belong to the server. */
 export function createCoverageClient(changed:()=>void,fetcher:typeof fetch=fetch) {
   const scopes=new Map<string,Scope>();
@@ -18,7 +19,10 @@ export function createCoverageClient(changed:()=>void,fetcher:typeof fetch=fetch
   async function post(path:string,body:unknown) {
     const response=await fetcher("/api/coverage/"+path,{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify(body),signal:controller.signal});
-    if(!response.ok){if(response.status===404 && wanted)wanted.scope.id=undefined;throw Error("网格分布暂时无法读取，正在重试…");}
+    if (!response.ok) {
+      if (path === "cells" && [404, 410].includes(response.status)) throw new ExpiredCoverageScope();
+      throw Error("覆盖未知，暂时无法读取网格分布。");
+    }
     return response.json();
   }
   async function work() {
@@ -29,9 +33,14 @@ export function createCoverageClient(changed:()=>void,fetcher:typeof fetch=fetch
     running=true;
     let delay=0;
     try {
-      request.scope.id ??= (await post("scopes",{filters:requestFilters,batch:requestBatch})).id;
+      if (!request.scope.id) {
+        const issued=await post("scopes",{filters:requestFilters,batch:requestBatch});
+        request.scope.id=issued.id;
+        request.scope.revision=typeof issued.revision==="string"?issued.revision:undefined;
+      }
       if(disposed)return;
-      const result:CoverageResponse=await post("cells",{id:request.scope.id,grid:request.cache.grid,cells});
+      const result:CoverageResponse & {revision?:string}=await post("cells",{id:request.scope.id,revision:request.scope.revision,grid:request.cache.grid,cells});
+      if (request.scope.revision && result.revision !== request.scope.revision) throw new ExpiredCoverageScope();
       if(!Array.isArray(result.ready) || !Array.isArray(result.cells) || !Number.isSafeInteger(result.pending))throw Error("网格分布返回格式有误。");
       for(const cell of result.ready)request.cache.ready.add(cell);
       for(const [cell,count] of result.cells)request.cache.counts.set(cell,count);
@@ -43,8 +52,19 @@ export function createCoverageClient(changed:()=>void,fetcher:typeof fetch=fetch
       if(wanted?.scope===request.scope)error="";
       delay=result.pending?120:0;
     } catch(cause) {
-      if(!disposed && wanted?.scope===request.scope)error=cause instanceof Error?cause.message:"网格分布暂时无法读取。";
-      delay=2500;
+      if (cause instanceof ExpiredCoverageScope) {
+        request.scope.id=undefined;
+        request.scope.revision=undefined;
+        for (const cache of request.scope.grids.values()) {
+          cache.ready.clear();
+          cache.counts.clear();
+        }
+        if (!disposed && wanted?.scope===request.scope) error="覆盖数据已更新，正在重新读取…";
+        delay=120;
+      } else {
+        if(!disposed && wanted?.scope===request.scope) error=cause instanceof Error?cause.message:"覆盖未知，暂时无法读取网格分布。";
+        delay=2500;
+      }
     } finally {
       running=false;
       if(!disposed){changed();schedule(wanted?.scope===request.scope?delay:0);}
@@ -65,7 +85,14 @@ export function createCoverageClient(changed:()=>void,fetcher:typeof fetch=fetch
       const pending=cells.some(cell=>!cache!.ready.has(cell));
       if(defer && timer){clearTimeout(timer);timer=undefined;}
       else if(pending)schedule();
-      return {cells:new Map(cells.flatMap(cell=>cache!.counts.has(cell)?[[cell,cache!.counts.get(cell)!] as const]:[])),ready:cache.ready,pending,error};
+      return {cells:new Map(cells.flatMap(cell=>cache!.counts.has(cell)?[[cell,cache!.counts.get(cell)!] as const]:[])),ready:cache.ready,pending,error,revision:scope.revision};
+    },
+    invalidate() {
+      scopes.clear();
+      scope=undefined;
+      wanted=undefined;
+      error="覆盖数据已更新，正在重新读取…";
+      changed();
     },
     dispose(){disposed=true;clearTimeout(timer);controller.abort();scopes.clear();},
   };

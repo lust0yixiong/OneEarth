@@ -77,6 +77,43 @@ test("large view requests are split into bounded cell batches",async()=>{
   } finally {client.dispose();}
 });
 
+test("an expired scope drops old counts and reads the new revision without changing the viewport",async()=>{
+  const grid=gridSpec("h3",2),filters=emptyFilters();
+  let issued=0,updates=0;
+  const requests:{id:string;revision:string;cells:string[]}[]=[];
+  const client=createCoverageClient(()=>updates++,(async(url,options)=>{
+    const body=JSON.parse(String(options?.body));
+    if(String(url).endsWith("scopes")){
+      issued++;
+      return Response.json({id:"scope-"+issued,revision:"rev-"+issued});
+    }
+    requests.push(body);
+    if(body.id==="scope-1" && body.cells.includes("b")){
+      return Response.json({code:"coverage_scope_expired",revision:"rev-2"},{status:410});
+    }
+    const count=body.id==="scope-1"?2:1;
+    return Response.json({revision:body.revision,cells:body.cells.map((id:string)=>[id,count]),ready:body.cells,pending:0});
+  }) as typeof fetch);
+  try{
+    client.read(grid,["a"],filters,null,0);
+    await until(()=>updates===1);
+    assert.equal(client.read(grid,["a","b"],filters,null,0).cells.get("a"),2);
+    await until(()=>updates===2);
+    const refresh=client.read(grid,["a","b"],filters,null,0);
+    assert.equal(refresh.pending,true);
+    assert.equal(refresh.cells.has("a"),false);
+    await until(()=>updates===3);
+    const refreshed=client.read(grid,["a","b"],filters,null,0);
+    assert.equal(refreshed.revision,"rev-2");
+    assert.deepEqual([...refreshed.cells],[["a",1],["b",1]]);
+    assert.deepEqual(requests.map(({id,revision,cells})=>({id,revision,cells})),[
+      {id:"scope-1",revision:"rev-1",cells:["a"]},
+      {id:"scope-1",revision:"rev-1",cells:["b"]},
+      {id:"scope-2",revision:"rev-2",cells:["a","b"]},
+    ]);
+  } finally {client.dispose();}
+});
+
 
 test("followups reuse indexed counts when only answer identity, title or camera changes",async()=>{
   const filters=emptyFilters(),grid=gridSpec("h3",2);

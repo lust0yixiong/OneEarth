@@ -23,7 +23,7 @@ export function WebSourceReader({url, title, snippet, onContent}: {
     setLoading(true);
     setError("");
     setShowMarkdownSource(false);
-    const snippetQuote = snippet?.trim() ? {body: snippet, label: "已收录的来源摘录", url} : null;
+    const snippetQuote = snippet?.trim() ? {body: snippet, label: "已保存的检索线索（未读取原页）", url} : null;
     contentCallback.current?.(snippetQuote);
     const timeout = setTimeout(() => controller.abort(), 90000);
     async function read() {

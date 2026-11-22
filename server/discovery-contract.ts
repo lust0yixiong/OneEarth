@@ -12,6 +12,8 @@ export interface DiscoveryInput {
   decision?: QuestionDecision;
   continuedFrom?: string;
   continuation?: {previousId:string;focus:string};
+  researchGoal?: string;
+  evidenceGap?: string;
   initialPlan?: string;
   conversationContext?: string;
   previousResearchIntent?: ResearchIntent;

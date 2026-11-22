@@ -7,7 +7,7 @@ import { requestPerformance, type ExecutorTiming } from "./request-performance";
 import { paperCache } from "./earthnano";
 import { hainaService } from "./haina-search";
 import { constellationService, parseSources } from "./constellations";
-import { coverageIndex } from "./coverage-index";
+import { spatialCoverageClient } from "./spatial-coverage-client";
 import { researchRegions } from "./research-region";
 import { registerObservations, registerPapers } from "../src/domain/datasets";
 
@@ -20,7 +20,7 @@ const services:RuntimeServices = {
   haina:hainaService(path.join(state,"haina-catalog.json")),
   push:constellationService(process.env.ONEEARTH_OBSERVATION_DB || path.join(state,"observations.sqlite"),
     parseSources(process.env.ONEEARTH_PUSH_SOURCES)),
-  coverage:coverageIndex(path.join(state,"worker-coverage.sqlite")),
+  coverage:spatialCoverageClient(),
   researchRegionService:researchRegions(adminBoundaryDir),
   adminBoundaryDir,
   canonicalCache:new Map(),

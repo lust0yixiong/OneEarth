@@ -4,6 +4,7 @@ import {paperRecords} from "./paper-record";
 import {observationById} from "./push-observations";
 import type {AnswerReference,Message,CitationType,AnswerNotes} from "./types";
 import {referenceCitationType} from "./citation-types";
+import {hasReadWebExcerpt,webEvidenceStage} from "./web-preview";
 
 export interface CitationDetails {type:CitationType;channel:string;evidence:string;nature?:string}
 export function citationDetails(ref:AnswerReference,notes?:Partial<AnswerNotes>):CitationDetails{
@@ -12,8 +13,13 @@ export function citationDetails(ref:AnswerReference,notes?:Partial<AnswerNotes>)
     const search=matches.find(run=>run.engine==="DataCite") || matches[0];
     const hit=notes?.webSources?.find(h=>h.url===ref.url) || search?.hits.find(h=>h.url===ref.url);
     const dataCite=search?.engine==="DataCite";
-    return {type:"web",channel:hit?.previousRead?"会话已读记录":dataCite?"DataCite":search || hit?"网页检索":"公开网页",
-      evidence:hit?.previousRead?"此前已读摘录"+(hit.readAt?" · "+hit.readAt:""):hit?.pageExcerpt?(dataCite?"数据集 DOI 元数据、网页正文摘录":"网页正文摘录"):dataCite?"数据集 DOI 元数据":hit?.snippet?"网页检索摘要":"标题与来源链接"};
+    const read=hasReadWebExcerpt(hit);
+    const previous=read && hit.previousRead;
+    const excerpt=read ? (hit.stage ? webEvidenceStage(hit.stage) : "网页摘录（采集阶段未记录）") : "";
+    const evidence=previous ? "此前已读摘录 · "+excerpt+(hit.readAt?" · "+hit.readAt:"") :
+      read ? (dataCite?"数据集 DOI 元数据、":"")+excerpt :
+      dataCite ? "数据集 DOI 元数据" : hit?.snippet ? "网页检索摘要" : "标题与来源链接";
+    return {type:"web",channel:previous?"会话已读记录":dataCite?"DataCite":search || hit?"网页检索":"公开网页",evidence};
   }
   const a=assetById.get(ref.id),record=paperRecords.get(ref.id),tabs=record?.need.tabs || a?.tabs || [];
   const type=referenceCitationType(ref,a,observationById(ref.id));

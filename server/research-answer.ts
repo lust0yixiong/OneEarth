@@ -23,6 +23,7 @@ import type { DiscoveryContext, DiscoveryResponse } from "../src/domain/types";
 import type { researchExecutor } from "./research-executor";
 import {SourceReadClaimError,sourceReadReceipts,validateSourceReadClaim} from "./source-read-provenance";
 import type { TurnHistoryEntry as Turn } from "./turn-history";
+import type { ParentResearchEvidence } from "./parent-research-evidence";
 
 const segmenter = new Intl.Segmenter("zh", {granularity:"word"});
 const genericTerms = new Set("想用 数据 数据集 资料 相关 哪些 研究 需要 分析 什么 如何 可以 推荐 方法 是否 估算 分别 哪里 获取 适合 来源 比较 分辨 影响 限制 论文 目录 使用 查看 找到 对比 解释 支持 使用 结合 材料 问题 科学 海纳 地学 目前 可能 提供 进行 这些".split(" "));
@@ -83,12 +84,12 @@ function assetEvidence(a:Asset,query:string,ctx:DiscoveryContext,focusQuery=quer
 }
 export type CatalogueEvidence=ReturnType<typeof sourceExcerpts>&{id:string;title:string;source:string;url?:string;[key:string]:any};
 /** Reattach literal cited windows explicitly; never relabel them as a new lookup. */
-export function withAssertionMemory(rows:CatalogueEvidence[],memory:AssertionEvidenceMemory[],query:string,source?:string):CatalogueEvidence[] {
+export function withAssertionMemory(rows:CatalogueEvidence[],memory:AssertionEvidenceMemory[],query:string,source?:string,authorizedParent=false):CatalogueEvidence[] {
   if(source && source!=="paper")return rows;
   if(/(?:换个?话题|换个?问题|另一个课题|新问题|先不谈|不再研究)/.test(query))return rows;
   const continuing=refersToBatch(query)||/它们?|刚才|上述|前面|此前|这[份段批些]|那[份段些]|上[一轮]|你提到/.test(query)||query.length<100&&/研究区|时段|时间|年份|主要看/.test(query);
   const named=(query.match(/[A-Za-z][A-Za-z-]{3,}/g)||[]).filter(t=>!['what','when','where','from','with','this','that','have','does'].includes(t.toLowerCase()));
-  const selected=selectAssertionEvidence(memory,{query}).filter(e=>continuing||named.some(t=>(e.label+' '+e.quote).toLowerCase().includes(t.toLowerCase())));
+  const selected=selectAssertionEvidence(memory,{query}).filter(e=>authorizedParent||continuing||named.some(t=>(e.label+' '+e.quote).toLowerCase().includes(t.toLowerCase())));
   const result=rows.map(r=>({...r}));
   for(const e of selected){
     let row=result.find(r=>r.id===e.assetId);
@@ -225,13 +226,13 @@ export function shouldReviewAnswerEvidence(answer:{message:string;limitation?:st
   if(verifiedExample&&explicitMathExample&&text.length<500&&!sourceClaim)return false;
   return answer.message.length>=300 || /论文|清单|版本|\d/.test(answer.message);
 }
-export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[]}) {
+export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[];priorEvidence?:ParentResearchEvidence}) {
     if(retrieval?.questionCheck || retrieval?.clarification || retrieval?.plan.questionMode==="reframe")
       throw Error("转换后的问题尚未得到用户确认，不能生成答复。");
     const start=Date.now();
     const selectedOnly=turn?new Set(turn.plan.targets.flatMap(t=>t.id?[t.id]:[])):undefined;
     const selectedUrls=turn?new Set(turn.plan.targets.flatMap(t=>t.url?[t.url]:[])):undefined;
-    if(turn){context={...context,filters:{...context.filters,source:onlySource(query)||""}};}
+    if(turn&&!base.gridCoverage){context={...context,filters:{...context.filters,source:onlySource(query)||""}};}
     const expanded=!turn&&expandsSources(query);
     const source = expanded?undefined:onlySource(query) || onlySource(retrieval?.plan.conversationContext || "");
     if(expanded){
@@ -247,10 +248,10 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       retrieval?.plan.conversationContext].filter(Boolean).join("\n");
     const searchPhrases=[...(retrieval?.plan.paper.facets.flatMap(f=>f.queries)||[]),...(retrieval?.plan.web.map(q=>q.web)||[]),...(retrieval?.plan.hainaQueries||[])];
     const previousAssertions=history.filter(t=>t.role==="assistant" && t.conversationAssertionEvidence!==undefined).at(-1)?.conversationAssertionEvidence || [];
-    const priorAssertions=selectedOnly?previousAssertions.filter(r=>selectedOnly.has(r.assetId)):previousAssertions;
-    const rows=withAssertionMemory(catalogueRows(target,context,base,history,papers,retrieval?.haina,source,retrieval?.plan.questionMode==="confirmed"?retrieval.plan.dataQuestion:query,searchPhrases,selectedOnly),priorAssertions,query,source||context.filters.source);
+    const priorAssertions=turn?.priorEvidence?.assertions??(selectedOnly?previousAssertions.filter(r=>selectedOnly.has(r.assetId)):previousAssertions);
+    const rows=withAssertionMemory(catalogueRows(target,context,base,history,papers,retrieval?.haina,source,retrieval?.plan.questionMode==="confirmed"?retrieval.plan.dataQuestion:query,searchPhrases,selectedOnly),priorAssertions,query,source||context.filters.source,!!turn?.priorEvidence);
     const previousReadings=history.filter(t=>t.role==="assistant" && t.conversationEvidence!==undefined).at(-1)?.conversationEvidence || [];
-    const priorReadings=selectedUrls?previousReadings.filter(r=>selectedUrls.has(r.url)):previousReadings;
+    const priorReadings=turn?.priorEvidence?.readings??(selectedUrls?previousReadings.filter(r=>selectedUrls.has(r.url)):previousReadings);
     const modelHistory=synthesisHistory(history.map(({conversationEvidence:_,conversationAssertionEvidence:__,...turn})=>turn));
     const searches:SearchRun[]=retrieval?.searches || turn?.searches || [];
     const readReceipts=sourceReadReceipts(searches);
@@ -270,11 +271,21 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     const exactReadRefs=turn?.plan.action==="read"?references.flatMap((ref,index)=>
       ref.kind==="web"&&selectedUrls?.has(ref.url)&&searches.some(run=>run.status==="done"&&run.hits.some(hit=>hit.url===ref.url&&hit.pageExcerpt))
         ? [{url:ref.url,token:"[S"+(index+1)+"]"}]:[]):[];
+    const parentCitations=references.flatMap((ref,index)=>{
+      const recorded=turn?.priorEvidence?.references.find(parent=>ref.kind==="asset"
+        ?parent.kind==="asset"&&parent.id===ref.id:parent.kind==="web"&&parent.url===ref.url);
+      return recorded?[{reference:recorded,token:"[S"+(index+1)+"]"}]:[];
+    });
+    const citedParent=(answer:SynthesisAnswer)=>answer.references.some(ref=>parentCitations.some(({reference})=>ref.kind==="asset"
+      ?reference.kind==="asset"&&reference.id===ref.id:reference.kind==="web"&&reference.url===ref.url));
     function verifyExecutionAndReferences(answer:SynthesisAnswer){
       validateSourceReadClaim(answer,readReceipts,!!retrieval);
       if(exactReadRefs.length&&!answer.references.some(ref=>ref.kind==="web"&&exactReadRefs.some(source=>source.url===ref.url)))
         throw new SourceReadClaimError("定向读取已经返回材料，为核查结论或证据限制加上实际所读原站引用 "+
           exactReadRefs.map(ref=>ref.token).join("、")+"。");
+      if(parentCitations.length&&!citedParent(answer))
+        throw new SourceReadClaimError("本轮根据已保存材料作答，请对实际采用的证据添加相应引用 "+
+          parentCitations.map(ref=>ref.token).join("、")+"。同名材料可能是不同对象，不能把文献记录当作文件或目录原页。");
     }
     const prompt=synthesisInstructions+"\n"+JSON.stringify({question:query,questionMode:retrieval?.plan.questionMode,
       turnAction:turn&&{action:turn.plan.action,goal:turn.plan.goal,evidenceNeed:turn.plan.evidenceNeed,targets:turn.plan.targets.map(({excerpt,...t})=>t),
@@ -284,6 +295,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       dataQuestion:retrieval?.plan.dataQuestion,dataNeed:retrieval?.plan.dataNeed,mandatorySearches:retrieval?.sourceStatus,history:modelHistory,
       referenceProvenance:conversationReferenceProvenance(history),
       executionScope:{externalCommunicationAvailable:false,permissionsRequestedByPlatform:false,currentSourceReads:readReceipts,discoveryDelegated:!!retrieval,requiredExactSourceReferences:exactReadRefs,
+        authorizedParentEvidence:parentCitations.length?{citations:parentCitations,rule:"这些编号来自可追溯的父研究记录。回答所用的事实应逐项引用实际支持它的历史摘录，区分文献资产、目录和实际文件。即便名相同，也必须按具体来源和取得层级判断。不得声称本轮执行了读取，也不得从正文补猜链接。"}:undefined,
         sourceReadRule:"本轮动作以 currentSourceReads 为准。历史摘录标明是以前取得，不能称本轮已打开；搜索摘要也不是读取。没有读取回执不描述本轮打开网页。失败只能说尝试未取得正文；节选不证明完整原文已读。discoveryDelegated 为 false 时不得声称发过定向检索或补充检索。定向读取有返回时，以 requiredExactSourceReferences 的编号注明来源，即使正文不足也可用它说明核对边界。",
         notice:"本请求的工具链只含目录/网页/文献资料读取及显式记录的本地核算，不含联系人员、发邮件或取得社群许可。用户提供或论文记载的许可不能说成平台取得。"},
       materialSelection:{considered:papers.length+(retrieval?.haina.length||0),included:rows.length,
@@ -300,6 +312,10 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     constellation:base.pushFeed && {configured:base.pushFeed.configured,count:base.pushFeed.records.length,
       limit:50,latestObservedAt:base.pushFeed.records[0]?.observedAt},
     lookup:{summary:base.message,research:base.research?.rows,conditions:base.catalogMatch?.conditions,
+      gridCoverage:base.gridCoverage&&{status:base.gridCoverage.status,
+        count:base.gridCoverage.status==="ready"?base.gridCoverage.count:undefined,
+        revision:base.gridCoverage.revision,
+        rule:"所附范围的覆盖结论以本字段为准。未知须写覆盖未知，不能写零。文献和目录线索可独立说明，不能当作该格的覆盖或现场观测。"},
       lookups:base.catalogMatch?.lookups?.map(l=>({matched:l.matched,point:l.point})),gap:base.gap?.missing}});
     let repaired=false,repairFailed=false,repairInput="";
     const actualCalculations:CalculationReport[]=[];

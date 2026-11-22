@@ -344,6 +344,23 @@ export function registerPapers(records: PaperRecord[], includeInCatalog = true) 
   if(changed) catalogChanged();
 }
 
+/** Replace the published view while keeping historical citation IDs addressable. */
+export function replacePublishedPapers(records: PaperRecord[]) {
+  const current = new Map(assets.filter(asset => paperId(asset.id)).map(asset => [asset.datasetId, asset.id]));
+  const next = new Map(records.filter(validPaperRecord).map(record => [record.dsKey, record]));
+  const updated = [...next.values()].filter(record => current.get(record.dsKey) !== record.id);
+  let removed = false;
+  for (let i = assets.length - 1; i >= 0; i--) {
+    const asset = assets[i];
+    if (paperId(asset.id) && !next.has(asset.datasetId)) {
+      assets.splice(i, 1);
+      removed = true;
+    }
+  }
+  if (updated.length) registerPapers(updated);
+  else if (removed) catalogChanged();
+}
+
 export async function loadRemoteAssetIds(ids:string[]){
   const hainaIds=[...new Set(ids.filter(id=>/^haina:\d+$/.test(id)&&!assetById.has(id)))];
   if(hainaIds.length){const c=await loadHainaCatalog(new AbortController().signal);registerHaina(c.records,c.synced,c.endpoint);}

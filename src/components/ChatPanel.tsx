@@ -1,5 +1,6 @@
 import { loadRemoteAssetIds } from "../domain/datasets";
 import {QuestionScope} from "./QuestionScope";
+import {GridCoverageRecord} from "./GridCoverageRecord";
 import {scopeKey} from "../domain/question-scope";
 import {useWebPreview} from "./use-web-preview";
 import {CopyButton,RunDetails} from "./RunDetails";
@@ -40,6 +41,12 @@ import { assetById } from "../domain/datasets";
 import { NeedList } from "./NeedList";
 import { ChatResizeHandles, type ChatLayout } from "./ChatBoundary";
 import {reloadChatHome,useChatHome} from "./use-chat-home";
+
+function hasCoverageRecord(message: Message, question?: Message) {
+  return !message.failed && !message.questionCheck && !message.clarification &&
+    (message.gridCoverage !== undefined || !!question?.attachedScope?.some(item=>item.kind==="grid") ||
+      !!message.runTrace?.calls?.some(call=>call.id==="question-grid"));
+}
 
 function AnswerAuthor({message}:{message:Message}) {
   const intent=message.researchIntent ?? message.candidates?.researchRecord?.intent;
@@ -160,7 +167,9 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     sessionSummaries,
     inspectAsset,
   } = useWorkspace();
-  const previewWeb=useWebPreview(s.messages.flatMap(m=>m.answerNotes?.webSources || []));
+  const sourceHits=useMemo(()=>new Map(s.messages.map(m=>[m.id,m.answerNotes?.webSources])),[s.messages]);
+  const previewWeb=useWebPreview(s.messages.flatMap(m=>m.answerNotes?.webSources || []),undefined,[],
+    link=>sourceHits.get(link.closest<HTMLElement>(".message[data-message-id]")?.dataset.messageId || ""));
   const historyIds=useMemo(()=>new Set(s.messages.map(m=>m.id)),[s.sessionId]);
   const revision=useCatalogRevision();
   const [readyAnswers,setReadyAnswers]=useState<ReadonlySet<string>>(()=>new Set());
@@ -288,12 +297,14 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   (s.messages.some(next=>next.role==="user" && next.time>m.time)?"superseded":undefined)}
                 onChoose={(choice,edited)=>void confirmQuestion(m.id,choice,edited)}/>}
               {m.role==="assistant" && !m.questionCheck && <AnswerBody message={m} animate={!historyIds.has(m.id) && Date.now()-m.time<3000} onReady={answerReady}
+                showLiveMembership={!hasCoverageRecord(m,questions.get(m.id))}
                 question={questions.get(m.id)?.text || "OneEarth 研究记录"} onQuote={(reference,number)=>{
                   const item={kind:"reference" as const,reference,number,messageId:m.id};
                   attachScope(item);
                   input.current?.focus({preventScroll:true});
                 }}>
-              {m.answerNotes && m.runTrace && !m.failed &&
+              {hasCoverageRecord(m,questions.get(m.id)) && <GridCoverageRecord coverage={m.gridCoverage}/>}
+              {(m.gridCoverage || (m.answerNotes && m.runTrace && !m.failed)) &&
                 <CopyButton text={new URL("?research="+m.id,location.href).href} label="复制研究记录链接"/>}
               {m.catalogMatch && !m.answerNotes && m.candidates?.ids.map(id => (
                 <button className="candidate-link" key={id} onClick={() =>
@@ -451,7 +462,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
         {s.sessionError && <p className="session-storage-error" role="alert">{s.sessionError} <button onClick={() => void retrySessionSave()}>重试保存会话</button></p>}
         {latestReady && latestSources.length>0 && <div className="composer-sources-row">
           <button type="button" className="composer-sources" title={questions.get(latest!.id)?.text}
-            aria-haspopup="dialog" onClick={()=>setComposerSources(literatureDisplay(latest!))}>
+            aria-haspopup="dialog" onClick={()=>setComposerSources(latest!)}>
             <span className="composer-sources-icon" aria-hidden="true"><ListChecks size={14}/><Clock3 className="composer-sources-recent" size={8}/></span>本轮来源与依据 · <span>{latestSources.length}</span><ChevronRight size={13} aria-hidden="true"/>
           </button>
         </div>}
@@ -474,7 +485,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (!text.trim() || s.pending) return;
+            if (!text.trim() || s.pending || s.attachingMapScope) return;
             void send(text);
             setText("");
           }}
@@ -500,7 +511,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
           <div className="compose-bottom">
             <small>Enter 发送 · Shift + Enter 换行</small>
             <button
-              disabled={!text.trim() || s.pending}
+              disabled={!text.trim() || s.pending || s.attachingMapScope}
               type="submit"
               aria-label="发送消息"
             >
@@ -511,7 +522,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
         </div>
         
       </div>
-      {composerSources && <SourceDrawer refs={sourcesFor(composerSources).refs} message={composerSources}
+      {composerSources && <SourceDrawer refs={sourcesFor(literatureDisplay(composerSources)).refs} message={composerSources}
         title="本条回答的来源与依据" question={questions.get(composerSources.id)?.text} close={()=>setComposerSources(null)}/>}
     </aside>
   );

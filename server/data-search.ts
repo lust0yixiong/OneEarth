@@ -1,6 +1,6 @@
 import {changesTopic,userTopic,restoredIntent,explicitResearchYears,closedIntentPeriod,publicTopic,englishPhrases,topicEnglish,equivalentQuestion,clarificationBlockReason,type PlanningContext,type PlanningHistory} from './plan-adaptation';
 import {explicitDatasetName} from "./paper-name-identity";
-import {validResearchIntent,type ResearchIntent} from "../src/domain/research-intent";
+import {researchIntentSchema,validResearchIntent,type ResearchIntent} from "../src/domain/research-intent";
 import type {Asset} from "../src/domain/datasets";
 import type {PaperPlan} from "./earthnano";
 import {readPaperPlan} from "./earthnano";
@@ -45,7 +45,7 @@ export const dataSearchSchema={type:'object',additionalProperties:false,
   required:['questionMode','dataQuestion','dataNeed','researchIntent','conversationContext','conversationPeriod','conversationWindow','clarification','hainaQueries','paper','web'],
   properties:{
     questionMode:{type:'string',enum:['preserve','reframe']},dataQuestion:{type:'string',minLength:1,maxLength:4000},dataNeed:{type:['string','null'],maxLength:4000},
-    researchIntent:{type:'object',additionalProperties:false,required:['purpose','task','region','time','months'],properties:{purpose:{type:'string',maxLength:1200},task:{type:'string',maxLength:1200},region:{type:['string','null'],maxLength:1200},time:{type:['string','null'],maxLength:1200},months:{type:'array',items:{type:'integer',minimum:1,maximum:12},maxItems:12}}},
+    researchIntent:researchIntentSchema,
     conversationContext:{type:'string',maxLength:1600},conversationPeriod:{type:['array','null'],items:{type:'integer',minimum:1000,maximum:2300},minItems:2,maxItems:2},
     conversationWindow:{type:['array','null'],items:{type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}(?:T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z)?$'},minItems:2,maxItems:2},
     clarification:{type:['string','null'],minLength:1,maxLength:500},hainaQueries:{type:'array',items:{type:'string',minLength:1,maxLength:160},maxItems:4},

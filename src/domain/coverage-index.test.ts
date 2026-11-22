@@ -65,7 +65,7 @@ test("persistent geometry indexes match intersections in H3/S2, include empty ce
 test("coverage HTTP reads preserve filtered product counts and do not turn malformed cells into empty results",async()=>{
   const directory=await mkdtemp(path.join(tmpdir(),"oneearth-coverage-http-"));
   const index=coverageIndex(path.join(directory,"coverage.sqlite"));
-  const app=express();app.use(express.json());app.use("/api/coverage",coverageRouter(index));
+  const app=express();app.use(express.json());app.use("/api/coverage",coverageRouter(index,{revision:()=>"a".repeat(64)}));
   const server=app.listen(0,"127.0.0.1");
   await new Promise<void>(resolve=>server.once("listening",resolve));
   const address=server.address();assert.ok(address && typeof address!=="string");

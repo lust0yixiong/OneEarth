@@ -28,8 +28,11 @@ const reference=loaded.result.answerNotes.references.find(item=>item.sourceChann
 assert.ok(reference?.id,"需要一条实际文献引用");
 const citation=await get(restored,"/api/paper-records?ids="+encodeURIComponent(reference.id)).then(res=>res.json());
 assert.equal(citation[0]?.id,reference.id);
-const originalEvidence=await get(restored,"/api/paper-records/"+encodeURIComponent(reference.id)+"/evidence").then(res=>res.json());
-assert.ok(originalEvidence.dataset, "恢复后仍可读取论文依据");
+const evidenceRoute="/api/paper-records/"+encodeURIComponent(reference.id)+"/evidence";
+const [originalEvidence,restoredEvidence]=await Promise.all([source,restored].map(base=>get(base,evidenceRoute).then(res=>res.json())));
+assert.deepEqual(restoredEvidence,originalEvidence);
+assert.ok(restoredEvidence.dataset || restoredEvidence.papers?.some(paper=>paper.abstract || paper.quotes?.length),
+  "恢复后仍可读取原数据条目、论文摘要或原文摘录");
 const forest="/visualizations/haina/1846764/20230715.webp";
 const pixels=await Promise.all([source,restored].map(async base=>{
   const res=await get(base,forest);

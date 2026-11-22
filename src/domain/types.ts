@@ -45,6 +45,7 @@ export interface EvidenceTab {
   version?: string;
   body?: string;
   quote?: string;
+  savedWebExcerpt?: {publisherUrl?: string};
   /** Text extracted from this page of a remotely read PDF. */
   sourcePage?: number;
   before?: string;
@@ -285,6 +286,7 @@ export interface AnswerNotes {
   executor: string;
 }
 export interface Message {
+  gridCoverage?: import("./grid-coverage").GridCoverageEvidence;
   researchRegion?:import("./research-region").ResearchRegion|null;
   conversationAssertionEvidence?:import("./assertion-evidence-memory").AssertionEvidenceMemory[];
   researchIntent?:import("./research-intent").ResearchIntent;
@@ -360,6 +362,7 @@ export interface CapabilityGap {
   verification: string;
 }
 export interface DiscoveryResponse {
+  gridCoverage?: import("./grid-coverage").GridCoverageEvidence;
   researchRegion?:import("./research-region").ResearchRegion|null;
   conversationAssertionEvidence?:import("./assertion-evidence-memory").AssertionEvidenceMemory[];
   researchIntent?:import("./research-intent").ResearchIntent;

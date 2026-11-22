@@ -13,7 +13,7 @@ import type {DiscoveryContext,ToolCall,SearchRun} from './types';
 const context=():DiscoveryContext=>({caseId:null,filters:emptyFilters(),selection:null,gridSystem:'h3',layer:'all',camera:{center:[105,25],zoom:1,reason:'test'},citation:null});
 const input=(question:string):TurnInput=>({question,context:context(),history:[]});
 function route(i:TurnInput,action:TurnAction,keys:string[]=[],extra:Record<string,unknown>={}){
- return {action,goal:i.question,evidenceNeed:({respond:keys.length?'existing':'none',read:'read',search:'discover',clarify:'unclear',workspace:'none'})[action],targets:keys,reason:'依据本轮目标和已提供对象决定动作',clarification:action==='clarify'?'你说的这片森林具体在哪里？':null,...turnMetadata(i.question,i),searchPlan:null,...extra};
+ return {action,goal:i.question,evidenceNeed:({respond:keys.length?'existing':'none',read:'read',search:'discover',clarify:'unclear',workspace:'none'})[action],targets:keys,reason:'依据本轮目标和已提供对象决定动作',clarification:action==='clarify'?'你说的这片森林具体在哪里？':null,...turnMetadata(i.question,i),evidenceGap:action==='search'?i.question:null,...extra};
 }
 const retrievalPlan:DataSearchPlan={questionMode:'preserve',dataQuestion:'查找冰川物质平衡的数据来源',dataNeed:'高程与气象数据',hainaQueries:['高程模型'],paper:{name:'',facets:[{need:'高程',queries:['glacier elevation']}],region:[],scenario:[]},web:[{web:'glacier mass balance datasets',dataset:'glacier elevation'}]};
 async function prepared(i:TurnInput,p:unknown){let searches=0,planning=0;const r=await prepareTurn(i,new AbortController().signal,{run:async()=>{planning++;return JSON.stringify(p)},stage:()=>{},report:()=>{},search:async()=>{searches++;throw Error('Unexpected discovery');}});return {...r,searches,planning};}
@@ -38,25 +38,30 @@ test('an exact-source reading reads only that identity, preserves provenance, an
  const failed=await readPlannedSources(r.plan,i.question,new AbortController().signal,{read:async()=>{throw Error('HTTP 403')},stage:()=>{},report:()=>{}});assert.equal(failed[0].status,'failed');assert.deepEqual(failed[0].hits,[]);assert.equal(r.searches,0);
 });
 
-test('a discovery turn reuses its validated initial plan, calls all necessary sources, and reports their real states',async()=>{
- const i=input(retrievalPlan.dataQuestion),executed:string[]=[];let plans=0,extraPlans=0;
- const r=await prepareTurn(i,new AbortController().signal,{run:async()=>{plans++;return JSON.stringify(route(i,'search',[],{searchPlan:retrievalPlan}))},stage:()=>{},report:()=>{},search:p=>requiredDataSearch(i.question,new AbortController().signal,{
-  initialPlan:p.searchPlan,plan:async()=>{extraPlans++;throw Error('Duplicate planner')},stage:()=>{},report:()=>{},
-  paper:async()=>{executed.push('paper');return {records:[],tools:[],incomplete:[]}},haina:()=>{executed.push('haina');return {assets:[],total:0,synced:'',endpoint:'',warning:''}},web:async()=>{executed.push('web');return []},
- })});
- assert.equal(plans,1);assert.equal(extraPlans,0);assert.deepEqual(executed,['paper','haina','web']);assert.equal(r.retrieval?.sourceStatus.length,3);assert.equal(r.retrieval?.plan.dataQuestion,i.question);
+test('a discovery turn delegates the research gap, and the discovery provider plans its own channels',async()=>{
+ const i=input(retrievalPlan.dataQuestion),executed:string[]=[];let plans=0,discoveryPlans=0;
+ const r=await prepareTurn(i,new AbortController().signal,{run:async()=>{plans++;return JSON.stringify(route(i,'search'))},stage:()=>{},report:()=>{},search:p=>{
+  assert.equal(p.evidenceGap,i.question);
+  assert.equal(Object.hasOwn(p,'searchPlan'),false);
+  return requiredDataSearch(i.question,new AbortController().signal,{
+   plan:async()=>{discoveryPlans++;return JSON.stringify(retrievalPlan)},stage:()=>{},report:()=>{},
+   paper:async()=>{executed.push('paper');return {records:[],tools:[],incomplete:[]}},haina:()=>{executed.push('haina');return {assets:[],total:0,synced:'',endpoint:'',warning:''}},web:async()=>{executed.push('web');return []},
+  });
+ }});
+ assert.equal(plans,1);assert.equal(discoveryPlans,1);assert.deepEqual(executed,['paper','haina','web']);assert.equal(r.retrieval?.sourceStatus.length,3);assert.equal(r.retrieval?.plan.dataQuestion,i.question);
 });
 
 test('a proposed question transformation still stops before any source call',async()=>{
  const i=input('先将我的研究问题改写成数据问题供我确认'),executed:string[]=[];
- const r=await prepareTurn(i,new AbortController().signal,{run:async()=>JSON.stringify(route(i,'search',[],{searchPlan:{...retrievalPlan,questionMode:'reframe',dataQuestion:'需要哪些高程数据？'}})),stage:()=>{},report:()=>{},search:p=>requiredDataSearch(i.question,new AbortController().signal,{
-  initialPlan:p.searchPlan,plan:async()=>{throw Error('unexpected replan')},stage:()=>{},report:()=>{},paper:async()=>{executed.push('paper');return {records:[],tools:[],incomplete:[]}},haina:()=>{executed.push('haina');return {assets:[],total:0,synced:'',endpoint:'',warning:''}},web:async()=>{executed.push('web');return []},
+ const r=await prepareTurn(i,new AbortController().signal,{run:async()=>JSON.stringify(route(i,'search')),stage:()=>{},report:()=>{},search:()=>requiredDataSearch(i.question,new AbortController().signal,{
+  plan:async()=>JSON.stringify({...retrievalPlan,questionMode:'reframe',dataQuestion:'需要哪些高程数据？'}),stage:()=>{},report:()=>{},paper:async()=>{executed.push('paper');return {records:[],tools:[],incomplete:[]}},haina:()=>{executed.push('haina');return {assets:[],total:0,synced:'',endpoint:'',warning:''}},web:async()=>{executed.push('web');return []},
  })});assert.ok(r.retrieval?.questionCheck);assert.deepEqual(executed,[]);
 });
 
 test('invented objects, hidden retrieval parameters and unrequested workspace actions cannot pass the route boundary',()=>{
  const i=input('为什么切换到S2？');assert.throws(()=>parseTurnPlan(JSON.stringify(route(i,'read',['web:https://invented.example/x'])),i),/对象无效/);
- assert.throws(()=>parseTurnPlan(JSON.stringify(route(i,'respond',[],{searchPlan:retrievalPlan})),i),/未选择发现检索/);
+ assert.throws(()=>parseTurnPlan(JSON.stringify(route(i,'respond',[],{searchPlan:retrievalPlan})),i),/不能附带内部检索参数/);
+ assert.throws(()=>parseTurnPlan(JSON.stringify(route(input('找冰川数据'),'search',[],{evidenceGap:null})),input('找冰川数据')),/说明本轮缺少的证据/);
  assert.throws(()=>parseTurnPlan(JSON.stringify(route(i,'workspace')),i),/没有明确授权/);
  assert.throws(()=>parseTurnPlan(JSON.stringify(route(i,'read',[])),i),/确切对象/);
 });
@@ -86,7 +91,7 @@ test('the actual reply builder uses provided context and never labels an unreque
 test('explicit discovery cannot be downgraded, and explicit provided-only work cannot be expanded',()=>{
  const find=input('请帮我查找新的地表形变数据资料');assert.throws(()=>parseTurnPlan(JSON.stringify(route(find,'respond')),find),/必要检索/);
  const only=input('只解释引用这段，不需要查找数据或新资料');only.context.citation={title:'引文',scope:'片段',body:'原始摘录'};
- assert.equal(parseTurnPlan(JSON.stringify(route(only,'respond',['citation'])),only).action,'respond');assert.throws(()=>parseTurnPlan(JSON.stringify(route(only,'search',[],{searchPlan:retrievalPlan})),only),/限定只处理/);
+ assert.equal(parseTurnPlan(JSON.stringify(route(only,'respond',['citation'])),only).action,'respond');assert.throws(()=>parseTurnPlan(JSON.stringify(route(only,'search')),only),/限定只处理/);
  const extract=input('找出这段引用中描述的观测变量，不需要查找新资料');extract.context.citation=only.context.citation;
  assert.equal(parseTurnPlan(JSON.stringify(route(extract,'respond',['citation'])),extract).action,'respond');
  const read=input('只解释这篇指定论文，不需要查找新资料：https://example.org/paper.pdf');
@@ -123,6 +128,7 @@ test('a greeting plan with null summary fields is repaired instead of failing th
 
 test('the planning prompt ends with the turn-plan contract so weaker models cannot mistake search parameters for the plan itself',()=>{
  assert.ok(turnPlanningInstructions.endsWith(turnPlanOutputContract));
- assert.ok(/searchPlan/.test(turnPlanOutputContract));
+ assert.ok(/evidenceGap/.test(turnPlanOutputContract));
+ assert.doesNotMatch(turnPlanningInstructions,/hainaQueries|searchPlan/);
  assert.throws(()=>parseTurnPlan(JSON.stringify({questionMode:'preserve',dataQuestion:'定位到杭州市',dataNeed:null,hainaQueries:['杭州市']}),input('定位到杭州市')),/检索计划/);
 });

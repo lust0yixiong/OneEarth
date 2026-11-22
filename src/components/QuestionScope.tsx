@@ -8,7 +8,9 @@ export function QuestionScope({items,remove}:{items:ScopeItem[];remove?:(key:str
       const Icon=item.kind==="grid"?Hexagon:item.kind==="time"?CalendarRange:item.kind==="reference"?Quote:Database;
       const label=scopeLabel(item),key=scopeKey(item);
       return <div className="scope-chip" key={key}>
-        <details><summary title={label}><Icon size={13}/><span>{label}</span></summary><small>{scopeDetail(item)}</small></details>
+        <details><summary title={label}><Icon size={13}/><span>{label}</span></summary>
+          <small title={item.kind==="grid" ? item.coverageScope?.summary?.candidateIdentity ?? undefined : undefined}>{scopeDetail(item)}</small>
+        </details>
         {remove && <button type="button" aria-label={"移除"+label} onClick={()=>remove(key)}><X size={13}/></button>}
       </div>;
     })}

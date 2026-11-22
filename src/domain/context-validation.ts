@@ -121,6 +121,11 @@ export function validContext(v: any): v is DiscoveryContext {
           g.grid.key!==v.selection.grid.key || g.grid.key!==(g.grid.system==="h3"?"h":"s")+g.grid.n ||
           g.grid.label!==(g.grid.system==="h3"?"H3 R":"S2 L")+g.grid.n ||
           JSON.stringify(g.point)!==JSON.stringify(v.selection.point) || typeof i.place!=="string" || i.place.length>300)return false;
+        if(i.coverageScope!==undefined){
+          const scope=i.coverageScope;
+          if(!scope || typeof scope.id!=="string" || !/^[0-9a-z_.:-]{1,160}$/i.test(scope.id) ||
+            typeof scope.revision!=="string" || !/^[0-9a-z_.:-]{1,160}$/i.test(scope.revision))return false;
+        }
       }else if(i.kind==="time"){
         if(!pair(i.period) || !i.period.every(Number.isInteger) || i.period[0]>i.period[1] ||
           JSON.stringify(i.period)!==JSON.stringify(f.period) || (i.utcWindow!==null && !validWindow(i.utcWindow)) ||

@@ -7,6 +7,15 @@ export interface ResearchIntent {
   months: number[];
 }
 
+export const researchIntentSchema={
+  type:"object",additionalProperties:false,required:["purpose","task","region","time","months"],
+  properties:{
+    purpose:{type:"string",maxLength:1200},task:{type:"string",maxLength:1200},
+    region:{type:["string","null"],maxLength:1200},time:{type:["string","null"],maxLength:1200},
+    months:{type:"array",items:{type:"integer",minimum:1,maximum:12},maxItems:12},
+  },
+};
+
 export function validResearchIntent(value: unknown): value is ResearchIntent {
   if (!value || typeof value !== "object") return false;
   const v = value as ResearchIntent;
