@@ -14,6 +14,7 @@ const storage=path.join(root,"storage-primary");
 const agents=path.join(home,"Library/LaunchAgents");
 const logDir=path.join(root,"logs");
 const domain="gui/"+process.getuid();
+const appPorts=[5474,5475,5476,5477];
 const labels={db:"org.oneearth.next.postgres",objects:"org.oneearth.next.garage",app:"org.oneearth.next"};
 const file=label=>path.join(agents,label+".plist");
 const controlled=label=>domain+"/"+label;
@@ -71,7 +72,17 @@ async function portsMatch(ports,listening){
   }
   throw Error("OneEarth Next 存储端口未进入期望状态。");
 }
-function boot(label){launch(["bootstrap",domain,file(label)]);}
+async function boot(label){
+  for(let attempt=0;;attempt++){
+    try{launch(["bootstrap",domain,file(label)]);return;}
+    catch(error){
+      if(registered(label))return;
+      // launchd may still be removing the previous instance immediately after bootout.
+      if(attempt>=6||error.status!==5)throw error;
+      await wait(350);
+    }
+  }
+}
 if(action==="install"){
   validPrivate(root);
   const release=applicationPath(releaseArg);
@@ -106,19 +117,22 @@ if(action==="install"){
     await portsMatch([pg,s3],false);
     writeJob(labels.db,storage,[postgres,"-D",path.join(storage,"postgres"),"-p",String(pg),"-h","127.0.0.1","-k",socket],env);
     writeJob(labels.objects,storage,[garage,"-c",path.join(storage,"garage.toml"),"server"],env);
-    boot(labels.db);boot(labels.objects);
+    await boot(labels.db);await boot(labels.objects);
   }
   await portsMatch([pg,s3],true);
   stop(labels.app);
+  await portsMatch(appPorts,false);
   writeJob(labels.app,release,app,{...env,ONEEARTH_PORT:"5474",ONEEARTH_DISCOVERY_PORT:"5475",
     ONEEARTH_SPATIAL_PORT:"5476",ONEEARTH_RUNTIME_PORT:"5477",ONEEARTH_DATA_DIR:data,ONEEARTH_HOST:"127.0.0.1"});
-  boot(labels.app);
+  await boot(labels.app);
 }else if(action==="restart"){
-  launch(["kickstart","-k",controlled(labels.app)]);
+  stop(labels.app);
+  await portsMatch(appPorts,false);
+  await boot(labels.app);
 }else if(action==="stop"){
   stop(labels.app);
 }else if(action==="start"){
-  if(!registered(labels.app))boot(labels.app);
+  if(!registered(labels.app))await boot(labels.app);
 }else if(action!=="status"){
   throw Error("用法 macos-product-service.mjs install <发布目录> <基础数据目录> | start | stop | restart | status");
 }
