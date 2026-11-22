@@ -7,7 +7,7 @@ const origin=new URL(process.env.ONEEARTH_URL||"http://127.0.0.1:5474");
 assert.notEqual(origin.port,"5174");
 const parent=process.env.ONEEARTH_PARENT_TASK||"c4036a5b-0444-4279-b9b0-d6283c9dd4f0";
 assert.match(parent,/^[a-f0-9-]{36}$/);
-const folder=process.env.ONEEARTH_EVIDENCE_DIR||"evidence/product/rc2/numbered";
+const folder=process.env.ONEEARTH_EVIDENCE_DIR||"evidence/product/rc3/numbered";
 await mkdir(folder,{recursive:true});
 const cases={
   respond:"只用上一条答复中第 2 个来源已给出的信息，用一句话说它的降水产品是按什么时间尺度整理的。沿用已有摘录即可。",
@@ -69,6 +69,7 @@ try{
         originalCitation:publicAddress(ref.url),originalExcerptTruncated:priorRead.excerptTruncated,
         binding:{seq:ordinal?.seq,sourceId:publicAddress(parsed(ordinal?.output)?.sourceId)},
         decision:{seq:plan?.seq,action:modelDecision?.action,reason:modelDecision?.reason,
+          restoredNumberedTarget:modelDecision?.restoredNumberedTarget===true,
           targets:modelDecision?.targets?.map(({key,url,basis})=>({key:publicAddress(url)||key,basis})),},
         reads,discoveries,references,terminal:terminal.result?"complete":terminal.code||"failed",
         executor:traces?.timings?.map(({model,executor,elapsedMs})=>({model,executor,elapsedMs})),

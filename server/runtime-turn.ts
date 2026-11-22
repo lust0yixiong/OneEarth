@@ -12,7 +12,7 @@ import { validHistory } from "./turn-history";
 import path from "node:path";
 import {questionGridEvidence} from "./question-grid";
 import {ExecutorFailure} from "./executor-failure";
-import {prepareTurn,turnMetadata,turnPlanSchema,type TurnPlan} from "./turn-planning";
+import {prepareTurn,turnMetadata,turnPlanSchema,TurnPlanningFailure,type TurnPlan} from "./turn-planning";
 import {randomUUID} from "node:crypto";
 import {researchExecutor} from "./research-executor";
 import {continueResearch, evidenceDecisionSchema} from "./research-evidence";
@@ -382,7 +382,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
   } catch(err) {
     if(signal.aborted)throw err;
     const error=err instanceof SyntaxError?"模型回复格式异常，请重试。":err instanceof Error?err.message:"数据发现请求未能完成。";
-    const code=err instanceof AnswerReferenceError||err instanceof ExecutorFailure?err.code:undefined;
+    const code=err instanceof AnswerReferenceError||err instanceof ExecutorFailure||err instanceof TurnPlanningFailure?err.code:undefined;
     const executorDiagnostic=err instanceof ExecutorFailure?err.diagnostic:undefined;
     if(err instanceof AnswerReferenceError)runTrace.calls.push({id:"synthesis-validation",kind:"tool",name:"回答引用校验",input:"核对本轮来源编号与正文引用",status:"failed",error,output:JSON.stringify(synthesisFailureDiagnostic(err))});
     for(const call of runTrace.calls) if(call.status==="running") {call.status="failed";call.error=error;}

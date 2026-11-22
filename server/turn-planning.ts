@@ -17,7 +17,7 @@ export type TurnInput={question:string;context:DiscoveryContext;history:TurnHist
   numbered?:NumberedReference; numberedRead?:ReadEvidence;
   numberedAssertion?:import("../src/domain/assertion-evidence-memory").AssertionEvidenceMemory};
 export type TurnPlan={action:TurnAction;goal:string;evidenceNeed:"none"|"existing"|"read"|"discover"|"unclear";
-  targets:TurnTarget[];reason:string;clarification:string|null;researchIntent:ResearchIntent;conversationContext:string;searchPlan:string|undefined};
+  targets:TurnTarget[];restoredNumberedTarget?:true;reason:string;clarification:string|null;researchIntent:ResearchIntent;conversationContext:string;searchPlan:string|undefined};
 
 const intentSchema=(dataSearchSchema.properties as any).researchIntent;
 export const turnPlanSchema={type:"object",additionalProperties:false,
@@ -40,7 +40,7 @@ action规则：
 - search：本轮要求发现新数据/论文/新来源、扩展候选、获取新的观测匹配，或答案所需的关键外部事实不在已提供材料且没有可直接读取的确定来源。evidenceNeed=discover。保留必要检索，不能用泛泛解释代替明确的查找/核验请求。
 - clarify：无法指认“这个/这片”等对象，或缺少会改变下一步动作的关键条件。evidenceNeed=unclear，clarification自然问最关键的一两点。已提供摘录、身份或链接时不要重复索要；一般原理问题不强求研究区/年份。
 - workspace：用户明确要求切换/显示/定位/飞到/前往/预览等现有界面操作（含把地图移动到某个地名），evidenceNeed=none或existing。问操作的原因/区别属于respond，不能当作授权操作。不要把“查找数据”伪装成界面切换。
-targets只能取availableTargets中的key；没有明确引用不猜具体对象。basis=workspace只是浏览上下文，不自动视为用户选择；basis=history只是以前出现过，需要结合原话指代。numbered 指服务器按上一条回答解析出的稳定引用，只用于确定对象。即使同一个编号，解释已有摘录、打开来源补读缺失正文、用来源作线索查找独立新资料，是三个不同动作。按本轮目标选择动作，targets 绑定该来源。
+targets只能取availableTargets中的key；没有明确引用不猜具体对象。basis=workspace只是浏览上下文，不自动视为用户选择；basis=history只是以前出现过，需要结合原话指代。numbered 指服务器按上一条回答解析出的稳定引用，只用于确定对象。即使同一个编号，解释已有摘录、打开来源补读缺失正文、用来源作线索查找独立新资料，是三个不同动作。按本轮目标选择动作。编号来源由服务器稳定绑定，模型可以回传该对象，也可以省略它；targets 不得编造新的对象键。
 - 已有内容就足够且用户仅要求依照既有内容时，用 respond。已读或有摘录只说明过去存在这些材料；需要核对被截断、未保留的段落或明确要求实际打开网页时，用 read 读取精确地址。不要把打开网页核对内容交给 workspace。
 - 要求找到另一项独立资料时，用 search。编号目标是检索线索，不能拿旧来源充作新发现；继续遵守用户的范围与问题转换前确认。只读取这一来源的要求不能变成跨渠道发现。
 数字编号缺少确切对应关系时应澄清。read最多选3个可读来源；不要为凑依据访问无关链接。
@@ -143,8 +143,11 @@ export function parseTurnPlan(raw:string,input:TurnInput,available=turnTargets(i
     throw Error("用户明确限定只处理已有内容且不做新检索，不能附加发现任务；缺少所指正文时可只读指定对象。");
   const targets=[...new Set<string>(value.targets)].map(k=>available.find(t=>t.key===k)!);
   const pinned=available.find(t=>t.basis==="numbered");
-  if(pinned&&["read","search","respond"].includes(value.action)&&!targets.includes(pinned))
-    throw Error("本轮已有服务器解析的编号来源；请保留其真实 key，并按用户本轮目标选择动作。");
+  const restorePinned=pinned&&["read","search","respond"].includes(value.action)&&!targets.includes(pinned);
+  if(restorePinned){
+    if(targets.length===8)throw Error("本轮选定对象过多，无法纳入已绑定的编号来源。");
+    targets.unshift(pinned);
+  }
   if(pinned&&value.action==="read"&&targets.some(t=>t!==pinned&&!["attachment","citation","question"].includes(t.basis)))
     throw Error("定向读取只能读取所指来源和本轮另外明确附上的对象。");
   if(value.action==="read"&&(!targets.length||targets.length>3||targets.some(t=>t.kind==="web"&&!t.url)))throw Error("读取动作需要一至三个确切对象；缺少对象应先澄清。");
@@ -161,8 +164,16 @@ export function parseTurnPlan(raw:string,input:TurnInput,available=turnTargets(i
     clarification=value.clarification.trim();
   }
   return {action:value.action,goal:value.goal.trim(),evidenceNeed:value.evidenceNeed,targets,reason:value.reason.trim(),clarification,
+    ...(restorePinned?{restoredNumberedTarget:true as const}:{}),
     researchIntent:value.researchIntent,conversationContext:value.conversationContext,
     searchPlan:value.action==="search"&&value.searchPlan?JSON.stringify(value.searchPlan):undefined};
+}
+
+export class TurnPlanningFailure extends Error {
+  readonly code="TURN_PLAN_INVALID";
+  constructor(){
+    super("这次没能确定要处理的资料和操作。你可以点选具体来源，再说明是解释已有内容、打开原文，还是查找新资料。");
+  }
 }
 
 type PlanningDeps={run:(prompt:string)=>Promise<string>;stage:(message:string)=>void;report:(call:ToolCall)=>void;
@@ -180,7 +191,13 @@ export async function prepareTurn(input:TurnInput,signal:AbortSignal,deps:Planni
   try{plan=parseTurnPlan(raw,input,available);}catch(error){
     signal.throwIfAborted();
     raw=await deps.run(turnPlanningInstructions+"\n"+JSON.stringify({input:payload,invalidPlan:raw.slice(0,16000),correction:error instanceof Error?error.message:"动作规划无效",rule:"只修正动作、对象与结构；保留本轮原话和已确认条件，不自行新增检索。"}));
-    plan=parseTurnPlan(raw,input,available);
+    try{plan=parseTurnPlan(raw,input,available);}
+    catch(rejected){
+      const failure=new TurnPlanningFailure();
+      deps.report({...call,status:"failed",error:failure.message,
+        output:JSON.stringify({diagnostic:rejected instanceof Error?rejected.message:"动作规划无效",attempts:2})});
+      throw failure;
+    }
   }
   signal.throwIfAborted();
   // An explicit "move the view to X" request is a workspace action even when a
