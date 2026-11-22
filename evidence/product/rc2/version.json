@@ -1,0 +1,18 @@
+{
+  "checkedAt": "2026-11-22T00:53:51.788Z",
+  "version": "0.2.0-rc.2",
+  "candidateCommit": "8d9793309a8805d04ec23f480a79f2a519e8bba9",
+  "release": "v0.2.0-rc.2-8d97933",
+  "entry": "http://127.0.0.1:5474",
+  "arch": "arm64",
+  "node": "v26.0.0",
+  "tests": 550,
+  "build": true,
+  "original": {
+    "online": true,
+    "blockedPort": true,
+    "blockedDirectory": true,
+    "blockedLaunchAgent": true
+  },
+  "distIndexSha256": "da0687a48fe2644c4455f36d9c127ec3883d07d12324d6c5767b89cb460eedcf"
+}

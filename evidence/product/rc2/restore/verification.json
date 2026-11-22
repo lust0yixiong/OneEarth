@@ -1,0 +1,15 @@
+{
+  "source": "http://127.0.0.1:5474",
+  "restored": "http://127.0.0.1:5574",
+  "version": "0.2.0-rc.2",
+  "taskId": "6ed96dd3-e724-43ab-b8f8-5ed873960b8e",
+  "sameResearchRecord": true,
+  "sourceId": "earthnano:6888816ea862eaeaa624debf9a41e962fde508657b27af06ab60e6bd6d5a4085",
+  "assertionEvidenceReadable": true,
+  "forest": {
+    "size": 14648,
+    "sha256": "79b9368852254c0fbf19db9d006b3983ceb84db6950e42a2e0f683dd3520f646"
+  },
+  "browserReopened": true,
+  "prototypeRequests": 0
+}

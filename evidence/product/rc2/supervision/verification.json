@@ -1,0 +1,114 @@
+{
+  "entry": "http://127.0.0.1:5474",
+  "taskId": "6ed96dd3-e724-43ab-b8f8-5ed873960b8e",
+  "checkedAt": "2026-11-22T00:53:16.422Z",
+  "before": {
+    "jobs": [
+      {
+        "label": "org.oneearth.next.postgres",
+        "registered": true,
+        "state": "running",
+        "pid": 54386
+      },
+      {
+        "label": "org.oneearth.next.garage",
+        "registered": true,
+        "state": "running",
+        "pid": 54388
+      },
+      {
+        "label": "org.oneearth.next",
+        "registered": true,
+        "state": "running",
+        "pid": 69128
+      }
+    ],
+    "appParent": 1,
+    "appTty": "??",
+    "checks": [
+      {
+        "port": 5474,
+        "status": "ok",
+        "version": "0.2.0-rc.2"
+      },
+      {
+        "port": 5475,
+        "status": "ok",
+        "service": "discovery"
+      },
+      {
+        "port": 5476,
+        "status": "ok",
+        "service": "spatial",
+        "engine": "postgresql",
+        "postgis": "3.6.3",
+        "objects": "s3"
+      },
+      {
+        "port": 5477,
+        "status": "ok",
+        "version": "0.2.0-rc.2",
+        "service": "runtime"
+      }
+    ],
+    "sourceId": "earthnano:6888816ea862eaeaa624debf9a41e962fde508657b27af06ab60e6bd6d5a4085",
+    "layerBytes": 14648,
+    "layerSha256": "79b9368852254c0fbf19db9d006b3983ceb84db6950e42a2e0f683dd3520f646",
+    "researchSha256": "01ad27730cdbd3c5b4ed9fdbd3cb842a9001c52c1f0c2839c006bf9b3f7bc837"
+  },
+  "after": {
+    "jobs": [
+      {
+        "label": "org.oneearth.next.postgres",
+        "registered": true,
+        "state": "running",
+        "pid": 54386
+      },
+      {
+        "label": "org.oneearth.next.garage",
+        "registered": true,
+        "state": "running",
+        "pid": 54388
+      },
+      {
+        "label": "org.oneearth.next",
+        "registered": true,
+        "state": "running",
+        "pid": 69402
+      }
+    ],
+    "appParent": 1,
+    "appTty": "??",
+    "checks": [
+      {
+        "port": 5474,
+        "status": "ok",
+        "version": "0.2.0-rc.2"
+      },
+      {
+        "port": 5475,
+        "status": "ok",
+        "service": "discovery"
+      },
+      {
+        "port": 5476,
+        "status": "ok",
+        "service": "spatial",
+        "engine": "postgresql",
+        "postgis": "3.6.3",
+        "objects": "s3"
+      },
+      {
+        "port": 5477,
+        "status": "ok",
+        "version": "0.2.0-rc.2",
+        "service": "runtime"
+      }
+    ],
+    "sourceId": "earthnano:6888816ea862eaeaa624debf9a41e962fde508657b27af06ab60e6bd6d5a4085",
+    "layerBytes": 14648,
+    "layerSha256": "79b9368852254c0fbf19db9d006b3983ceb84db6950e42a2e0f683dd3520f646",
+    "researchSha256": "01ad27730cdbd3c5b4ed9fdbd3cb842a9001c52c1f0c2839c006bf9b3f7bc837"
+  },
+  "prototypeHealthOutsidePolicy": 200
+}

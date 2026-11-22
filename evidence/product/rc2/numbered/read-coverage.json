@@ -1,0 +1,10 @@
+{
+  "taskId": "4619059b-1da3-48ce-82d5-49081ee5f302",
+  "source": "https://www.psl.noaa.gov/data/gridded/data.chirps.html",
+  "engine": "DeepSeek Fetch",
+  "currentFetch": true,
+  "excerptLength": 2745,
+  "knownContinuationPresentInNewExcerpt": true,
+  "answerCitedRequestedPage": true,
+  "discoveryCalls": 0
+}
