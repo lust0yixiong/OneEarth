@@ -7,6 +7,7 @@ const reply=(message:string)=>({message,limitation:"",followUp:""});
 test("history or snippets cannot authorize a claim of opening a source in this turn",()=>{
   assert.throws(()=>validateSourceReadClaim(reply("我本轮打开页面时也未能读到后半段。"),[]),SourceReadClaimError);
   assert.throws(()=>validateSourceReadClaim(reply("I opened the source this turn."),[]),SourceReadClaimError);
+  assert.throws(()=>validateSourceReadClaim(reply("针对原句的定向检索也没有返回结果。"),[]),SourceReadClaimError);
   assert.doesNotThrow(()=>validateSourceReadClaim(reply("历史摘录没有后半段，本轮没有打开来源。"),[]));
 });
 test("only current read actions are source read receipts",()=>{

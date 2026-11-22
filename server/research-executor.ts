@@ -12,6 +12,6 @@ export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|un
     discover:(id:string,input:Omit<DiscoveryInput,"config"|"deepseekTools">,emit:(event:DiscoveryEvent)=>void)=>
       discoverThroughService(id,{...input,config,deepseekTools},signal,emit),
     read:(plan:Parameters<typeof readPlannedSources>[0],question:string,deps:Parameters<typeof readPlannedSources>[3])=>
-      readPlannedSources(plan,question,signal,deps),
+      readPlannedSources(plan,question,signal,{...deps,configuredFetch:deepseekTools?.fetch}),
   };
 }

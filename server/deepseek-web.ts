@@ -9,12 +9,12 @@ export class DeepSeekRequestError extends Error {
   constructor(message:string,readonly stopBatch:boolean,readonly status?:number) { super(message); }
 }
 
-async function request(tool: "search" | "fetch", body: object, signal: AbortSignal, fetchImpl: typeof fetch) {
+async function request(tool: "search" | "fetch", body: object, signal: AbortSignal, fetchImpl: typeof fetch, fresh=false) {
   const key = deepSeekKey();
   if (!key) throw new DeepSeekRequestError("请在设置中配置 DeepSeek API Key。",true);
   signal.throwIfAborted();
   const cacheKey=createHash('sha256').update(key).digest('hex')+':'+tool+':'+JSON.stringify(body);
-  const cached=fetchImpl===fetch?snapshots.get(cacheKey,tool==='search'?300000:600000):undefined;
+  const cached=!fresh&&fetchImpl===fetch?snapshots.get(cacheKey,tool==='search'?300000:600000):undefined;
   if(cached)return {...cached,cacheKey};
   const response = await fetchImpl("https://api.deepseek.com/v1/tools/" + tool, {
     method: "POST", redirect: "error", signal,
@@ -40,10 +40,10 @@ export async function deepSeekSearch(query: string, signal: AbortSignal, fetchIm
   return {hits: [...hits.values()],...(cacheStoredAt?{cacheStoredAt}:{})};
 }
 
-export async function deepSeekFetch(hit: WebHit, address: string, signal: AbortSignal, fetchImpl: typeof fetch) {
+export async function deepSeekFetch(hit: WebHit, address: string, signal: AbortSignal, fetchImpl: typeof fetch, fresh=false) {
   const url = publicPage(address);
   if (!url) throw Error("没有可公开读取的网页地址。");
-  const {data,cacheStoredAt,cacheKey} = await request("fetch", {url}, signal, fetchImpl);
+  const {data,cacheStoredAt,cacheKey} = await request("fetch", {url}, signal, fetchImpl, fresh);
   if (typeof data?.content !== "string" || !usefulPageText(data.content,hit)) throw Error("DeepSeek Fetch 未取得网页正文。");
   if(!cacheStoredAt && fetchImpl===fetch)snapshots.put(cacheKey,data);
   const content: string = data.content.trim();

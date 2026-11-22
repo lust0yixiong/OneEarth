@@ -229,7 +229,7 @@ export async function synthesizeAnswer(prompt:string,materials:AnswerReference[]
    issue:error instanceof AnswerReferenceError
     ?{kind:error.problem,token:error.token.slice(0,160),available:error.available,explanation:error.problem==="format"?"请使用本轮 [S编号]，不要沿用历史显示编号。":"该编号不在本轮材料中。"}
     :error instanceof SourceReadClaimError
-      ?{kind:"source-read",explanation:error.message+"请说明所用的是历史材料或本轮已见摘要，去掉对未执行动作的描述。"}
+      ?{kind:"source-read",explanation:error.message+"只依据本轮材料与工具记录，保留确有依据的引用，修正错误的来源和动作描述。"}
       :{kind:"structure",explanation:"请回答用户原问题，正文及分段须符合 JSON 结构；内部参数说明不能替代答复；核算最多一轮，最终回复不再提出请求。"},
    allowedReferences:materials.map((_,i)=>"S"+(i+1)),previousReply:raw.slice(0,24000),
   };

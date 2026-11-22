@@ -21,7 +21,7 @@ import { caseById, sourceLabels } from "../src/domain/catalog";
 import type { DiscoveryContext, DiscoveryResponse } from "../src/domain/types";
 
 import type { researchExecutor } from "./research-executor";
-import {sourceReadReceipts,validateSourceReadClaim} from "./source-read-provenance";
+import {SourceReadClaimError,sourceReadReceipts,validateSourceReadClaim} from "./source-read-provenance";
 import type { TurnHistoryEntry as Turn } from "./turn-history";
 
 const segmenter = new Intl.Segmenter("zh", {granularity:"word"});
@@ -267,6 +267,15 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       ...rows.map(r=>{const ref={kind:"asset" as const,id:r.id,title:r.title,source:r.source};return {...ref,sourceChannel:r.sourceChannel||referenceChannel(ref,assetById.get(r.id),observationById(r.id))};}),
       ...webHits.map(h=>({kind:"web" as const,title:h.title,url:h.url,referenceType:webDocumentType(h),sourceChannel:"web" as const})),
     ];
+    const exactReadRefs=turn?.plan.action==="read"?references.flatMap((ref,index)=>
+      ref.kind==="web"&&selectedUrls?.has(ref.url)&&searches.some(run=>run.status==="done"&&run.hits.some(hit=>hit.url===ref.url&&hit.pageExcerpt))
+        ? [{url:ref.url,token:"[S"+(index+1)+"]"}]:[]):[];
+    function verifyExecutionAndReferences(answer:SynthesisAnswer){
+      validateSourceReadClaim(answer,readReceipts,!!retrieval);
+      if(exactReadRefs.length&&!answer.references.some(ref=>ref.kind==="web"&&exactReadRefs.some(source=>source.url===ref.url)))
+        throw new SourceReadClaimError("定向读取已经返回材料，为核查结论或证据限制加上实际所读原站引用 "+
+          exactReadRefs.map(ref=>ref.token).join("、")+"。");
+    }
     const prompt=synthesisInstructions+"\n"+JSON.stringify({question:query,questionMode:retrieval?.plan.questionMode,
       turnAction:turn&&{action:turn.plan.action,goal:turn.plan.goal,evidenceNeed:turn.plan.evidenceNeed,targets:turn.plan.targets.map(({excerpt,...t})=>t),
         rule:"本轮没有执行数据发现检索。只围绕指定对象、已提供摘录和相关历史证据回答；通用原理可解释，但不能伪称本轮查获。未读来源不能说已读，缺少具体事实时明确边界，不补造数据集、论文事实或观测数。不要把本轮问题重新改成找数据。"},
@@ -274,8 +283,8 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       researchIntent:retrieval?.plan.researchIntent||turn?.plan.researchIntent,conversationContext:retrieval?.plan.conversationContext||turn?.plan.conversationContext,
       dataQuestion:retrieval?.plan.dataQuestion,dataNeed:retrieval?.plan.dataNeed,mandatorySearches:retrieval?.sourceStatus,history:modelHistory,
       referenceProvenance:conversationReferenceProvenance(history),
-      executionScope:{externalCommunicationAvailable:false,permissionsRequestedByPlatform:false,currentSourceReads:readReceipts,
-        sourceReadRule:"本轮动作以 currentSourceReads 为准。历史摘录标明是以前取得，不能称本轮已打开；搜索摘要也不是读取。没有读取回执不描述本轮打开网页。失败只能说尝试未取得正文；节选不证明完整原文已读。",
+      executionScope:{externalCommunicationAvailable:false,permissionsRequestedByPlatform:false,currentSourceReads:readReceipts,discoveryDelegated:!!retrieval,requiredExactSourceReferences:exactReadRefs,
+        sourceReadRule:"本轮动作以 currentSourceReads 为准。历史摘录标明是以前取得，不能称本轮已打开；搜索摘要也不是读取。没有读取回执不描述本轮打开网页。失败只能说尝试未取得正文；节选不证明完整原文已读。discoveryDelegated 为 false 时不得声称发过定向检索或补充检索。定向读取有返回时，以 requiredExactSourceReferences 的编号注明来源，即使正文不足也可用它说明核对边界。",
         notice:"本请求的工具链只含目录/网页/文献资料读取及显式记录的本地核算，不含联系人员、发邮件或取得社群许可。用户提供或论文记载的许可不能说成平台取得。"},
       materialSelection:{considered:papers.length+(retrieval?.haina.length||0),included:rows.length,
         notice:"身份行与有界节选分别标记；未装入原文不代表来源不存在，候选有论文记录不等于与本题相关。"},workspace:{
@@ -299,7 +308,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       diagnostic=>{repaired=true;repairInput=JSON.stringify(diagnostic);onStage?.("正在重新核对回答中的资料引用",searches);onTool?.({id:"synthesis-repair",kind:"tool",name:"回答引用与结构核对",status:"running",input:repairInput});},
       calculation=>{actualCalculations.push(calculation);onStage?.(calculation.status==="completed"?"已完成受控数值核算，正在核对解释":"数值核算条件未通过，保留待核边界",searches);
         onTool?.({id:"calculation-"+crypto.randomUUID(),kind:"tool",name:"受控数值核算",input:calculation.arguments||"未提供有效参数",status:calculation.status==="completed"?"done":"failed",output:JSON.stringify(calculation),...(calculation.error?{error:calculation.error}:{})});},
-      {validateAnswer:answer=>validateSourceReadClaim(answer,readReceipts),enforceCalculations:true,onCalculationPlan:status=>{onStage?.(status==="running"?"正在核对具体演算的计算参数":status==="failed"?"核算参数准备未完成，正在保留已有内容":status==="done"?"已形成核算请求，继续处理答复":"未形成新增演算请求，继续整理答复",searches);onTool?.({id:"calculation-plan",kind:"tool",name:"核对数值演算参数",input:"草稿含具体演算，先形成有界计算请求",status:status==="running"?"running":status==="done"?"done":status==="failed"?"failed":"partial",...(status!=="running"?{output:status==="done"?"已形成计算请求；计算状态见受控数值核算记录。":status==="failed"?"核算参数准备未完成，保留已有内容。":"未形成新增演算请求；继续回答原问题，来源报告的指标仍按原出处保留。"}:{})});},
+      {validateAnswer:verifyExecutionAndReferences,enforceCalculations:true,onCalculationPlan:status=>{onStage?.(status==="running"?"正在核对具体演算的计算参数":status==="failed"?"核算参数准备未完成，正在保留已有内容":status==="done"?"已形成核算请求，继续处理答复":"未形成新增演算请求，继续整理答复",searches);onTool?.({id:"calculation-plan",kind:"tool",name:"核对数值演算参数",input:"草稿含具体演算，先形成有界计算请求",status:status==="running"?"running":status==="done"?"done":status==="failed"?"failed":"partial",...(status!=="running"?{output:status==="done"?"已形成计算请求；计算状态见受控数值核算记录。":status==="failed"?"核算参数准备未完成，保留已有内容。":"未形成新增演算请求；继续回答原问题，来源报告的指标仍按原出处保留。"}:{})});},
       onNodeFailure:({node,error,retained})=>{
         if(node==="answer-repair")repairFailed=true;
         const id=node==="answer-repair"?"synthesis-repair":node==="calculation-plan"?"calculation-plan":"answer-generation";
@@ -321,7 +330,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         calculations:actualCalculations,parentSignal:signal,
         run:(p,schema,reviewSignal)=>executor.model(p,{outputSchema:schema},reviewSignal),onTool});
       signal.throwIfAborted();
-      try{validateSourceReadClaim(reviewed.answer,readReceipts);answer=reviewed.answer;}
+      try{verifyExecutionAndReferences(reviewed.answer);answer=reviewed.answer;}
       catch(error){onTool?.({id:"source-read-provenance",kind:"tool",name:"核对来源访问记录",input:"核对模型审读生成的动作描述",
         status:"failed",error:error instanceof Error?error.message:"来源访问记录不相符。"});}
     }
