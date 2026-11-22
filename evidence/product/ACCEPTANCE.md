@@ -1,5 +1,11 @@
 # Mac mini 产品验收
 
+## Mac mini 日常入口 v0.2.0-rc.7
+
+2026-11-22，launchd 常驻入口 [5474](http://127.0.0.1:5474) 已切换至 rc.7，签收源码 `555f9e1`，部署来源 `16c49ee`。沿用原回环绑定、primary 的三库、PostGIS、Garage 和凭据。rc.3 已退出日常服务，原发布与启动项副本保留供回退。停写备份已在独立存储恢复三库、196 条当前论文目录记录及 5,950 个对象。切换前后的两条研究记录、论文依据与森林图层一致。
+
+独立测试从网页提交 [RGI 7.0 研究任务](http://127.0.0.1:5474/?research=7fca27cd-a50e-4fde-bb7b-edb13fd62f90)。primary 归档记录一次运行时启动和一次 A2A 发现委托 `5de8b908-1f45-4996-8e3d-1ad23fe77c23`。实测运行时为 Codex `gpt-6-luna`，发现为 DeepSeek `deepseek-flash`，终答保存 5 条网页出处。部署、恢复和脱敏调用记录见 `~/Library/Application Support/OneEarth Next/iterations/primary-rc7-final-20261122/` 下的 `deployment-verification.json`、`restore.log` 和 `research-verified.json`。
+
 ## Mac mini 工作台与证据归属候选 v0.2.0-rc.7
 
 **Mac mini 本批独立阶段验收通过。** 总体负责人于 2026-11-22 签收“工作台统一业务 API、发现职责收口”，源码为 `555f9e16bb853c0e8176d025ab46ef3647bf9a5c`，构建清单 SHA-256 为 `c4976780a1976ce3369f754222fcced77291aea2633d3edc5072e192cb6303ad`。入口为本机隔离的 [5894](http://127.0.0.1:5894)，负基线为 `4cad67b` 的 [5884](http://127.0.0.1:5884)。两边从独立 PostgreSQL 和 S3 恢复同一份快照，各恢复三库及 5,950 个对象。最终候选类型检查、构建和含真实隔离 PostgreSQL 的 680 项测试通过。图见[工作台与证据服务架构](../../docs/diagrams/oneearth-mac-mini-rc7.png)。
