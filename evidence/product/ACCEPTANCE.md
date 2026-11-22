@@ -2,7 +2,7 @@
 
 ## Mac mini 复审候选 v0.2.0-rc.3
 
-实施自测通过，待独立复审。
+**独立签收通过。** 2026-11-22，「实测并优化 OneEarth 局域网交互性能」会话正式判定 Mac mini 第一阶段通过。[独立审查结论](../../../outputs/oneearth-review-2603062/审查结论.md)
 
 候选源码提交 `2603062`，独立发布目录 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.3-2603062`，服务入口 [5474](http://127.0.0.1:5474)。类型检查、构建和 553 项自动化测试通过。[构建与隔离核对](rc3/version.json)
 
@@ -19,6 +19,14 @@
 node --import tsx --test server/follow-up-reference.test.ts
 npm run test:numbered-research -- search
 ```
+
+### 独立签收证据
+
+- `8bb9b43b-6711-4c1e-a0d6-a80b094b3dd9` 再次触发模型遗漏引用。事件 5549、5554、5634 依次记录 NOAA 来源定位、服务器补回该来源并保持检索动作、独立发现返回。后续两次读取成功、一次局部失败。论文 DOI `10.3390/w12041179` 与 2003–2017 年的研究时段已由审查方对照原出版页。[独立调用事件](../../../outputs/oneearth-review-2603062/independent-sequence.json) · [网页回答](../../../outputs/oneearth-review-2603062/search.json)
+- `00a3ffba-86fd-4772-a2be-7bde1cb3a84e` 使用既有摘录作答，新增读取与发现均为零。`c778b9f4-f6b1-4b14-8997-459bfb66bee0` 读取指定来源一次、发现为零。[复用](../../../outputs/oneearth-review-2603062/respond.json) · [定向读取](../../../outputs/oneearth-review-2603062/read.json)
+- 独立核实在线版本、服务托管、重启后记录和引用，以及森林图层哈希一致性。类型检查与 553 项测试独立通过。[线上版本](../../../outputs/oneearth-review-2603062/version.json) · [重启后复核](../../../outputs/oneearth-review-2603062/supervision/live.json)
+
+后续展示问题：定向答复提示到 FAQ 查看下载说明，但把数据集介绍页的 URL 标为 FAQ 直达。该问题已登记，独立审查认定不阻塞签收。机构身份与项目权限、真实 LAN Safari、ECS 部署和容量仍待各自环境验证。本轮针对实际阻塞和回归场景复测，完整 706 题留作后续覆盖。
 
 重跑原审查问法时，设置 `ONEEARTH_QUESTION` 为以下内容，再使用相同的网页复测命令。
 
