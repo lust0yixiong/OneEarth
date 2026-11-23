@@ -258,6 +258,7 @@ test("a foreground clarification that becomes research keeps the original source
   const body=f.body("沿海站点",{conversationId:original.conversationId,previousTaskId:parent,
     clarificationAnswer:{parentTaskId:parent,optionId:"coast"},deepseekTools:{search:true,fetch:true}});
   const preparation=await prepareRuntimeChat(f.services,id,body,async()=>parent);
+  if("error" in preparation)assert.fail(preparation.error);
   assert.equal(preparation.kind,"foreground");if(preparation.kind!=="foreground")return;
   f.reply(decision("search",null,{pendingTaskId:parent,goal:"查找沿海站点的观测资料"}));
   const accepted=await preparation.run(id,new AbortController().signal,()=>{});
