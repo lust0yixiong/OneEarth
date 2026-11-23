@@ -1,5 +1,19 @@
 # Mac mini 产品验收
 
+## Mac mini rc.10 公开网络工具与局域网正式发布
+
+2026-11-23 11:34:46（上海时间），Mac mini 常驻发布 **v0.2.0-rc.10**，源码 `7d44a0b88e2bfb0f33e3e8f3dfe66005cdf065e7`，源码树 `4bdb200ed9f90dad9b03b0ff89db8abbf7c53019`，发布目录为 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.10-7d44a0b`。前端 3,424 项构建清单 SHA-256 `90634bcaf1d6fac6d3fecb750061ab84b7865118bb4a08310ad221726f24ef0b`，在线首页 SHA-256 `fb2604176d3bf9df199c8c6a1e3c6c7a60f37d67ef6f25e5d20f3db07e9faafe`。设置页显示版本。网关使用 `127.0.0.1:5474` 和 Wi-Fi 接口 `en1` 的 `10.15.48.143:5474`。局域网来源限制在当前直连网段 `10.15.48.0/21`，工作台校验 Host 与同源 Origin。[局域网工作台](http://10.15.48.143:5474/) · [横版实况图](../../docs/diagrams/oneearth-mac-mini-rc10.png)
+
+**正式研究门槛。** 11:17:17 先把已签收 `b34fc5c` 切到原回环入口，使用原 primary 和静态页面。独立 Chrome 通过同一自然 Landsat 问法触发生产工作台。首笔 `374eaade-a034-4175-a67f-2824541958bf` 因两次规划包含 `fallback:null` 未启动工具。11:22:36 切到 `418b25f` 后，同题复验 `ee7ed6c1-b9a5-4417-a1af-ce6d210cea9a` 因两次规划用 `scope` 代替 `mode` 未启动工具。两笔研究与等待状态原样保留。修订补齐模型提示的规范对象和字段修复说明，兼容缺省等义的 `null` 及仅出现一次、值合法的 `scope`。双字段、未知来源、额外字段和非法回退组合仍拒绝。两笔四段原始规划分别离线重放，各只执行公开网络，独立验收复跑一致。
+
+11:28:11 切到 `2d1fc8979ab78b6d0056fa07e1ecf5ed60f09019` 后，同一问句用新研究号 `4571dbdb-2092-4f97-8b3b-1a694e79f131` 完成真实复验，受理至终态 162.809 秒。初始发现 Task `d2d11d7e-238d-414e-97cc-3d8d00d1ac57` 的三笔 DeepSeek Search 和三笔 DeepSeek Fetch 均在运行时执行，并逐笔回原 Task 与消息。USGS Fetch 编号 `e8390cc1-4463-4cec-b27e-61f9ed97d49e` 的 5,200 字符摘录与原发现结果、最终归档逐字一致。最终一条 USGS 正式引用支持 ST_B10 比例系数 `0.00341802` 和偏移量 `149.0 K`。精准补读 Task `6505072d-c9a4-4f92-88e7-8829ae003aa5` 另读同一 FAQ 一次。同题补查 Task `54334751-c04e-4c2a-beb7-03366ebfb7c4` 另有三笔 Search、三笔成功和一笔超时 Fetch，实际材料和失败状态均按各自委托归档。同一 USGS 摘录的重复读取未作多份独立证据。Chrome 重开和刷新均可打开原依据。独立证据 `2d1fc89-real-submission/independent-formal-pass.json` 的 SHA-256 为 `e0b00905cffb4ad613cf3527a032663c07b783b4b1ab4624bbc793270b4ebc12`。正式回环链路已签收，局域网在该门槛之后开放。
+
+**常驻保存与回退。** 各次切换等待队列排空，用提交锁停止应用后保存三库、5,950 个对象与应用状态。最终切换沿用原 PostgreSQL 与 Garage 进程，原 45 个运行时任务、37 个发现作业及事件指纹前后相同。核对了两笔失败和正式成功研究的归档、原论文和网页记录、KEO 记录、图层目录和森林对象。最终备份在独立 PostgreSQL 套接字上冷恢复，任务与工具回执计数、四个应用 SQLite 快检及森林对象字节均通过。最终备份清单 SHA-256 为 `4b07636ac9d64e31ce88872afe6f3ee0d8044f027b1f1c844b328d9a4c6fb7f3`。旧回环发布、启动项、授权配置与停写备份均保留。回退应用指针使用当时 primary，避免覆盖发布后新增研究。
+
+**局域网与工作台。** 同一台 Mac mini 分别经回环和 LAN IP 验证同版首页、健康、同一 Landsat 归档、森林对象和 123 条同字节任务事件。主程从 `after=6857` 续订，收到终态 6858。工作台正确响应同源 Chat 入口的无效编号校验，非同源 Origin 和伪造 Host 返回 403，内部工具回调路径返回 404。5475、5476、5477、55432、5900 的 LAN 地址连接全部拒绝，同端口仍有正常回环监听。独立 QA 经两个地址用 Chrome 核对设置版本，重开与刷新同一研究，查看保存的 USGS 依据，并从 `after=6853` 续得 5 条事件至原终态。线上 3,424 项文件逐件通过。测试源与目标均为这台 Mac mini，第二台实际设备未验证。LAN 阶段未建立研究任务或执行新工具。独立索引 `independent-rc10-lan-verdict.json` 的 SHA-256 为 `7275a1418805aa36188c1ec0852720dddae7c8c318707a419cd7a4e53976d4e7`。
+
+最终构建含类型检查。普通全套 848 项中 842 项通过、6 项需 PostgreSQL 环境。另执行模型兼容和工具关键用例的串行 PostgreSQL 回归，9 项通过。最终定向 70 项通过，含网段拒绝和既有 Host／Origin 行为。发布在已实测的 `2d1fc89` 之上增加可见版本和局域网监听，并保持原生结构化 schema 的每个分支完整。主程证据位于 `~/Library/Application Support/OneEarth Next/iterations/discovery-runtime-web-tools/`，可在此处核对 `lan-primary/evidence/release-rc10.sha256`。测试会话独立证据位于同层的 `discovery-web-tools-primary-independent/`。
+
 ## Mac mini 公开网络工具执行隔离验收
 
 基线 `5c429284bda604f11a3867d80b3db86a4f5f7084`。最终隔离候选 `b34fc5c812c68b6657296d3c84c159cce83ce322`，源码树 `fb07086b96ff4241c9bd71b7538cb9b44521a74d`。27 个改动文件的指纹和集成补丁见主程证据。3,424 项静态构建的清单 SHA-256 为 `bb796f2bbcf06370a4baaad83c2f17f82df7b5c8d1f94cce8dfefc22dff16e67`，与现行工作台一致。5474 未切换，切前切后首页和健康接口响应字节一致。

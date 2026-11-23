@@ -40,7 +40,7 @@ node --env-file="$deploy_config" scripts/launch.mjs
 
 ### Mac mini 常驻入口
 
-在现有 primary 存储基础上，使用 `launchd` 托管应用、PostgreSQL 和 Garage。Bootstrap 在当前 Mac 用户的 GUI 会话中执行，终端关闭后由系统保持进程。应用入口绑定 `127.0.0.1:5474`。把候选源码与依赖构建到 `~/Library/Application Support/OneEarth Next/releases/` 下的独立目录，基础 H3/S2 数据放在同一专用目录下的 `base-data/`，保留现有 `storage-primary/deployment.env`。
+在现有 primary 存储基础上，使用 `launchd` 托管应用、PostgreSQL 和 Garage。Bootstrap 在当前 Mac 用户的 GUI 会话中执行，终端关闭后由系统保持进程。应用本机入口为 `127.0.0.1:5474`。把候选源码与依赖构建到 `~/Library/Application Support/OneEarth Next/releases/` 下的独立目录，基础 H3/S2 数据放在同一专用目录下的 `base-data/`，保留现有 `storage-primary/deployment.env`。
 
 ```sh
 oneearth_home="$HOME/Library/Application Support/OneEarth Next"
@@ -51,6 +51,8 @@ node scripts/macos-product-service.mjs restart
 
 安装命令只接管 OneEarth Next 的主存储与应用。重新安装不同发布目录时保留主数据库和对象存储。用 `stop` 和 `start` 控制主应用。应用与存储日志写到 `$oneearth_home/logs/`。恢复演练仍通过独立配置按需启动 5574。其他平台可直接通过 `scripts/launch.mjs` 注入同一套服务配置。
 
+需要工作台局域网入口时，在独立部署配置或应用的 `launchd` 环境中设置 `ONEEARTH_LAN_INTERFACE`，并保留 `ONEEARTH_HOST=127.0.0.1`。网关启动时同时监听回环和指定接口的唯一私有 IPv4。访问使用该地址的 5474 端口，经过直连网段、Host 与同源 Origin 校验。指定接口暂无合格地址时，本机入口继续服务，待接口有地址后重启应用可重新识别。发现、运行时内部 API、时空、PostgreSQL 和 Garage 均使用回环。正式部署的实际版本与地址见[架构与接口现状](docs/架构与接口现状.md)。
+
 ## 服务与数据
 
 模块职责、核心接口和 ECS 部署前需要验证的边界见[架构与接口审查](docs/架构与接口现状.md)。
@@ -58,13 +60,13 @@ node scripts/macos-product-service.mjs restart
 | 程序 | 职责 |
 | --- | --- |
 | 网页入口 | 保留 React 界面、Canvas 球体和来源预览，转发同源任务和图层请求 |
-| 运行时 API 与 worker | PostgreSQL 保存任务、按序事件、用户确认、答复引用及结果快照。worker 通过统一适配器调用模型、读取指定来源与委托独立发现。模型看到已返回材料后决定直接回答、补读、补充发现或澄清；运行时记录决定和阶段结果 |
+| 运行时 API 与 worker | PostgreSQL 保存任务、按序事件、用户确认、答复引用、工具回执及结果快照。worker 委托发现和指定来源补读。运行时 API 侧的独立工具队列与适配层执行获准的公开 Search、Fetch 和原站读取。模型根据已返回材料决定回答、补读、补充发现或澄清 |
 | 数据发现 | 独立任务库保存发现任务、事件、线索、渠道状态及可随产品恢复的资料记录。论文断言库始终只读 |
 | 时空服务 | PostgreSQL + PostGIS 保存图层与分块的空间及时间索引，由 S3 API 保存和读取概览与分块。已有计算缓存可由服务重建 |
 
 客户端提交 `POST /api/tasks` 并通过 `GET /api/tasks/:taskId/events?after=<seq>` 订阅。刷新继承原任务号。用户确认绑定历史提议。`?research=<taskId>` 可在浏览器重新打开已结束的同一条研究记录。图层请求走时空服务，问答期间可继续浏览球体。补充发现使用独立子任务编号，沿用已确认问题及 Search/Fetch 配置。
 
-机构网页登录缺少外部入口或配置引用，单列验证。本机产品入口绑定回环地址。与机构登录和项目授权联调前，保持本机范围。
+部署验收覆盖已配置的本机及直连局域网入口。机构网页登录与项目授权使用各自的联调和验收流程。
 
 ## 备份和恢复
 
