@@ -1,3 +1,4 @@
+import { catalogQueryUrl, filterLinkedCatalog, openDataAccessNavigation } from "./data-access-ui-helpers.mjs";
 import assert from "node:assert/strict";
 import { readActiveWorkspace } from "./read-active-workspace.mjs";
 import { chromium } from "playwright-core";
@@ -148,7 +149,7 @@ try {
     const { page, context, errors } = await workspace("/?task=Q08");
     try {
       await directory(page);
-      await page.getByLabel("搜索数据资料", { exact: true }).fill("NOAA PSL · PDO 月指数");
+      await filterLinkedCatalog(page, "NOAA PSL · PDO 月指数");
       await page.waitForFunction(() => document.querySelectorAll(".catalog-card").length === 1);
       assert.equal(await page.locator(".catalog-card").count(), 1);
       await save(page);
@@ -314,7 +315,8 @@ try {
       assert.equal(await page.locator(".catalog-card").count(), 0);
       assert.equal(await page.getByRole("button", { name: "保存研究清单", exact: true }).count(), 0, "未接入来源的空结果不应生成真实清单");
       await page.getByLabel("筛选数据来源", { exact: true }).selectOption("public");
-      await page.getByLabel("搜索数据资料", { exact: true }).fill("ERA5-Land");
+      await page.waitForURL(url => url.searchParams.get("source") === "public");
+      await page.goto(catalogQueryUrl(page.url(), "ERA5-Land"));
       await page.locator(".catalog-card").first().waitFor();
       const titles = await page.locator(".catalog-card h2").allTextContents();
       assert(titles.length > 0);
@@ -337,7 +339,7 @@ try {
   await run("已核同版产品合并展示时保留不同研究的线索", async () => {
     const { page, context, errors } = await workspace("/?view=discover");
     try {
-      await page.getByLabel("搜索数据资料", { exact: true }).fill("RGI");
+      await page.goto(catalogQueryUrl(page.url(), "RGI"));
       await page.locator(".catalog-card").filter({ hasText: /Randolph Glacier Inventory/ }).first().waitFor();
       await save(page);
       const result = await exportJSON(page, "catalog-rgi6-lineage");
@@ -372,7 +374,7 @@ try {
       await page.locator(".map-popover").waitFor();
       await page.getByRole("button", { name: "查看研究所需资料", exact: true }).click();
       await page.locator(".overview-inspector").getByRole("button", { name: "保存研究清单", exact: true }).click();
-      await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: "数据触达", exact: true }).click();
+      await openDataAccessNavigation(page);
       gridSnapshot = await exportJSON(page, "q02-s2-selected");
       assert.deepEqual([...gridSnapshot.value.batch.ids].sort(), ["Q02-0", "Q02-2"]);
       assert.equal(gridSnapshot.value.batch.gridSystem, "s2");

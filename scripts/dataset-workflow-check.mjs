@@ -1,3 +1,4 @@
+import { catalogQueryUrl } from "./data-access-ui-helpers.mjs";
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 const browser = await chromium.launch({
@@ -50,13 +51,16 @@ try {
   await p.locator(".result-context").waitFor();
   assert.equal(await p.locator(".catalog-card").count(), 2);
   await p.getByRole("button", { name: "浏览全部资料" }).click();
-  await p.getByLabel("搜索数据资料").fill("ERA5-Land hourly");
+  await p.waitForURL(url=>url.searchParams.get("view")==="discover"&&!url.searchParams.has("result"));
+  await p.goto(catalogQueryUrl(p.url(), "ERA5-Land hourly"));
+  await p.locator(".catalog-card").first().waitFor();
   assert.equal(await p.locator(".catalog-card").count(), 4);
-  await p.getByLabel("搜索数据资料").fill("MOD13Q1 · NDVI / EVI");
+  await p.goto(catalogQueryUrl(p.url(), "MOD13Q1 · NDVI / EVI"));
+  await p.locator(".catalog-card").first().waitFor();
   assert.equal(await p.locator(".catalog-card").count(), 1);
   assert.equal(await p.locator(".catalog-card").getByText("相关科研问题",{exact:true}).count(),0);
   await p.getByLabel("收藏资料").click();
-  await p.getByLabel("搜索数据资料").fill("GFS");
+  await p.goto(catalogQueryUrl(p.url(), "GFS"));
   await p.locator(".catalog-card .data-view-button").click();
   await p.locator(".overview-body .visualize-button").click();
   await p.waitForFunction(
@@ -66,7 +70,7 @@ try {
       ) > 0,
   );
   await p.getByRole("button", { name: "返回进入前的结果" }).click();
-  assert.equal(await p.getByLabel("搜索数据资料").inputValue(), "GFS");
+  assert.equal(await p.locator(".access-query-filter strong").innerText(), "GFS");
   assert.equal(await p.locator(".catalog-card").count(), 1);
   assert.deepEqual(errors, []);
   console.log(

@@ -1,3 +1,4 @@
+import { openDataAccessNavigation } from "./data-access-ui-helpers.mjs";
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 const browser = await chromium.launch({
@@ -45,10 +46,7 @@ try {
   assert((await dock.locator('a[href*="ki.se"]').count()) >= 1);
   assert(!(await dock.getByRole("button", { name: /导出此表/ }).count()));
   await p.screenshot({ path: "/tmp/oneearth-q15-access.png" });
-  await p
-    .getByRole("navigation", { name: "主导航" })
-    .getByRole("button", { name: "数据触达" })
-    .click();
+  await openDataAccessNavigation(p);
   assert.equal(await p.locator(".result-context").count(), 0);
   assert.equal(await dock.count(), 0);
   await p.screenshot({ path: "/tmp/oneearth-catalog-review.png" });

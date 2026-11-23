@@ -1,5 +1,5 @@
 import {useEffect,useMemo,useRef,useState} from "react";
-import {Search,Bookmark,Database,ListFilter,Radio,RefreshCw,Globe} from "lucide-react";
+import {Bookmark,Database,ListFilter,Radio,RefreshCw,Globe} from "lucide-react";
 import {BatchContext,ResearchListLibrary,SaveResearchList} from "./ResearchLists";
 import {ResearchAssessment} from "./ResearchAssessment";
 import {BatchSpatialSummary} from "./BatchSpatialSummary";
@@ -117,12 +117,15 @@ export function DiscoverView(){
       const Icon=icons[key];return <button key={key} role="tab" id={"access-tab-"+key} aria-controls="access-panel" aria-selected={section===key} onClick={()=>chooseSection(key)}><Icon size={17}/>{label}{data&&<span>{data.counts[key].toLocaleString()}</span>}</button>;
     })}</nav>
     <div className="discovery-filters">
-      <label className="search-field"><Search size={15}/><input aria-label="搜索数据资料" placeholder="搜索数据集、变量、来源…" value={search.query} onChange={e=>set({query:e.target.value})}/></label>
       <select aria-label="筛选数据形态" value={search.type} onChange={e=>set({type:e.target.value})}><option value="">全部数据类型</option>
         {search.type&&!typeOptions.includes(search.type)&&<option value={search.type}>{search.type}</option>}{typeOptions.map(t=><option key={t}>{t}</option>)}</select>
       <select aria-label="筛选数据来源" value={search.source} onChange={e=>set({source:e.target.value})}><option value="">全部接入来源</option>
         {search.source&&!sourceOptions.some(v=>v.id===search.source)&&<option value={search.source}>{search.source}</option>}{sourceOptions.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</select>
     </div>
+    {search.query.trim() && <div className="access-query-filter">
+      <span>当前筛选词 <strong>{search.query}</strong></span>
+      <button onClick={()=>set({query:""})}>清除筛选词</button>
+    </div>}
     <div className="access-tools"><div className="catalog-capabilities" aria-label="按可用资料筛选">{[["","全部本类"],["map","可在球上定位"],["request","需申请资料"]].map(([v,label])=><button key={v} aria-pressed={(search.capability||"")===v} onClick={()=>set({capability:v as typeof search.capability})}>{label}</button>)}</div>
       <button className="access-refresh" disabled={loading} onClick={()=>setReload(n=>n+1)} aria-label="刷新数据触达"><RefreshCw size={14}/>刷新</button></div>
     <div id="access-panel" role="tabpanel" aria-labelledby={"access-tab-"+section} aria-busy={loading}>

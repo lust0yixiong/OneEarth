@@ -1,5 +1,6 @@
 import { useState, useEffect, lazy, Suspense } from "react";
 import { SettingsPage } from "./components/SettingsPage";
+import { useDataAccessNavigation } from "./components/use-data-access-navigation";
 import { Globe, Rows3, BookOpen, Settings, X, Info } from "lucide-react";
 import { useWorkspace, WorkspaceProvider } from "./domain/store";
 const GlobeView = lazy(() =>
@@ -29,6 +30,7 @@ const nav: { id: View; label: string; icon: typeof Globe }[] = [
 ];
 function Workspace() {
   const { state: s, resultLink, patch, openCatalog, openEarth, openMappedCatalog } = useWorkspace();
+  const [dataAccessNavigation] = useDataAccessNavigation();
   const [about, setAbout] = useState(false);
   const [mapToolsHost, setMapToolsHost] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -104,7 +106,7 @@ function Workspace() {
         </div>
       </header>
       <nav className="app-nav" aria-label="主导航">
-        {nav.map(({ id, label, icon: Icon }) => (
+        {nav.filter(({ id }) => id !== "discover" || dataAccessNavigation).map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             aria-label={label}

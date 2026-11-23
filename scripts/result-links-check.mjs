@@ -1,3 +1,4 @@
+import { catalogQueryUrl, openDataAccessNavigation } from "./data-access-ui-helpers.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { chromium } from "playwright-core";
@@ -99,10 +100,7 @@ try {
     (await frozen(sharedGrid)).snapshot.scope.selection,
     selected.batch.selection,
   );
-  await sharedGrid
-    .getByRole("navigation")
-    .getByRole("button", { name: "数据触达", exact: true })
-    .click();
+  await openDataAccessNavigation(sharedGrid);
   await sharedGrid.locator(".result-context").waitFor();
   assert.ok(
     (await sharedGrid.locator(".batch-context").first().innerText()).includes(
@@ -116,15 +114,15 @@ try {
   const catalog = await pageAt(base + "/?view=discover");
   await catalog.locator(".catalog-card").first().waitFor();
   assert.equal(new URL(catalog.url()).searchParams.has("result"), false);
-  await catalog.getByLabel("搜索数据资料").fill("完全不存在的资料");
+  await catalog.goto(catalogQueryUrl(catalog.url(), "完全不存在的资料"));
   await catalog.locator(".empty-state").waitFor();
   const noRows = await pageAt(catalog.url());
   await noRows.locator(".empty-state").waitFor();
   assert.equal(
-    await noRows.getByLabel("搜索数据资料").inputValue(),
+    await noRows.locator(".access-query-filter strong").innerText(),
     "完全不存在的资料",
   );
-  await catalog.getByLabel("搜索数据资料").fill("PDO 月指数");
+  await catalog.goto(catalogQueryUrl(catalog.url(), "PDO 月指数"));
   const one = catalog.locator(".catalog-card").first();
   await one.getByRole("button", { name: "收藏资料", exact: true }).click();
   await catalog.getByRole("button", { name: /我的收藏/ }).click();
@@ -187,14 +185,14 @@ try {
     2,
   );
   await science.getByRole("button", { name: "关闭数据速览" }).click();
-  await science.getByLabel("搜索数据资料").fill("PDO 月指数");
+  await science.goto(catalogQueryUrl(checkedLink.url, "PDO 月指数"));
   await science.waitForFunction(
     () => document.querySelectorAll(".catalog-card").length === 1,
   );
   const filtered = await pageAt(science.url());
   await filtered.locator(".catalog-card").first().waitFor();
   assert.equal(
-    await filtered.getByLabel("搜索数据资料").inputValue(),
+    await filtered.locator(".access-query-filter strong").innerText(),
     "PDO 月指数",
   );
   assert.equal(await filtered.locator(".catalog-card").count(), 1);

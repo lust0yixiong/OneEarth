@@ -48,8 +48,7 @@ async function windSession(status) {
       if (status === 503) await route.fulfill({status, body:"fixture"});
       else await route.continue();
     });
-    await page.goto(base + "/?view=discover");
-    await page.getByLabel("搜索数据资料").fill("GFS");
+    await page.goto(base + "/?view=discover&q=GFS");
     await page.locator(".catalog-card").filter({hasText:/风场/}).first().getByRole("button",{name:/数据速览/}).click();
     await page.getByRole("button",{name:"预览原始网格"}).waitFor();
     const oldId = await page.evaluate(() => history.state.oneearthSession);

@@ -1,3 +1,4 @@
+import { catalogQueryUrl, openDataAccessNavigation } from "./data-access-ui-helpers.mjs";
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 import { createHash } from "node:crypto";
@@ -215,21 +216,15 @@ try {
   assert.equal(await p.locator(".wind-controls").count(), 0);
   assert.equal(new URL(p.url()).searchParams.get("viz"), null);
   await p.locator(".overview-body .visualize-button").waitFor();
-  await p
-    .getByRole("navigation", { name: "主导航" })
-    .getByRole("button", { name: "数据触达", exact: true })
-    .click();
-  await p.getByLabel("搜索数据资料").fill("GFS");
+  await p.goto(catalogQueryUrl(baseUrl, "GFS"));
   const card = p.locator(".catalog-card");
+  await card.first().waitFor();
   assert.equal(await card.count(), 1);
   assert(await card.getByRole("button", { name: /数据速览/ }).isEnabled());
   await card.getByRole("button", { name: /数据速览/ }).click();
   await p.locator(".overview-body .visualize-button").click();
   await ready();
-  await p
-    .getByRole("navigation", { name: "主导航" })
-    .getByRole("button", { name: "数据触达", exact: true })
-    .click();
+  await openDataAccessNavigation(p);
   assert.equal(await particles().count(), 0);
   await p
     .getByRole("navigation", { name: "主导航" })

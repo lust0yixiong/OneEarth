@@ -8,9 +8,11 @@ import { products } from "../domain/product-distribution";
 import { useCatalogRevision } from "./use-catalog-revision";
 import {DeepSeekToolsSettings} from "./DeepSeekToolsSettings";
 import {ChatHomeSettings} from "./ChatHomeSettings";
+import {useDataAccessNavigation} from "./use-data-access-navigation";
 
 export function SettingsPage({onBack,resetLayout}:{onBack:()=>void;resetLayout:()=>void}) {
   const { state,patch } = useWorkspace();
+  const [dataAccessNavigation,setDataAccessNavigation] = useDataAccessNavigation();
   const revision=useCatalogRevision();
   const catalogCounts=useMemo(()=>({products:products(assets).size,papers:products(assets.filter(a=>a.origins.includes("paper"))).size}),[revision]);
   const [executor,setExecutor] = useState(()=>readChatModel().executor);
@@ -127,6 +129,9 @@ export function SettingsPage({onBack,resetLayout}:{onBack:()=>void;resetLayout:(
       </section>
       <DeepSeekToolsSettings keyRevision={attempt}/>
       <section><h2><Globe size={19}/>地球与工作区</h2>
+        <label>在主导航显示「数据触达」<input type="checkbox" checked={dataAccessNavigation}
+          aria-describedby="data-access-navigation-help" onChange={e=>setDataAccessNavigation(e.target.checked)}/></label>
+        <small id="data-access-navigation-help">此设置仅控制当前浏览器中的主导航入口。已打开的数据触达页面和直接链接仍可使用。</small>
         <label>当前网格体系<select value={state.gridSystem} onChange={e=>patch({gridSystem:e.target.value as "h3"|"s2",selection:null})}>
           <option value="h3">H3</option><option value="s2">S2</option></select></label>
         <label>显示网格线<input type="checkbox" checked={state.mesh} onChange={e=>patch({mesh:e.target.checked})}/></label>

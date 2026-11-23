@@ -69,9 +69,8 @@ try {
   );
   await page.screenshot({ path: "/tmp/oneearth-app-evidence.png" });
   await page.getByLabel("关闭预览").click();
-  await page.getByRole("button", { name: "数据触达", exact: true }).click();
+  await page.goto(new URL("/?view=discover&q=Copernicus", baseUrl).href);
   await page.locator(".catalog-card").first().waitFor();
-  await page.getByLabel("搜索数据资料").fill("Copernicus");
   assert((await page.locator(".catalog-card").count()) >= 1);
   await page.screenshot({ path: "/tmp/oneearth-app-discover.png" });
   await page.locator(".catalog-card").first().getByRole("button", { name: "收藏资料", exact: true }).click();

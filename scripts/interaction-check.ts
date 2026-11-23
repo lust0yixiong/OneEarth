@@ -1,3 +1,4 @@
+import { openDataAccessNavigation } from "./data-access-ui-helpers.mjs";
 import { chromium } from "playwright-core";
 import assert from "node:assert/strict";
 import { geoOrthographic } from "d3-geo";
@@ -68,7 +69,7 @@ try {
       new RegExp(system === "h3" ? "H3 R7" : "S2 L12"),
     );
   }
-  await p.getByRole("button", { name: "数据触达", exact: true }).click();
+  await openDataAccessNavigation(p);
   await p.getByRole("button", { name: "数据地球", exact: true }).click();
   await p.locator("canvas[data-painted]").waitFor();
   assert.deepEqual(errors, []);

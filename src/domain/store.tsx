@@ -839,6 +839,8 @@ function useWorkspaceValue(initialState: State) {
     }
   }
   useEffect(() => {
+    // The linked snapshot determines the view. Keep incoming overrides through loading and retries.
+    if (state.linkStatus) return;
     const url = new URL(location.href);
     if (state.caseId) url.searchParams.set("task", state.caseId);
     else url.searchParams.delete("task");
@@ -868,7 +870,7 @@ function useWorkspaceValue(initialState: State) {
       url.searchParams.set("rainMonth",String(state.fieldLayer.frame+1));
     }else{url.searchParams.delete("rainYear");url.searchParams.delete("rainMonth");}
     history.replaceState({ ...history.state, oneearthSession: state.sessionId, oneearthPath: url.pathname + url.search }, "", url);
-  }, [state.sessionId, state.caseId, state.view, state.search.source,state.search.section,state.search.page,state.search.query,state.search.type,state.search.capability,state.search.savedOnly, state.filters.source, state.mapResult, state.dataView, state.visualization,state.fieldLayer?.id,state.fieldLayer?.year,state.fieldLayer?.frame]);
+  }, [state.linkStatus, state.sessionId, state.caseId, state.view, state.search.source,state.search.section,state.search.page,state.search.query,state.search.type,state.search.capability,state.search.savedOnly, state.filters.source, state.mapResult, state.dataView, state.visualization,state.fieldLayer?.id,state.fieldLayer?.year,state.fieldLayer?.frame]);
   useEffect(() => () => request.current?.abort(), []);
   const openCase = useCallback(
     (id: string, need = -1) => {

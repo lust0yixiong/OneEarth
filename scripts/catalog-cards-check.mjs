@@ -6,20 +6,23 @@ const browser = await chromium.launch({
   headless: true,
 });
 const address = (process.env.ONEEARTH_URL || "http://127.0.0.1:5274") + "/?view=discover&source=haina";
+const queryLink = title => {
+  const url = new URL(address);
+  url.searchParams.set("q", title);
+  return url.href;
+};
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  await page.goto(address, { waitUntil: "domcontentloaded" });
-  const search = page.getByLabel("搜索数据资料");
   const find = async title => {
-    await search.fill(title);
+    await page.goto(queryLink(title), { waitUntil: "domcontentloaded" });
     const card = page.locator(".catalog-card").filter({ has: page.getByRole("heading", { name: title, exact: true }) });
     await card.waitFor();
     await card.scrollIntoViewIfNeeded();
     return card;
   };
-  assert.equal(await page.getByLabel("筛选数据来源").inputValue(), "haina");
   const name = "OneEarth/大兴安岭森林时空嵌入数据集";
   const forest = await find(name);
+  assert.equal(await page.getByLabel("筛选数据来源").inputValue(), "haina");
   const image = forest.locator(".catalog-cover img:not(.catalog-cover-pending)");
   await image.evaluate(img => img.decode());
   assert.match(await image.getAttribute("src"), /^\/thumbnails\/haina\/.+\.webp$/);
@@ -40,8 +43,7 @@ try {
 
   const failed = await browser.newPage();
   await failed.route("**/thumbnails/haina/*.webp", route => route.fulfill({ status: 404, body: "" }));
-  await failed.goto(address, { waitUntil: "domcontentloaded" });
-  await failed.getByLabel("搜索数据资料").fill("EMAG2");
+  await failed.goto(queryLink("EMAG2"), { waitUntil: "domcontentloaded" });
   const missing = failed.locator(".catalog-card").filter({ has: failed.getByRole("heading", { name: "EMAG2", exact: true }) });
   await missing.scrollIntoViewIfNeeded();
   const failedImage = missing.locator('.catalog-cover[data-default="true"] img');

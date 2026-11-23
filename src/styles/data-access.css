@@ -3,6 +3,9 @@
 .access-sections button[aria-selected=true]{color:#1e7254;border-color:#287e60}
 .access-sections button>span{font-size:12px;line-height:1.4;color:#71877a;font-variant-numeric:tabular-nums}
 .data-access-view .discovery-filters{margin-bottom:12px}
+.access-query-filter{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;font-size:13px;color:#52665f}
+.access-query-filter span{min-width:0;overflow-wrap:anywhere}
+.access-query-filter button{padding:6px 9px;border:1px solid #d5e1e6;border-radius:8px;background:#fff;color:#1e7254}
 .access-tools{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
 .access-tools .catalog-capabilities{margin:0;gap:6px}
 .access-tools .catalog-capabilities button{font-size:12px;padding:5px 9px}

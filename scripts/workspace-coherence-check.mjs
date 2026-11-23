@@ -1,3 +1,4 @@
+import { catalogQueryUrl, openDataAccessNavigation } from "./data-access-ui-helpers.mjs";
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { chromium } from "playwright-core";
@@ -100,7 +101,7 @@ try {
     assert.match(await empty.innerText(), /1960|无交集|无匹配/);
     const response = await send(p, "保存研究清单");
     assert.doesNotMatch(await response.innerText(), /已保存 [1-9]/);
-    await p.getByRole("navigation", { name: "主导航" }).getByRole("button", {name:"数据触达",exact:true}).click();
+    await openDataAccessNavigation(p);
     await p.locator(".result-context").waitFor();
     assert.equal(await p.locator(".catalog-card").count(), 0);
     const emptyURL = await resultsURL(p);
@@ -327,10 +328,10 @@ try {
       ["手工筛选不存在的观测", false, 1, "查看 TEST-02 的星座观测"],
       ["", false, 1, "只看 TEST-02"],
     ]) {
-      const p = await open(c, source);
+      const p = await open(c, catalogQueryUrl(source, filter));
+      await p.locator('#access-panel[aria-busy="false"]').waitFor();
       const cards = p.locator(".catalog-card");
-      await cards.filter({hasText:west.title}).waitFor();
-      if (filter) await p.getByLabel("搜索数据资料").fill(filter);
+      if (filter) assert.equal(await p.locator(".access-query-filter strong").innerText(), filter);
       if (checked) await cards.filter({hasText:west.title}).getByRole("button",{name:"加入对照"}).click();
       const reply = await send(p, query);
       assert.equal(await reply.getByRole("button", {name:/数据速览/}).count(), expected, query + " / " + filter);
@@ -352,11 +353,9 @@ try {
     const day = wanted.observedAt.slice(0, 10);
     const filtered = await open(
       c,
-      constellation + "/?view=discover&source=constellation",
+      catalogQueryUrl(constellation + "/?view=discover&source=constellation", "该验收条件没有对应的观测编号"),
     );
-    await filtered
-      .getByLabel("搜索数据资料")
-      .fill("该验收条件没有对应的观测编号");
+    await filtered.locator('#access-panel[aria-busy="false"]').waitFor();
     await filtered.waitForFunction(
       () => document.querySelectorAll(".catalog-card").length === 0,
     );

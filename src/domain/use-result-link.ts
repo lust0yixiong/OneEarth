@@ -118,7 +118,9 @@ export function useResultLink(
 
   useEffect(() => {
     if (s.linkStatus !== "loading") return;
-    const id = new URL(location.href).searchParams.get("result") || "";
+    const incoming = new URL(location.href).searchParams;
+    const id = incoming.get("result") || "";
+    const requestedQuery = incoming.get("q")?.slice(0, 1000);
     const controller = new AbortController();
     const current = () =>
       !controller.signal.aborted &&
@@ -127,8 +129,10 @@ export function useResultLink(
       .then((snapshot) => {
         if (!current()) return;
         existing.current = { id, raw: JSON.stringify(snapshot) };
+        const query = snapshot.view === "discover" ? requestedQuery : undefined;
         if (
           s.resumeLinkedWorkspace &&
+          (query === undefined || query === s.search.query) &&
           capture({ ...s, linkStatus: null }) === existing.current.raw
         ) {
           patch({
@@ -145,7 +149,7 @@ export function useResultLink(
           linkStatus: null,
           error: null,
           overview: "catalog",
-          search: { ...snapshot.catalog, result: snapshot.batch },
+          search: { ...snapshot.catalog, query: query ?? snapshot.catalog.query, result: snapshot.batch },
           mapResult: snapshot.view === "earth" ? snapshot.batch : null,
           inspector: s.inspector,
           evidence: s.evidence,

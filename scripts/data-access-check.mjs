@@ -1,3 +1,4 @@
+import { catalogQueryUrl, openDataAccessNavigation } from "./data-access-ui-helpers.mjs";
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright-core';
 import {spawn} from 'node:child_process';
@@ -13,15 +14,16 @@ try{
  await page.goto((process.env.ONEEARTH_URL||'http://127.0.0.1:5274')+'/?view=discover&section=entities');
  await page.locator('.catalog-card').first().waitFor();assert.equal(await page.locator('.catalog-card').count(),30);
  assert.ok(paperRequests.every(url=>url.includes('limit=1')),'Data access loaded the entire assertion catalogue');
- await page.getByLabel('搜索数据资料').fill('ESA WorldCover 10 m 2021 v200');
+ await page.goto(catalogQueryUrl(page.url(),'ESA WorldCover 10 m 2021 v200'));
  const cover=page.locator('.catalog-card').filter({has:page.getByRole('heading',{name:'ESA WorldCover 10 m 2021 v200',exact:true})});await cover.waitFor();
  await cover.getByRole('button',{name:'收藏资料',exact:true}).click();await cover.getByRole('button',{name:'取消收藏',exact:true}).waitFor();
  await cover.getByRole('button',{name:/数据速览/}).click();await page.locator('.data-inspector').waitFor();await page.getByLabel('关闭数据速览').click();
- await page.getByRole('tab',{name:/数据线索/}).click();assert.equal(await page.getByLabel('搜索数据资料').inputValue(),'ESA WorldCover 10 m 2021 v200');
- await page.getByLabel('搜索数据资料').fill('MOD11A2');await page.locator('.access-index-row').first().waitFor();assert.equal(await page.locator('.catalog-card').count(),0);
+ await page.getByRole('tab',{name:/数据线索/}).click();assert.equal(await page.locator('.access-query-filter strong').innerText(),'ESA WorldCover 10 m 2021 v200');
+ await page.waitForURL(url=>url.searchParams.get('section')==='clues');
+ await page.goto(catalogQueryUrl(page.url(),'MOD11A2'));await page.locator('.access-index-row').first().waitFor();assert.equal(await page.locator('.catalog-card').count(),0);
  await page.locator('.access-index-row').first().getByRole('button',{name:/查看依据：/}).click();await page.locator('.access-clue-detail').waitFor();await page.locator('.access-clue-detail .oe-dataset-overview, .access-clue-detail .access-dataset-overview').first().waitFor();
  await page.screenshot({path:'/tmp/oe-access-clues-desktop.png'});
- await page.getByLabel('搜索数据资料').fill('');await page.getByRole('button',{name:'下一页',exact:true}).waitFor();
+ await page.getByRole('button',{name:'清除筛选词',exact:true}).click();await page.getByRole('button',{name:'下一页',exact:true}).waitFor();
  const first=await page.locator('.access-index-row h2').allTextContents();await page.getByRole('button',{name:'下一页',exact:true}).click();
  await page.waitForFunction(()=>/2\s*\//.test(document.querySelector('.access-pagination')?.textContent||''));await page.locator('.access-index-row').first().waitFor();
  assert.notDeepEqual(await page.locator('.access-index-row h2').allTextContents(),first);assert.equal(await page.locator('.access-index-row').count(),30);
@@ -46,9 +48,9 @@ try{
  assert.match(await live.locator('.access-timely-row').first().innerText(),/验收原文件002/);assert.match(await live.locator('.access-timely-row').first().innerText(),/原文件已接收/);
  await live.screenshot({path:'/tmp/oe-access-stream-desktop.png'});
  await live.locator('.access-timely-row').first().getByRole('button',{name:'查看记录',exact:false}).click();await live.locator('.data-inspector').waitFor();await live.getByLabel('关闭数据速览').click();
- await live.getByRole('tab',{name:/实体数据/}).click();await live.getByLabel('搜索数据资料').fill('验收原文件002');await live.locator('.catalog-card').waitFor();assert.equal(await live.locator('.catalog-card').count(),1);
+ await live.goto(catalogQueryUrl(base+'/?view=discover&section=entities','验收原文件002'));await live.locator('.catalog-card').waitFor();assert.equal(await live.locator('.catalog-card').count(),1);
  await live.locator('.catalog-card').getByRole('button',{name:'定位分布',exact:true}).click();await live.locator('canvas[data-painted]').waitFor({timeout:15000});
- await live.getByRole('button',{name:'数据触达',exact:true}).click();await live.getByRole('tab',{name:/及时数据/}).click();await live.getByLabel('搜索数据资料').fill('');await live.locator('.access-timely-row').first().waitFor();
+ await openDataAccessNavigation(live);await live.getByRole('tab',{name:/及时数据/}).click();await live.getByRole('button',{name:'清除筛选词',exact:true}).click();await live.locator('.access-timely-row').first().waitFor();
  await live.setViewportSize({width:390,height:844});if(await live.getByRole('button',{name:'收起 Chat',exact:true}).isVisible())await live.getByRole('button',{name:'收起 Chat',exact:true}).click();assert.ok(await live.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await live.screenshot({path:'/tmp/oe-access-stream-mobile.png'});assert.deepEqual(errors,[]);
  console.log('PASS entity cards and access controls; paged clue index, evidence expansion, shared query, reload and mobile; real isolated push, acquisition/reception clocks, stable incoming banner, local-file identity and globe action.');
 }catch(error){for(const [i,p] of browser.contexts().flatMap(c=>c.pages()).entries()){console.error('FAILED PAGE',i,p.url(),(await p.locator('body').innerText()).slice(-2200));await p.screenshot({path:'/tmp/oe-access-failure-'+i+'.png'}).catch(()=>{});}throw error;}finally{await browser.close();if(child){child.kill('SIGTERM');await new Promise(resolve=>{if(child.exitCode!==null)resolve();else child.once('exit',resolve);});}if(temporary)await rm(temporary,{recursive:true,force:true});}
