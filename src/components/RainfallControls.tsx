@@ -3,6 +3,9 @@ import {Pause,Play} from "lucide-react";
 import type {XY} from "../domain/regional-cases";
 import {rainBreaks,rainCell,rainGrid,rainColor,rainColors,rainFactors} from "../domain/rainfall";
 import type {RainTiles} from "../globe/rain-tiles";
+import {publishedRainPeriod} from "../domain/rain-catalog";
+import {globeCases} from "../domain/regional-cases";
+import {rainCoverageLabel} from "./use-rain-catalog";
 import "../styles/rainfall.css";
 
 type Props={
@@ -21,13 +24,13 @@ export function RainfallControls({grid,month,playing,point,choose,chooseYear,tog
   const high=peak>=0?values![peak]!:0;
   const describe=(m:number,value:number|null|undefined)=>!months[m]?"暂无数据":value===undefined?"载入中":value===null?"此格缺测":fmt(value)+" mm/天";
   function changeYear(year:number){
-    const available=grid.catalog.years.find(entry=>entry.year===year)!.months;
-    const next=available.includes(month+1)?month:available.at(-1)!-1;
-    chooseYear(year,next);
+    const period=publishedRainPeriod(grid.catalog,year,month);
+    if(period)chooseYear(period.year,period.frame);
   }
   return <section className="rain-panel" aria-label="全球降水">
     <div className="rain-head">
-      <div><small>GPM IMERG {source?(source.run==="Derived"?"· NASA "+source.version:source.run+" · "+source.version):""} · 0.1°</small><h2>全球降水 · 雨带迁移</h2></div>
+      <div><small>GPM IMERG {source?(source.run==="Derived"?"· NASA "+source.version:source.run+" · "+source.version):""} · 0.1°</small><h2>{globeCases.rain.title}</h2>
+        <small>{rainCoverageLabel({status:"ready",catalog:grid.catalog})}</small></div>
       <button aria-label={playing?"暂停图层":"播放图层"} onClick={toggle}>{playing?<Pause size={15}/>:<Play size={15}/>} {month+1} 月</button>
     </div>
     <div className="rain-band-title">

@@ -57,7 +57,7 @@ export interface RegionalData {
 }
 
 export const globeCases={
-  rain:{title:"全球降水 · 雨带迁移",dataset:"NASA GPM IMERG · 全球海陆 0.1° 网格",effect:"2000—2026 年逐月降水 · 纬度带对比与格点年内变化",unit:"mm/天",max:15,center:[104,26] as XY,month:6,zoom:1},
+  rain:{title:"全球降水",dataset:"NASA GPM IMERG · 全球海陆 0.1° 网格",unit:"mm/天",max:15,center:[104,26] as XY,month:6,zoom:1},
   rivers:{title:"巴西河网 · 丰枯交替",dataset:"GloFAS · 巴西 55 个代表河段",effect:"河段流量着色 × 逐日回放",unit:"m³/s",max:240000,center:[-53,-12] as XY,month:105,zoom:1},
   lightning:{title:"美国地闪 · 雷暴足迹",dataset:"NOAA NCEI · 美国本土 0.5° 网格",effect:"累计地闪着色 × 逐日回放",unit:"次",max:18000,center:[-96,36] as XY,month:195,zoom:1},
   forest:{title:"大兴安岭森林 · 时空嵌入",dataset:"海纳 1846764 · 64 维森林时空嵌入",effect:"PCA 三通道着色 × 2023 年 12 个月",unit:"嵌入通道",max:1,center:[123.06,49.95] as XY,month:forestMonth,zoom:8},
@@ -71,11 +71,11 @@ export function layerFrameCount(id:RegionalId){return id==="rain"?12:id==="fores
 export const regionalGroup={id:"earth-layers",title:"数据地球图层",
   needs:regionalIds.map((id):import("./types").Need=>{
     const info=globeCases[id],regional=regionalCases[id];
-    const detail=id==="rain"?"NASA GPM IMERG 月度降水。2000—2026 年，按年月展示已发布数据，逐月标明 Final 或 Late。海陆 0.1° 原始格点，多级数值瓦片按视野加载，统一为 mm/天，缺测保留。":regional.method;
+    const detail=id==="rain"?"NASA GPM IMERG 月度降水。可用年月以 OneEarth 发布目录为准，逐月标明产品来源。海陆 0.1° 原始格点，多级数值瓦片按视野加载，统一为 mm/天，缺测保留。":regional.method;
     const source=id==="rain"?"https://gdex.ucar.edu/datasets/d736000/":regional.source;
     return {name:info.title,datasetId:datasetLayers[id],product:info.dataset,type:id==="rivers"?"河网、时间序列":"栅格、时间序列",
-      status:id==="rain"?"已接入逐年月回放":"已接入 2024 年切片",source:info.dataset.split(" · ")[0],detail,url:source,card:{thumbnailUrl:"/visualizations/regional/"+id+"-globe.webp",tags:[id==="rain"?"2000—2026":"2024",info.unit]},
-      profile:{role:"data",spatial:"coverage",years:id==="rain"?[2000,2026]:[2024,2024],coverage:info.title,access:"可在 OneEarth 数据地球查看",limitation:detail},
+      status:id==="rain"?"可浏览已发布月份":"已接入 2024 年切片",source:info.dataset.split(" · ")[0],detail,url:source,card:{thumbnailUrl:"/visualizations/regional/"+id+"-globe.webp",tags:id==="rain"?["月度",info.unit]:["2024",info.unit]},
+      profile:{role:"data",spatial:"coverage",...(id==="rain"?{}:{years:[2024,2024] as [number,number]}),coverage:info.title,access:"可在 OneEarth 数据地球查看",limitation:detail},
       tabs:[{kind:"web",label:"数据来源与处理方法",url:source,body:detail}]};
   })};
 

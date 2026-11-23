@@ -6,6 +6,7 @@ import {conversationReferenceMemory,modelHistoryMessages} from "./reference-memo
 import {researchRegionCamera,validResearchRegion,sameResearchRegion,type ResearchRegion,type ResearchRegionLayer} from "./research-region";
 import {answerMapBatch,answerFilters,initialAnswerCamera,gridCamera,evidenceCamera,evidenceSelection} from "./answer-map";
 import { globeCases,regionalIds,layerFrameCount,datasetLayers,regionalForDataset,type RegionalId } from "./regional-cases";
+import {isRainYear} from "./rain-catalog";
 import { paperId, asksForPapers } from "./paper-record";
 import { loadPaperCatalog,readPaperCatalogStatus, type PaperCatalogStatus } from "./paper-catalog-client";
 import { randomId } from "./id";
@@ -347,9 +348,8 @@ function initial(sessionId: string, url = new URL(location.href), saved: Record<
   if(fieldLayer?.id==="rain"){
     const requested=Number(url.searchParams.get("rainYear"));
     const savedYear=restore?saved.fieldLayer?.year:undefined;
-    const year=Number.isInteger(requested)&&requested>=2000&&requested<=2026?requested:
-      Number.isInteger(savedYear)&&savedYear>=2000&&savedYear<=2026?savedYear:2024;
-    Object.assign(fieldLayer,{year});
+    const year=isRainYear(requested)?requested:isRainYear(savedYear)?savedYear:undefined;
+    if(year!==undefined)Object.assign(fieldLayer,{year});
     const month=Number(url.searchParams.get("rainMonth"));
     if(Number.isInteger(month)&&month>=1&&month<=12)fieldLayer.frame=month-1;
   }
@@ -863,7 +863,8 @@ function useWorkspaceValue(initialState: State) {
       url.searchParams.set("viz", state.visualization.id);
     else url.searchParams.delete("viz");
     if(state.fieldLayer?.id==="rain"){
-      url.searchParams.set("rainYear",String(state.fieldLayer.year??2024));
+      if(state.fieldLayer.year!==undefined)url.searchParams.set("rainYear",String(state.fieldLayer.year));
+      else url.searchParams.delete("rainYear");
       url.searchParams.set("rainMonth",String(state.fieldLayer.frame+1));
     }else{url.searchParams.delete("rainYear");url.searchParams.delete("rainMonth");}
     history.replaceState({ ...history.state, oneearthSession: state.sessionId, oneearthPath: url.pathname + url.search }, "", url);

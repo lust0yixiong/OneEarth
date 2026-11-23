@@ -4,6 +4,8 @@ import {useCatalogRevision} from "./use-catalog-revision";
 import {loadRemoteAssetIds} from "../domain/datasets";
 import {useWebPreview} from "./use-web-preview";
 import {EntityVisualization} from "./EntityVisualization";
+import {regionalForDataset} from "../domain/regional-cases";
+import {rainCoverageLabel, refreshRainCatalog, useRainCatalog} from "./use-rain-catalog";
 import { PaperResearchQuestions } from "./PaperResearchQuestions";
 import { hainaScopeReview } from "../domain/haina-space";
 import {materialDetails} from "../domain/material-summary";
@@ -86,6 +88,8 @@ function Overview({
     ? hainaScopeReview(Number(asset.id.slice("haina:".length)),asset.title) : undefined;
   const pushed = observationById(asset.id);
   const wind = asset.datasetId === "gfs-wind";
+  const rain = regionalForDataset(asset.datasetId) === "rain";
+  const rainPublication = useRainCatalog(rain);
   const frame = windFrame(s.visualization || defaultWindState());
   const eligible = supportsDataView(asset.caseId, asset.needIndex);
   const active =
@@ -140,6 +144,12 @@ function Overview({
         </>}
         <dt>来源</dt>
         <dd>{asset.source}</dd>
+        {rain && <>
+          <dt>OneEarth 降水图层</dt>
+          <dd>{rainCoverageLabel(rainPublication)}
+            {rainPublication.status==="unavailable" && <button className="data-view-button" onClick={()=>void refreshRainCatalog()}>重试发布目录</button>}
+          </dd>
+        </>}
         {asset.profile && (
           <>
             <dt>研究用途</dt>

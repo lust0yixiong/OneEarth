@@ -3,6 +3,8 @@ import {ResearchRegionLayer} from "./ResearchRegionLayer";
 import {gridScope,timeScope} from "../domain/question-scope";
 import {attachCoverageScope,CoverageScopeChanged} from "../domain/coverage-attachment";
 import {RainfallControls} from "./RainfallControls";
+import {publishedRainPeriod} from "../domain/rain-catalog";
+import {rainCoverageLabel, refreshRainCatalog, useRainCatalog} from "./use-rain-catalog";
 import {useCatalogRevision} from "./use-catalog-revision";
 import {answerEvidence} from "../domain/answer-map";
 import {useFieldData} from "./use-field-data";
@@ -122,12 +124,23 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   const canvas = useRef<HTMLCanvasElement>(null),
     controls = useRef<HTMLDivElement>(null),
     renderer = useRef<ReturnType<typeof createRenderer> | null>(null);
-  const layer=s.fieldLayer;
+  const selectedLayer=s.fieldLayer;
+  const publication=useRainCatalog(selectedLayer?.id==="rain");
+  const rainCatalog=publication.status==="ready"?publication.catalog:undefined;
+  const rainPeriod=selectedLayer?.id==="rain" && rainCatalog
+    ? publishedRainPeriod(rainCatalog,selectedLayer.year,selectedLayer.frame)
+    : null;
+  const needsRainPeriod=rainPeriod && selectedLayer
+    && (selectedLayer.year!==rainPeriod.year || selectedLayer.frame!==rainPeriod.frame);
+  const layer=needsRainPeriod && selectedLayer ? {...selectedLayer,...rainPeriod} : selectedLayer;
+  useEffect(()=>{
+    if(needsRainPeriod && layer)patch({fieldLayer:layer});
+  },[needsRainPeriod,layer,patch]);
   const [preferredStyle,setDistributionStyle]=useDistributionMode();
   const distributionContext:DistributionContext=s.mapResult?.selection?"fixed-cell":s.mapResult?.metric==="scenes"?"scenes":"catalog";
   const distributionStyle=resolveDistributionMode(preferredStyle,distributionContext);
   const smoothedMode=distributionModes[distributionStyle].smoothed && !layer && !s.caseId && !s.dataView && !s.visualization && s.overview==="catalog";
-  const fieldData=useFieldData(layer);
+  const fieldData=useFieldData(layer,rainCatalog);
   const [animate,setAnimate]=useState(false);
   useEffect(()=>setAnimate(false),[layer?.id,layer?.year]);
   useEffect(()=>{
@@ -135,10 +148,6 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
     const timer=setTimeout(()=>patch({fieldLayer:{...layer,frame:fieldData.field?.rain?fieldData.field.rain.nextMonth(layer.frame):(layer.frame+1)%layerFrameCount(layer.id)}}),layer.id==="rain"?650:layer.id==="forest"?900:240);
     return ()=>clearTimeout(timer);
   },[animate,layer,fieldData.field,fieldData.revision,patch]);
-  useEffect(()=>{
-    const rain=fieldData.field?.rain;
-    if(layer && rain && !rain.available(layer.frame))patch({fieldLayer:{...layer,frame:rain.nextMonth(layer.frame)}});
-  },[layer,fieldData.field,patch]);
   const forestLayer=layer?.id==="forest" ? layer : null;
   const forest=forestLayer ? fieldData.field?.forest : undefined;
   const forestMode=!!(forestLayer && forest);
@@ -490,12 +499,21 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
           shift={delta=>{setAnimate(false);patch({fieldLayer:{...forestLayer,frame:Math.max(0,Math.min(forest.manifest.frames.length-1,forestLayer.frame+delta))}});}}
           toggle={()=>setAnimate(!animate)}/> :
           (catalogMode||c) && !s.visualization && !s.dataView && <GlobeTimeline onAskTime={()=>attachScope(...timeScope(s.filters))} key={pushMode?"scene":c?.id||"catalog"} filters={s.filters} years={years} mode={pushMode?"scene":c?"year":"month"} records={axisRecords} onChange={changes=>setFilters(changes)}/>}
-        {layer?.id==="rain" && fieldData.field?.rain ? <RainfallControls grid={fieldData.field.rain} month={layer.frame} playing={animate} chooseYear={(year,frame)=>{setAnimate(false);patch({fieldLayer:{...layer,year,frame}});}} point={s.selection?.point}
-          toggle={()=>setAnimate(!animate)} choose={frame=>{setAnimate(false);patch({fieldLayer:{...layer,frame}});}}/> : layer && layer.id!=="forest" && layer.id!=="c40" && <div className="field-controls">
+        {layer?.id==="rain" && (fieldData.field?.rain ? <RainfallControls grid={fieldData.field.rain} month={layer.frame} playing={animate} chooseYear={(year,frame)=>{setAnimate(false);patch({fieldLayer:{...layer,year,frame}});}} point={s.selection?.point}
+          toggle={()=>setAnimate(!animate)} choose={frame=>{setAnimate(false);patch({fieldLayer:{...layer,frame}});}}/> :
+          <div className="field-controls">
+            <strong>{globeCases.rain.title}</strong>
+            <small role="status">{rainCoverageLabel(publication)}</small>
+            {publication.status==="unavailable" ?
+              <button onClick={()=>void refreshRainCatalog()}>重试发布目录</button> :
+              rainPeriod && (fieldData.error ? <button onClick={()=>{void refreshRainCatalog();fieldData.retry();}}>图层载入失败 · 重试</button> :
+                <small>正在载入降水图层…</small>)}
+          </div>)}
+        {layer && layer.id!=="rain" && layer.id!=="forest" && layer.id!=="c40" && <div className="field-controls">
           <strong>{globeCases[layer.id].title}</strong>
           {fieldData.field ? <>
             <div className="field-time"><button aria-label={animate?"暂停图层":"播放图层"} onClick={()=>setAnimate(!animate)}>{animate?"暂停":"播放"}</button>
-              <output>{layer.id==="rain"?"2024-"+String(layer.frame+1).padStart(2,"0"):fieldData.field.data?.dates[layer.frame]}</output>
+              <output>{fieldData.field.data?.dates[layer.frame]}</output>
               <input aria-label="图层时间轴" type="range" min={0} max={layerFrameCount(layer.id)-1} value={layer.frame} onChange={e=>{setAnimate(false);patch({fieldLayer:{...layer,frame:+e.target.value}})}}/>
             </div>
             <div className="field-scale">0 <i style={{background:"linear-gradient(to right,"+palettes[layer.id].map(rgb=>"rgb("+rgb+")").join(",")+")"}}/> {globeCases[layer.id].max.toLocaleString()}+ {globeCases[layer.id].unit}</div>

@@ -12,7 +12,7 @@ import {
   Moon,
 } from "lucide-react";
 import { useWorkspace } from "../domain/store";
-import { windFrame, windManifest, windTimeLabel } from "../domain/wind";
+import { windForecastHours, windFrame, windManifest, windReferenceLabel, windTimeLabel } from "../domain/wind";
 import { windLegendGradient, type WindTheme } from "../globe/wind-layer";
 export function WindControls({
   ready,
@@ -95,9 +95,9 @@ export function WindControls({
             </button>
           ))}
         </div>
-        <label className="wind-field-label">有效时间 · UTC</label>
+        <label className="wind-field-label">预报时效</label>
         <div className="wind-times" role="group" aria-label="风场预报时效">
-          {[0, 6, 12].map((hour) => (
+          {windForecastHours.map((hour) => (
             <button
               key={hour}
               aria-pressed={view.forecastHour === hour}
@@ -108,12 +108,12 @@ export function WindControls({
                 })
               }
             >
-              <strong>{String(hour).padStart(2, "0")}:00</strong>
+              <strong>+{hour} h</strong>
               <small>F{String(hour).padStart(3, "0")}</small>
             </button>
           ))}
         </div>
-        <p className="wind-valid-time">{windTimeLabel(frame)}</p>
+        <p className="wind-valid-time">有效时间 {windTimeLabel(frame)}</p>
         <div className="wind-play-row">
           <button
             className="wind-play"
@@ -138,7 +138,7 @@ export function WindControls({
         </div>
         <div className="wind-source-detail">
           <span>
-            起报 {windManifest.referenceTime.slice(0, 16).replace("T", " ")} UTC
+            起报 {windReferenceLabel}
           </span>
           <span>全球 1° 原网格 · NOAA / NCEP</span>
         </div>

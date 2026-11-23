@@ -1,10 +1,10 @@
 import {gunzipSync} from "fflate";
 import {rainFactors,rainGrid,rainTileCell,rainTileSize,rainTileXY,type RainCatalog,type RainManifest} from "../domain/rainfall";
 import type {XY} from "../domain/regional-cases";
+import {rainTileRoot} from "../domain/rain-catalog";
 
 type TileRequest={key:string;month:number;level:number;id:number};
 const request=(month:number,level:number,id:number):TileRequest=>({key:month+"/"+level+"/"+id,month,level,id});
-export const rainTileRoot="/precip-data";
 export class RainTiles {
   private cache=new Map<string,Uint16Array>();
   private pending=new Map<string,AbortController>();
@@ -95,20 +95,21 @@ export class RainTiles {
     this.listeners.clear();this.cache.clear();
   }
 }
-export async function loadRainTiles(signal:AbortSignal,year=2024){
-  const responses=await Promise.all([
-    fetch(rainTileRoot+"/catalog.json",{signal}),
-    fetch(rainTileRoot+"/"+year+"/manifest.json",{signal})
-  ]);
-  if(responses.some(response=>!response.ok))throw Error("降水索引载入失败");
-  const [catalog,manifest]=await Promise.all(responses.map(response=>response.json())) as [RainCatalog,RainManifest];
-  if(catalog.id!=="imerg-monthly" || !catalog.years.some(entry=>entry.year===year) ||
-    manifest.year!==year || manifest.step!==rainGrid.step ||
+export async function loadRainTiles(signal:AbortSignal,year:number,catalog:RainCatalog){
+  const published=catalog.years.find(entry=>entry.year===year);
+  if(!published)throw Error("降水年份尚未发布");
+  const response=await fetch(rainTileRoot+"/"+year+"/manifest.json",{signal});
+  if(!response.ok)throw Error("降水图层清单载入失败");
+  const manifest=await response.json() as RainManifest;
+  if(manifest.year!==year || manifest.step!==rainGrid.step ||
     manifest.columns!==rainGrid.columns || manifest.rows!==rainGrid.rows ||
     manifest.tileSize!==rainTileSize || String(manifest.factors)!==String(rainFactors) ||
     manifest.unit!=="mm/day" || manifest.scale!==.01 || manifest.missing!==65535 ||
     manifest.bands.length!==12 || manifest.bands.some(b=>b.length!==18) ||
-    manifest.months.length!==12 || manifest.months.some((month,i)=>month && (month.month!==i+1 || !month.path.startsWith(year+"/"))))
-    throw Error("降水索引与图层不匹配");
-  return new RainTiles(manifest,(input,init)=>fetch(input,init),catalog);
+    manifest.months.length!==12 || manifest.months.some((month,i)=>month && (month.month!==i+1 || !month.path.startsWith(year+"/"))) ||
+    published.months.some(month=>!manifest.months[month-1]))
+    throw Error("降水发布目录与图层清单不匹配");
+  const months=manifest.months.map((month,i)=>published.months.includes(i+1)?month:null);
+  const bands=manifest.bands.map((band,i)=>months[i]?band:band.map(()=>null));
+  return new RainTiles({...manifest,months,bands},(input,init)=>fetch(input,init),catalog);
 }

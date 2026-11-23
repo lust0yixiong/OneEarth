@@ -1,4 +1,5 @@
 import {loadRainTiles,type RainTiles} from "./rain-tiles";
+import type {RainCatalog} from "../domain/rainfall";
 import {geoEquirectangular,geoPath,type GeoProjection} from "d3-geo";
 import {feature} from "topojson-client";
 import atlas from "world-atlas/land-110m.json";
@@ -28,8 +29,11 @@ function basemap(){
 
 export type ForestImage={pixels:Uint8ClampedArray;width:number;height:number;bounds:[number,number,number,number]};
 export type FieldData={rain:RainTiles|null;data:RegionalData|null;forest?:{manifest:HainaForestManifest;images:ForestImage[]};raster?:{manifest:C40Manifest;images:{city:C40City;image:ForestImage}[]}};
-export async function fetchField(id:RegionalId,signal:AbortSignal,year=2024):Promise<FieldData>{
-  if(id==="rain")return {rain:await loadRainTiles(signal,year),data:null};
+export async function fetchField(id:RegionalId,signal:AbortSignal,year?:number,catalog?:RainCatalog):Promise<FieldData>{
+  if(id==="rain"){
+    if(!catalog || year===undefined)throw Error("降水发布年月未确定");
+    return {rain:await loadRainTiles(signal,year,catalog),data:null};
+  }
   if(id==="c40"){
     const manifest=hainaC40Manifest as unknown as C40Manifest;
     const images=await Promise.all(manifest.cities.map(async city=>{

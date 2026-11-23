@@ -5,7 +5,7 @@ import {emptyFilters} from "../domain/spatial";
 import {useWorkspace} from "../domain/store";
 import type {WeatherStation} from "../domain/weather-stations";
 import type {Coordinate} from "../domain/types";
-import {useWeatherObservations} from "./weather-observations";
+import {useWeatherObservations, weatherCaseTitle, weatherCaseCoverage} from "./weather-observations";
 import {animateWeather,mapStations,type WeatherHit} from "./weather-globe";
 import "../styles/live-lightning.css";
 
@@ -75,11 +75,12 @@ export function LiveLightning({back}:{back:()=>void}){
     return utc(time)+(failed?" · 更新失败":!paused && Date.now()-time>age?" · 延迟":"");
   };
   return <section className="strike-case"><div className="strike-globe" ref={root}>
-    <canvas className="strike-base" ref={base} aria-label="全球雷暴与天气实况地球"/>
+    <canvas className="strike-base" ref={base} aria-label={weatherCaseTitle+"地球"}/>
     <canvas className="strike-overlay" ref={dots} aria-hidden="true"/>
     <canvas className="strike-overlay" ref={effects} aria-hidden="true"/>
     <header className="strike-heading"><button onClick={back}><ArrowLeft size={15}/>案例</button>
-      <h1>全球雷暴与天气实况</h1>
+      <h1>{weatherCaseTitle}</h1>
+      <small>{weatherCaseCoverage}</small>
       <div className="weather-key"><span><i className="station-dot"/>气象站</span><span><i className="storm-ring"/>站点雷暴</span><span><i className="flash-diamond"/>卫星闪电</span></div>
     </header>
     <div className="strike-navigation"><button data-plus aria-label="放大">＋</button><button data-minus aria-label="缩小">−</button><button data-reset>全球视野</button><button onClick={()=>focus([-88,6])}>美洲视野</button></div>

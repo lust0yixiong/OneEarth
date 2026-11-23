@@ -1,4 +1,4 @@
-import { windManifest } from "./wind";
+import { windForecastHours, windManifest, windReferenceLabel } from "./wind";
 import type { CaseStudy, VisualizationState } from "./types";
 /** Dataset capabilities are independent from research questions and content viewers. */
 export const visualizationCatalog = [
@@ -7,12 +7,12 @@ export const visualizationCatalog = [
     datasetId: "gfs-wind",
     caseId: "wind",
     needIndex: 0,
-    title: "全球风场 · 沿风而行",
+    title: "全球风场",
     preview: "/visualizations/gfs/globe-preview.webp",
-    subtitle: "连续风场着色 × 动态流线",
     dataset: "NCEP GFS · 全球 1° 风矢量",
     level: "10 m / 250 hPa",
-    time: "2026-11-06 · F000 / F006 / F012",
+    referenceTime: windReferenceLabel,
+    forecastHours: windForecastHours.map(hour=>"F"+String(hour).padStart(3,"0")).join(" / "),
   },
 ];
 export const visualizationsFor = (datasetId: string) =>

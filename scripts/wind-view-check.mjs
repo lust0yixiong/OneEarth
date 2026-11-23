@@ -50,7 +50,7 @@ try {
   await scienceCases.waitFor();
   assert.equal(await scienceCases.locator(":scope > *").count(), 1);
   const visualCases = p.getByRole("region", { name: "数据可视化" });
-  await visualCases.getByRole("button", { name: /全球风场 · 沿风而行/ }).click();
+  await visualCases.getByRole("button", { name: /^全球风场 / }).click();
   await ready();
   assert.equal(new URL(p.url()).searchParams.get("viz"), "gfs-wind");
 

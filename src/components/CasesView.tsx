@@ -5,8 +5,9 @@ import { feature } from "topojson-client";
 import atlas from "world-atlas/land-110m.json";
 import { visualizationCatalog } from "../domain/visualization-catalog";
 import { useWorkspace } from "../domain/store";
-import { regionalIds, type RegionalId } from "../domain/regional-cases";
-import { globeCases } from "../domain/regional-cases";
+import { regionalIds, globeCases, type RegionalId } from "../domain/regional-cases";
+import {weatherCaseTitle, weatherCaseCoverage} from "./weather-observations";
+import {rainCoverageLabel, useRainCatalog} from "./use-rain-catalog";
 import { RegionalExplorer } from "./RegionalExplorer";
 import {LiveLightning} from "./LiveLightning";
 import {EarthquakeCase} from "./EarthquakeCase";
@@ -48,6 +49,7 @@ export function CasesView() {
   const { openVisualization } = useWorkspace();
   const [explorer,setExplorer]=useState(currentExplorer);
   const detail=new URL(location.href).searchParams.get("detail")==="1";
+  const publication=useRainCatalog(!explorer);
   useEffect(()=>{
     const read=()=>setExplorer(currentExplorer());
     window.addEventListener("popstate",read);
@@ -72,7 +74,7 @@ export function CasesView() {
         <h2 id="viz-case-heading">数据可视化</h2>
         <button className="visual-case" onClick={()=>navigateLive("live-lightning")}>
           <img src="/visualizations/regional/lightning-globe.webp" width="100" height="100" alt=""/>
-          <span><strong>全球雷暴与天气实况</strong><small>全球气象站报告 · 美洲卫星闪电</small></span><ArrowUpRight size={18}/>
+          <span><strong>{weatherCaseTitle}</strong><small>{weatherCaseCoverage}</small></span><ArrowUpRight size={18}/>
         </button>
         <button className="visual-case" onClick={()=>navigateLive("earthquakes")}>
           <span className="quake-preview" aria-hidden="true"><EarthquakePreview/></span>
@@ -80,25 +82,12 @@ export function CasesView() {
         </button>
         {visualizationCatalog.map(v=><button key={v.id} className="visual-case" onClick={()=>openVisualization(v.id,null)}>
           <img src={v.preview} width="100" height="100" alt="" />
-          <span><strong>{v.title}</strong><small>{v.dataset} · {v.level}</small><small>{v.subtitle}</small></span>
+          <span><strong>{v.title}</strong><small>{v.dataset} · {v.level}</small><small>起报 {v.referenceTime}</small><small>预报时效 {v.forecastHours}</small></span>
           <ArrowUpRight size={18}/>
         </button>)}
-        {regionalIds.map(id=>{
-          const v=globeCases[id];
-          return <button key={id} className="visual-case" onClick={()=>openVisualization(id,null)}>
-            <img src={"/visualizations/regional/"+id+"-globe.webp"} width="100" height="100" alt=""/>
-            <span><strong>{v.title}</strong><small>{v.dataset}</small><small>{v.effect}</small></span>
-            <ArrowUpRight size={18}/>
-          </button>;
-        })}
-        <button className="visual-case" onClick={()=>openVisualization("forest",null)}>
-          <img src="/visualizations/haina/1846764/20230715.webp" width="100" height="100" alt=""/>
-          <span><strong>{globeCases.forest.title}</strong><small>{globeCases.forest.dataset}</small><small>{globeCases.forest.effect}</small></span>
-          <ArrowUpRight size={18}/>
-        </button>
-        <button className="visual-case" onClick={()=>openVisualization("c40",null)}>
-          <img src="/visualizations/haina/1846639/shanghai.webp" width="100" height="100" alt=""/>
-          <span><strong>{globeCases.c40.title}</strong><small>{globeCases.c40.dataset}</small><small>{globeCases.c40.effect}</small></span>
+        <button className="visual-case" onClick={()=>openVisualization("rain",null)}>
+          <img src="/visualizations/regional/rain-globe.webp" width="100" height="100" alt=""/>
+          <span><strong>{globeCases.rain.title}</strong><small>{globeCases.rain.dataset}</small><small>{rainCoverageLabel(publication)}</small></span>
           <ArrowUpRight size={18}/>
         </button>
       </section>

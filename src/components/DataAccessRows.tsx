@@ -6,7 +6,10 @@ import {assetById,assetIdentity,type Asset} from "../domain/datasets";
 import {paperId} from "../domain/paper-record";
 import {PaperEvidenceCard} from "./PaperEvidenceCard";
 import {linkedPapers} from "../domain/answer-sources";
-import {regionalForDataset} from "../domain/regional-cases";
+import {datasetLayers,regionalForDataset} from "../domain/regional-cases";
+import {rainCoverageLabel,useRainCatalog} from "./use-rain-catalog";
+
+const isRainLayer=(asset:AccessRow["asset"])=>asset.id===datasetLayers.rain && asset.datasetId===datasetLayers.rain;
 
 export const accessStamp=(value:string)=>new Intl.DateTimeFormat("zh-CN",{timeZone:"Asia/Shanghai",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).format(new Date(value));
 export interface AccessActions {
@@ -61,13 +64,16 @@ export function EntityCards({rows,actions}:{rows:AccessRow[];actions:AccessActio
     </article>;
   })}</div>;
 }
-function ClueDetail({row,actions,status}:{row:AccessRow;actions:AccessActions;status:string}){
-  const a=row.asset,papers=row.relatedIds.filter(paperId),attached=linkedPapers(assetById.get(a.id));
+function ClueDetail({row,actions,status,rainCoverage}:{row:AccessRow;actions:AccessActions;status:string;rainCoverage?:string}){
+  const a=row.asset;
+  const description=rainCoverage ? assetById.get(datasetLayers.rain)?.description ?? "可用年月以 OneEarth 发布目录为准。" : a.description;
+  const papers=row.relatedIds.filter(paperId),attached=linkedPapers(assetById.get(a.id));
   return <section className="access-clue-detail" aria-label={a.title+"的依据"}>
     {status?<p role="status">{status}</p>:<>
-      {!papers.length&&<section className="access-dataset-overview"><h3>数据集概览</h3><p>{a.description}</p><dl>
+      {!papers.length&&<section className="access-dataset-overview"><h3>数据集概览</h3><p>{description}</p><dl>
         <dt>来源</dt><dd>{a.source}</dd>
-        {a.profile?.coverage&&<><dt>空间与时间</dt><dd>{a.profile.coverage}{a.profile.years&&" · "+a.profile.years.join("—")}</dd></>}
+        {rainCoverage ? <><dt>OneEarth 降水图层</dt><dd>{rainCoverage}</dd></> :
+          a.profile?.coverage&&<><dt>空间与时间</dt><dd>{a.profile.coverage}{a.profile.years&&" · "+a.profile.years.join("—")}</dd></>}
         {a.profile?.access&&<><dt>获取方式</dt><dd>{a.profile.access}</dd></>}
       </dl></section>}
       {papers.map(id=><PaperEvidenceCard key={id} reference={{kind:"asset",id,title:assetById.get(id)?.title||a.title,source:assetById.get(id)?.source||a.source}}/>)}
@@ -81,12 +87,14 @@ function ClueDetail({row,actions,status}:{row:AccessRow;actions:AccessActions;st
   </section>;
 }
 export function ClueIndex({rows,actions,expanded,status,expand}:{rows:AccessRow[];actions:AccessActions;expanded:string|null;status:string;expand:(row:AccessRow)=>void}){
+  const publication=useRainCatalog(rows.some(row=>isRainLayer(row.asset)));
   return <div className="access-index" aria-label="数据线索索引">
     <div className="access-index-heading" aria-hidden="true"><span>数据集 / 变量与范围</span><span>来源依据</span><span>操作</span></div>
     {rows.map(row=>{const a=row.asset,open=expanded===row.key;
+      const rainCoverage=isRainLayer(a)?rainCoverageLabel(publication):undefined;
       return <Fragment key={row.key}><article className="access-index-row catalog-record" data-expanded={open}>
         <div className="access-index-name"><button className="access-index-title" onClick={()=>expand(row)} aria-expanded={open}><h2>{a.title}</h2></button>
-          <div className="access-index-meta">{[a.type,a.version,a.profile?.years?.join("—")].filter(Boolean).join(" · ")}</div>
+          <div className="access-index-meta">{[a.type,a.version,rainCoverage ?? a.profile?.years?.join("—")].filter(Boolean).join(" · ")}</div>
           <p>{a.profile?.coverage||a.source}</p>
         </div>
         <div className="access-index-sources"><span>{row.evidenceKinds.join(" · ")||"数据来源记录"}</span>
@@ -94,7 +102,7 @@ export function ClueIndex({rows,actions,expanded,status,expand}:{rows:AccessRow[
           {row.entityId&&<button onClick={()=>actions.inspect(row.entityId!)}>已有实体 ↗</button>}
         </div>
         <div className="access-index-tools"><button className="access-expand" aria-label={(open?"收起依据：":"查看依据：")+a.title} aria-expanded={open} onClick={()=>expand(row)}><FileText size={14}/>{open?"收起依据":"查看依据"}<ChevronDown size={13}/></button><Actions row={row} actions={actions} preview/></div>
-      </article>{open&&<ClueDetail row={row} actions={actions} status={status}/>}</Fragment>;
+      </article>{open&&<ClueDetail row={row} actions={actions} status={status} rainCoverage={rainCoverage}/>}</Fragment>;
     })}
   </div>;
 }

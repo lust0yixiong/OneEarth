@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {geoOrthographic} from "d3-geo";
 import {rainCell,rainLevel,rainTileCell,rainVisibleTiles,type RainManifest} from "./rainfall";
+import {publishedRainPeriod,rainPublishedCoverage,readRainCatalog} from "./rain-catalog";
 import {RainTiles} from "../globe/rain-tiles";
 
 const manifest={id:"imerg-v07b-2024",product:"GPM IMERG V07B Final",year:2024,step:.1,columns:3600,rows:1800,
@@ -83,4 +84,18 @@ test("year-specific paths and unpublished months keep cache and replay aligned",
     assert.equal(recent.nextMonth(1),0);
     assert.ok(!calls.some(url=>url.includes("/2026/03/")));
   }finally{old.dispose();recent.dispose();}
+});
+
+test("published rain coverage does not bridge missing years or months",()=>{
+  const catalog=readRainCatalog({id:"imerg-monthly",defaultYear:2024,years:[
+    {year:2028,months:[9,2]},
+    {year:2023,months:[12,1,3,3]},
+  ]});
+  assert.equal(rainPublishedCoverage(catalog),"2023 年（1、3、12 月） · 2028 年（2、9 月）");
+  assert.deepEqual(publishedRainPeriod(catalog,undefined,6),{year:2028,frame:8});
+  assert.deepEqual(publishedRainPeriod(catalog,2023,2),{year:2023,frame:2});
+  assert.deepEqual(publishedRainPeriod(catalog,2023,3),{year:2023,frame:11});
+  const empty=readRainCatalog({id:"imerg-monthly",defaultYear:2024,years:[{year:2024,months:[]}]});
+  assert.equal(publishedRainPeriod(empty,2024,0),null);
+  assert.throws(()=>readRainCatalog({id:"imerg-monthly",defaultYear:2024,years:[{year:2024,months:[13]}]}));
 });

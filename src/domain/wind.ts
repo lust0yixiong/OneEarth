@@ -56,8 +56,10 @@ export const windFrame = (view: VisualizationState) =>
   manifest.frames.find(
     (f) => f.level === view.level && f.forecastHour === view.forecastHour,
   )!;
-export const windTimeLabel = (frame: WindFrame) =>
-  frame.validTime.replace("T", " ").replace(":00:00Z", ":00 UTC");
+const windUtcLabel = (iso: string) => iso.replace("T", " ").replace(/:00Z$/, "Z").replace(/Z$/, " UTC");
+export const windReferenceLabel = windUtcLabel(manifest.referenceTime);
+export const windForecastHours = [...new Set(manifest.frames.map(frame => frame.forecastHour))].sort((a,b)=>a-b);
+export const windTimeLabel = (frame: WindFrame) => windUtcLabel(frame.validTime);
 export function windVector(
   data: WindData,
   frame: WindFrame,
