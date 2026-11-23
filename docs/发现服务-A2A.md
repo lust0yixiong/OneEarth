@@ -17,7 +17,7 @@
 
 直接 Message 带服务端生成的 `contextId` 和 `messageId`。这种查询使用独立响应上下文，不生成 `taskId` 或受托任务。运行时接受提供方的非空上下文标识。参见 [A2A Message 规范](https://a2a-protocol.org/v1.0.1/specification/#414-message)。
 
-`message.parts` 携带一个带 `kind=oneearth.discovery.request.v1` 的数据 part。它描述本次目的、证据缺口、已确认范围、引用或已取得材料，以及本轮 DeepSeek Search 和 DeepSeek Fetch 两个开关。启用条件是本轮开关和发现部署配置同时允许。既有 Bing、DataCite 等渠道仍可发公开查询。机构和项目权限、具体材料能否外发由各自权限边界约束。模型、执行器、访问凭据和内部计划由发现服务保管。
+`message.parts` 携带一个带 `kind=oneearth.discovery.request.v1` 的数据 part。它描述本次目的、证据缺口、已确认范围、引用或已取得材料，以及本轮 DeepSeek Search 和 DeepSeek Fetch 两个开关。发现服务用自己的配置选择规划模型并管理查找计划。公开网络的实际执行经过下述运行时适配层。既有 Bing、DuckDuckGo 和 DataCite 可发公开查询。机构和项目权限、具体材料能否外发由各自权限边界约束。
 
 ### 发现渠道范围
 
@@ -108,9 +108,19 @@
 
 ### 指定来源补读
 
-`kind=oneearth.source.read.v1` 发送 `question` 和最多三项明确来源。论文用精确内容 ID `{"kind":"paper","id":"earthnano:…"}`，公开网页和 PDF 用原地址和标题 `{"kind":"web","url":"https://example.org/report.pdf","title":"报告"}`。可选的 `deepseekFetch` 只有与发现进程自身开关同时开启才生效。服务沿现有公开 URL 及重定向约束取材，保留指定对象的身份和读取层级。
+`kind=oneearth.source.read.v1` 发送 `question` 和最多三项明确来源。论文用精确内容 ID `{"kind":"paper","id":"earthnano:…"}`，公开网页和 PDF 用原地址和标题 `{"kind":"web","url":"https://example.org/report.pdf","title":"报告"}`。发现服务查询论文依据；公开页和 PDF 由运行时适配层按原地址读取，遵守现有公开 URL 及重定向约束。关闭 DeepSeek Fetch 供应时，获准的指定地址仍可按原站或 PDF 路径读取。
 
 请求示例带 `configuration.returnImmediately=true`。确认受理后用 Task ID 获取快照、SSE 和取消。已保存的终态成果位于受托事件的 `sourceReadResult`，含取得的 `searches`、`papers`、`issues`，可包含带实际读取时间的 `paperEvidence`。新材料与旧档摘录由运行时分别保存。精确补读未取得新材料时保留真实失败，普通打开原站或传输 PDF 文件不产生这类研究任务。
+
+### 公开网络工具的运行时执行
+
+发现服务决定公开查找的搜索词、提供方、所选 URL、补读范围、替代和采纳。运行时按本轮渠道、工具开关及部署授权发放临时委托凭据，经内置适配层执行业务调用。运行时规划模型、发现规划模型与工具供应分别配置。DeepSeek Search 和 DeepSeek Fetch 的供应还要求相应本轮开关、部署开关及运行时有效凭据。限定海纳的委托不调用公开网络工具。指定来源补读的许可只覆盖给定 URL，不允许关键词搜索。
+
+运行时在发出委托前建立能力记录，通过委托的内部字段 `runtimeWebToolGrant` 传递本轮临时凭据。收到有效 A2A 受理后绑定实际 Task。补查及确认续行使用本次消息自己的授权。凭据不进入规划输入、公开任务事件或研究引用。
+
+工具入口为运行时回环上的 `POST /internal/discovery-web-tool/v1`。发现服务使用 `Authorization: Bearer <runtimeWebToolGrant>`，发送 JSON `{taskId,messageId,callId,operation}`。例如一笔关键词查找的 `operation` 是 `{"kind":"search","provider":"Bing","query":"NASA IMERG Final Run"}`。取回正文时，`operation` 使用 `kind:"fetch"`，带提供方、所选 `url` 和来源标识 `hit`。原生搜索使用 `kind:"native-search"` 和 `queries`，仅凭运行时已授权的原生执行器配置运行。
+
+受理绑定之前返回 425，发现侧可原样重送。受理后排队或执行中返回 HTTP 202 和 `{"state":"pending"}`。原 `callId` 与相同输入可查询已保存的 HTTP 200 回执，成功为 `{state:"complete",value}`，失败为 `{state:"failed",error}`。越权返回 403，重用编号提交不同输入返回 409。运行时 API 侧的有界执行队列与等待发现的研究 worker 分开推进。取消、到期和委托结束时停止可取消的工作。执行中断且结果未知会留下明确失败回执；再次查询原执行不重新请求上游。网页入口不提供此路径。
 
 ### 最小委托示例
 
@@ -272,7 +282,7 @@ Mac mini 隔离候选 `287b8dd` 接受显式能力输入 `POST /api/tasks` 的 `
 
 发现进程单独读取并校验 `ONEEARTH_DISCOVERY_CHAT_MODEL`，启动器只向发现角色传递此选择。已有授权的原生执行器模型或 DeepSeek 模型可以按部署配置启用，部署使用自己的凭据来源。缺少有效配置时，新的开放发现委托返回 `UNAVAILABLE`。已保存任务、确定性论文查询及可用来源的精确补读继续各走原路径。运行时模型和执行器仍取其原有授权配置。参见[部署说明](../README.md)。
 
-旧调用方可以继续使用 `/v1/discoveries` 的 HTTP+NDJSON 接口及发现端旧纸本路由。发现服务配置了有效的本地模型时，v1 使用该模型，DeepSeek Search/Fetch 按本地与请求的开关取交集。旧部署未设置独立模型时，v1 沿用其请求中的合法配置，新 A2A 开放发现返回 503。连接只提供旧接口的发现服务时，`ONEEARTH_DISCOVERY_PROTOCOL=v1` 仅用于开放发现。新运行时的当前论文查询和精确补读需要提供对应 A2A 操作的发现服务。研究记录保持原本的任务 ID 和引用。
+旧调用方可以继续使用 `/v1/discoveries` 的 HTTP+NDJSON 接口及发现端旧纸本路由。发现服务配置了有效的本地模型时，v1 使用该模型。未设置独立模型时，v1 沿用其请求中的合法配置，新 A2A 开放发现返回 503。连接只提供旧接口的发现服务时，`ONEEARTH_DISCOVERY_PROTOCOL=v1` 仅用于开放发现。公开网络工具需要实际运行时委托授权，缺少授权或工具通道不可用时保留渠道失败与已得材料。当前论文查询和精确补读需要提供对应 A2A 操作的发现服务。研究记录保持原本的任务 ID 和引用。
 
 A2A Task 的受理关系、消息去重和作业映射随发现 PostgreSQL 库保存，由停写产品备份包含。内部计划由发现服务产生，归档产物沿用的结果结构仍包含历史计划字段。
 

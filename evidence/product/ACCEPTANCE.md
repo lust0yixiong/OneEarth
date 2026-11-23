@@ -1,5 +1,23 @@
 # Mac mini 产品验收
 
+## Mac mini 公开网络工具执行隔离验收
+
+基线 `5c429284bda604f11a3867d80b3db86a4f5f7084`。最终隔离候选 `b34fc5c812c68b6657296d3c84c159cce83ce322`，源码树 `fb07086b96ff4241c9bd71b7538cb9b44521a74d`。27 个改动文件的指纹和集成补丁见主程证据。3,424 项静态构建的清单 SHA-256 为 `bb796f2bbcf06370a4baaad83c2f17f82df7b5c8d1f94cce8dfefc22dff16e67`，与现行工作台一致。5474 未切换，切前切后首页和健康接口响应字节一致。
+
+发现服务继续规划开放查找及同题补查，选择公开来源和读法，决定采纳哪些材料。原 Bing、DuckDuckGo、DataCite、DeepSeek Search、原生关键词检索、DeepSeek Fetch、原站、PDF 和公开归档索引执行均进入运行时适配层。已知网页/PDF 的精确补读只获准读取指定地址。论文断言、海纳目录和逐景目录仍由发现服务处理。运行时以本轮权限核准调用，经独立有界队列执行，并以原 Task、消息和调用编号保存回执。
+
+**真实公开资料。** 在 `b2f5cc12e19fb2bf8a6264ac0a7a0d18d2829ed7` 通过隔离工作台的正常研究 HTTP 入口提交一笔 NASA IMERG 题，运行时任务 `23a75b85-bc4b-46a6-8e23-1c1dfa677824`。运行时配置为 Codex `gpt-6-luna`，发现配置为 DeepSeek `deepseek-flash`。原发现 Task `c9c17c9b-d3b8-4e30-9b5a-ddcbf2388e3a` 完成实际规划与网页选择，DeepSeek Search、Bing、DataCite 均各返回三次 200，DeepSeek Fetch 三次返回 200 和网页节选。工具均由独立运行时 API 角色发出，回执关联同一原 Task。该问只走公开网络，论文、海纳研究渠道均记为未请求。启动时海纳背景目录使用隔离对照数据，与本题无关。
+
+本轮随后委托两笔精确补读，共取得三份 NASA PDF 节选和三条归档引用。正文依据两份 V05 发布说明，说明 Final Run 使用月度雨量计分析校准。初次网页工具回执与最终 PDF 依据分别留档。HTTP 提交至终态记录用时 154.472 秒。该阶段未测浏览器首段可见时间。最终候选相对实测版仅改原问授权依据及对应测试各一行，堵住规划归一省略原渠道限定时的授权风险。
+
+**受控隔离。** 最终版通过临时 PostgreSQL、实际 gateway、运行时 API、worker 及发现服务的七组验证。模型、外部工具供应商和海纳目录使用固定输入。覆盖开放关键词查找后选中并读取原来源、定向 URL 零搜索、海纳零公开工具、HTTP 429 时保留另一条成功节选、同题补查回各自 Task、两个 DeepSeek 开关关闭及执行中取消。回执丢失后以同一调用编号取得原结果。取消样本的研究与发现均取消，正在读取的工具收到中止，后到结果未成为引用。单独的回环和 PostgreSQL 用例覆盖截断响应体重查、坏回执、重复冲突、排队配额、权限撤销和中断后结果未知。
+
+独立 QA 从最终提交重建 3,424 项产物，复跑七组及 25 项定向用例。独立丢弃的是已完成的 DeepSeek Fetch 回执，重送后 PostgreSQL 仍只有一条工具回执，供应商适配器执行一次。明确问海纳时，归一稿即使省略「海纳」也不获准网页工具，显式开放的对照仍获准。独立验收索引为 `~/Library/Application Support/OneEarth Next/iterations/discovery-runtime-web-tools-independent/independent-b34fc5c-verdict.json`，SHA-256 `74b44a0a9aa22cbd0e2bd746c18727aee9746eed3053492360c58f84c5668027`。总体核对源码和独立证据后签收隔离候选。
+
+类型检查与构建通过。普通全套 844 项，838 项通过，6 项需 PostgreSQL 的用例由环境门控。并行启用 PostgreSQL 的尝试遇到三条宿主共享内存启动错误，错误留档。释放本轮隔离集群后串行验证了六个 PostgreSQL 测试文件，14 项通过，零失败或跳过。
+
+主程证据根为 `~/Library/Application Support/OneEarth Next/iterations/discovery-runtime-web-tools/`。从该目录核对 `evidence/acceptance-b34fc5c.sha256`。真实上游与最终受控证明分别位于 `evidence/public-upstream-b2f5cc1/proof.json` 与 `evidence/controlled-b34fc5c/proof.json`。复跑受控集时以 `node probe/run.mjs <b34fc5c 的独立工作副本> <未创建的证据目录>` 启动，使用 `ONEEARTH_A2A_TEST_PG_BIN` 指定本机 PostgreSQL 工具目录。脚本创建回环端口和临时库，每次使用新证据目录。
+
 ## Mac mini 发现渠道范围正式发布
 
 2026-11-23 10:26:23（上海时间），[Mac mini 5474](http://127.0.0.1:5474/) 切换到已签收的后端源码 `e2756ad6a4129e00b13cddacc329abad45eda0a2`，源码树 `37d7fee3305fd91c6059189c715dd12e8371671a`，GitHub 归档 `b3b9c8ad5ee32919b6524409108bf3e7366ba978`。发布目录为 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.9-e2756ad`。工作台仍使用前端 `7446494`，3,424 项构建清单 `bb796f2b…` 逐件通过，前后完整静态目录逐字节一致。在线首页 SHA-256 为 `ad0417c24ea70ba750a57e642eb22090c4f4136796397532d3b488665929e752`。实际网页监听 `127.0.0.1:5474`，四个应用端口均为本机回环。网络绑定和权限配置前后相同。
