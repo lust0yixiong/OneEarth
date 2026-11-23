@@ -58,6 +58,10 @@ export function continuationSourcePolicy(parent:DataSearchResult, originalQuesti
 
 const shortEnglishSchema={type:'string',pattern:'^[A-Za-z][A-Za-z0-9_.-]*(?: [A-Za-z0-9][A-Za-z0-9_.-]*){0,2}$',maxLength:120};
 const sourcePolicyFormat='sourcePolicy 对象使用 mode（restricted 或 preferred）和 sources（合法来源的非空列表，不重复）；只有 restricted 的多个来源可添加 fallback="no_match"，其余情况省略 fallback。';
+const regularSourcePolicy={
+  mode:{type:"string",enum:["restricted","preferred"]},
+  sources:{type:"array",minItems:1,maxItems:4,items:{type:"string",enum:discoverySources}},
+};
 /** Structured planning output constrains shape; runtime checks still own intent/approval and valid calendar intervals. */
 export const dataSearchSchema={type:'object',additionalProperties:false,
   required:['questionMode','dataQuestion','dataNeed','researchIntent','conversationContext','conversationPeriod','conversationWindow','clarification','sourcePolicy','hainaQueries','paper','web'],
@@ -67,10 +71,10 @@ export const dataSearchSchema={type:'object',additionalProperties:false,
     conversationContext:{type:'string',maxLength:1600},conversationPeriod:{type:['array','null'],items:{type:'integer',minimum:1000,maximum:2300},minItems:2,maxItems:2},
     conversationWindow:{type:['array','null'],items:{type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}(?:T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z)?$'},minItems:2,maxItems:2},
     clarification:{type:['string','null'],minLength:1,maxLength:500},hainaQueries:{type:'array',items:{type:'string',minLength:1,maxLength:160},maxItems:4},
-    sourcePolicy:{anyOf:[{type:"null"},{type:"object",additionalProperties:false,required:["mode","sources"],properties:{
-      mode:{type:"string",enum:["restricted","preferred"]},sources:{type:"array",minItems:1,maxItems:4,items:{type:"string",enum:discoverySources}},
-      fallback:{type:"null"},
-    }},{type:"object",additionalProperties:false,required:["mode","sources","fallback"],properties:{
+    sourcePolicy:{anyOf:[{type:"null"},
+    {type:"object",additionalProperties:false,required:["mode","sources"],properties:regularSourcePolicy},
+    {type:"object",additionalProperties:false,required:["mode","sources","fallback"],properties:{...regularSourcePolicy,fallback:{type:"null"}}},
+    {type:"object",additionalProperties:false,required:["mode","sources","fallback"],properties:{
       mode:{type:"string",enum:["restricted"]},sources:{type:"array",minItems:2,maxItems:4,items:{type:"string",enum:discoverySources}},
       fallback:{type:"string",enum:["no_match"]},
     }}]},
