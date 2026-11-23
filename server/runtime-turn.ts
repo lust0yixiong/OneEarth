@@ -23,7 +23,7 @@ import {researchExecutor,discoveryProtocol} from "./research-executor";
 import {discoveryConfirmation} from "./discovery-bindings";
 import {assertDiscoveryWaiting,queryPapers,type DiscoveryBinding,type DiscoveryA2AInput} from "./discovery-a2a-client";
 import {clarificationParent,guardClarification,clarificationGuardSchema,type ClarificationReply} from "./clarification-guard";
-import {continueResearch, evidenceDecisionSchema} from "./research-evidence";
+import {continueResearch, evidenceDecisionSchema, scopedDiscoverySources} from "./research-evidence";
 import type {DiscoveryInput} from "./discovery-contract";
 import {rememberConversationReferences} from "../src/domain/reference-memory";
 import {conversationScope,scopedReply} from "./conversation-scope";
@@ -332,6 +332,22 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       return {result:literatureDisplay({message:gridCoverageSummary(gridCoverage),clarification:true,gridCoverage,runTrace,
         researchIntent:turn.researchIntent,conversationContext:turn.conversationContext})};
     }
+    const policy=retrieved?.plan.sourcePolicy;
+    const restricted=scopedDiscoverySources(retrieved);
+    if(retrieved&&policy?.mode==="restricted"&&restricted&&!retrieved.questionCheck&&!retrieved.clarification&&
+      !policy.sources.includes("constellation")&&!restricted.includes("web")&&!retrieved.haina.length&&!retrieved.papers.length&&
+      !retrieved.searches.some(run=>run.hits.length)){
+      const checked=retrieved.sourceStatus.filter(row=>row.status!=="not_requested");
+      const zero=checked.length===policy.sources.length&&checked.every(row=>row.status==="done"&&row.count===0);
+      const labels=(zero||!restricted.length?policy.sources:restricted).map(source=>({haina:"海纳目录",paper:"论文断言库",web:"公开网络",constellation:"星座接收库"})[source]).join("、");
+      const message=zero
+        ? "本轮仅查找了"+labels+"，未返回符合条件的资料。你希望我扩大到其他来源吗？"
+        : "本轮范围限于"+labels+"，查询未完整完成，目前无法确认有无匹配资料。你希望重试该范围，还是查其他来源？";
+      return {result:literatureDisplay({message,runTrace,researchRegion,gridCoverage,
+        researchIntent:retrieved.plan.researchIntent||turn.researchIntent,
+        conversationContext:retrieved.plan.conversationContext||turn.conversationContext,
+        ...(retrieved.hainaCatalog?{hainaCatalog:retrieved.hainaCatalog}:{})})};
+    }
     if(!retrieved?.questionCheck&&!retrieved?.clarification&&(retrieved||turn.action==="read")){
       const targetQuery=decision?.dataQuestion||query;
       if(turn.action==="read")readRuns=await readTargets(turn,targetQuery);
@@ -511,15 +527,20 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     if(gridCoverage?.status==="ready" && !scopedContext.candidateIds?.length && gridCoverage.sourceIds.length){
       scopedContext.candidateIds=gridCoverage.sourceIds.slice(0,32);scopedContext.inCandidateScope=true;
     }
-    const observation=gridCoverage?undefined:discoverObservations(lookupQuery,scopedContext,push);
-    const constellationFeed=observation?.pushFeed || push.latest();
-    registerObservations(constellationFeed.records,!observation);
+    const allowConstellation=!restricted||restricted.includes("constellation");
+    if(restricted?.length===1&&restricted[0]==="constellation"){
+      scopedContext.filters={...scopedContext.filters,source:"constellation"};
+    }
+    const observation=gridCoverage||!allowConstellation?undefined:discoverObservations(lookupQuery,scopedContext,push);
+    const constellationFeed=allowConstellation?(observation?.pushFeed||push.latest()):undefined;
+    if(constellationFeed)registerObservations(constellationFeed.records,!observation);
     const localResult=()=>retrieved?discoverConversation(decision?.dataQuestion || query,scopedContext,retrieved.plan.conversationContext):discover(query,scopedContext);
     const result=gridCoverage?{message:gridCoverageSummary(gridCoverage),gridCoverage}:
-      scopedReply(observation || await resolveSceneQuery(lookupQuery,localResult(),signal),scopedContext,retrieved?.plan);
+      scopedReply(observation || (restricted&&!restricted.includes("web")?{message:"按用户限定的来源整理本轮实得资料。"}:
+        await resolveSceneQuery(lookupQuery,localResult(),signal)),scopedContext,retrieved?.plan);
     report({...catalogCall,status:gridCoverage?.status==="unknown"?"partial":"done",output:result.message});
     {
-      const paperTrace=retrieved!.sourceStatus.map(s=>s.source+" "+(s.status==="done"?"完成":s.status==="partial"?"部分完成":"未完成")+" · "+s.count+" 项").join("；");
+      const paperTrace=retrieved!.sourceStatus.map(s=>s.source+" "+(s.status==="done"?"完成":s.status==="partial"?"部分完成":s.status==="not_requested"?"未请求":"未完成")+" · "+s.count+" 项").join("；");
       const reply:DiscoveryResponse=await modelReply(decision?.dataQuestion||query,scopedContext,result,history,executor,signal,
         stage,retrieved!.papers,paperTrace,
         !context.filters.source || context.filters.source==="constellation"?constellationFeed:undefined,retrieved,report,undefined,currentAssertionReadings,{record:prior,searches:archived.searches});

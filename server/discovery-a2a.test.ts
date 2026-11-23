@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {execFileSync} from "node:child_process";
 import {randomUUID} from "node:crypto";
 import {once} from "node:events";
-import {mkdtempSync, rmSync, writeFileSync} from "node:fs";
+import {mkdtempSync, readFileSync, rmSync, writeFileSync} from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import {setTimeout as delay} from "node:timers/promises";
@@ -13,8 +13,11 @@ import {allowedDiscoveryTools,discoveryConfiguration} from "./discovery-config";
 import {discoveryInput,discoveryLegacyStore} from "./discovery-input";
 import {postgresTaskStore} from "./postgres-task-store";
 import {productDatabase} from "./product-database";
-import {taskRoutes,workTasks} from "./task-store";
-import {requiredDataSearch} from "./data-search";
+import {openTaskStore,taskRoutes,workTasks} from "./task-store";
+import {executeTurn,type RuntimeServices} from "./runtime-turn";
+import {emptyFilters} from "../src/domain/spatial";
+import type {DiscoveryResponse} from "../src/domain/types";
+import {continuationSourcePolicy,requiredDataSearch} from "./data-search";
 import type {DiscoveryInput} from "./discovery-contract";
 import {hainaCatalogQueryKind,hainaCatalogResultKind,paperQueryKind,paperResultKind,sourceReadKind,type SourceReadResult} from "./discovery-materials-contract";
 import {runSourceRead,type SourceReadJob} from "./discovery-material-operations";
@@ -79,6 +82,11 @@ test("isolated PostgreSQL and loopback exercise the A2A provider and legacy comp
   let origin = "";
   const seen: DiscoveryInput[] = [];
   let channelCalls = 0;
+  const scopedCalls: string[] = [];
+  const scopedQuestion = "海纳内部有哪些这类数据？";
+  const conditionalQuestion = "优先海纳查找 ERA5 数据，找不到再看论文。";
+  const priorUrl = "https://example.test/prior-paper";
+  let scopedHaina: "match"|"empty"|"unavailable" = "match";
   let initialReleased = false;
   const paper: PaperRecord = {
     id:"earthnano:"+"a".repeat(64),dsKey:"fixture:paper",papers:1,paperTitle:"Archived paper",studyContext:"",points:[],
@@ -165,8 +173,9 @@ test("isolated PostgreSQL and loopback exercise the A2A provider and legacy comp
       seen.push(body);
       if (body.query === "确认前不可检索" && !body.decision) return {result:{...result,
         questionCheck:{originalQuestion:body.query,proposedQuestion:"经确认的研究问题"},sourceStatus:[]}};
-      if (body.query === "需澄清" || body.query === "固定海纳检索") {
-        const hainaOpen = body.query === "固定海纳检索";
+      const scoped = body.query === scopedQuestion || body.query === conditionalQuestion;
+      if (body.query === "需澄清" || body.query === "固定海纳检索" || scoped) {
+        const hainaOpen = body.query === "固定海纳检索" || scoped;
         const reply = body.clarificationReply?.text;
         if (!hainaOpen) {
           if (!reply) return {result:{...result,clarification:"请补充目标资料类型。",sourceStatus:[]}};
@@ -178,18 +187,26 @@ test("isolated PostgreSQL and loopback exercise the A2A provider and legacy comp
           paper:{name:"",facets:[{need:"资料覆盖",queries:["coverage data"]}],region:[],scenario:[]},
           web:[{web:"coverage data",dataset:"coverage data"}],
         };
+        const prior=body.continuation?(await store.terminal(body.continuation.previousId))?.result as DataSearchResult|undefined:undefined;
         return {result:await requiredDataSearch(body.query,signal,{
+          lockQuestion:!!body.continuation,
+          lockedSourcePolicy:prior?continuationSourcePolicy(prior,body.query):undefined,
           resumingClarification:!hainaOpen,
           plan:async () => JSON.stringify(reply === "先核对资料" ? {...plan,clarification:"请补充想核对的字段。"}
             : reply === "改查另一个研究对象" ? {questionMode:"reframe",dataQuestion:"比较火星地层的多光谱数据"}
             : reply === "返回错误的 preserve" ? {...plan,dataQuestion:"比较火星地层的多光谱数据"} : plan),
           stage:stage=>emit({stage}),report:call=>emit({call}),finding:finding=>emit({finding}),planned:planned=>emit({planned}),
-          paper:async () => {channelCalls++;return {records:[],incomplete:[],tools:[]};},
+          paper:async () => {channelCalls++;if(scoped)scopedCalls.push("paper");return {records:[],incomplete:[],tools:[]};},
           haina:async (queries) => {
             channelCalls++;
+            if(scoped){
+              scopedCalls.push("haina");
+              if(scopedHaina==="unavailable")throw Error("Haina temporarily unavailable");
+              if(scopedHaina==="empty")return haina.search(["absent-dataset-050ca227"],signal);
+            }
             return hainaOpen ? haina.search(queries,signal) : {assets:[],total:0,synced:"",endpoint:"fixture",warning:""};
           },
-          web:async () => {channelCalls++;return [{engine:"DataCite",query:"coverage data",status:"done",
+          web:async () => {channelCalls++;if(scoped)scopedCalls.push("web");return [{engine:"DataCite",query:"coverage data",status:"done",
             hits:[{title:"已取得的固定资料",url:"https://example.test/clarified",snippet:"覆盖范围"}]}];},
         },body.decision)};
       }
@@ -397,6 +414,101 @@ test("isolated PostgreSQL and loopback exercise the A2A provider and legacy comp
   assert.ok(openResult.plan && Array.isArray(openResult.sourceStatus) && Array.isArray(openResult.papers) &&
     Array.isArray(openResult.searches) && Array.isArray(openResult.issues));
   assert.equal(hainaUpstreamCalls,0);
+
+  // Production runtime planning/review/client -> actual provider router and worker -> PostgreSQL.
+  // The models are fixed and only the Haina adapter reads the published test catalogue.
+  const oldPath=process.env.PATH,oldOrigin=process.env.ONEEARTH_DISCOVERY_URL;
+  const runtime = openTaskStore(":memory:");
+  const runtimeModelLog=path.join(dir,"runtime-model.jsonl");
+  const intent={purpose:scopedQuestion,task:scopedQuestion,region:null,time:null,months:[]};
+  writeFileSync(path.join(dir,"codex"),String.raw`#!/usr/bin/env node
+import fs from 'node:fs';
+let prompt='';for await(const chunk of process.stdin)prompt+=chunk;
+const initial=prompt.startsWith('先决定本轮'),review=prompt.startsWith('你负责决定同一轮');
+const input=JSON.parse(prompt.slice(prompt.lastIndexOf('\n{')+1));
+fs.appendFileSync(${JSON.stringify(runtimeModelLog)},JSON.stringify({initial,review,input})+'\n');
+const stage=initial?${JSON.stringify({action:"search",goal:scopedQuestion,evidenceNeed:"discover",
+  targets:["web:"+priorUrl],reason:"明确的海纳目录问题",clarification:null,researchIntent:intent,
+  conversationContext:"海纳目录检索",evidenceGap:"海纳目录中有哪些对应资料"})}:review?
+  {action:'read',reason:'mistaken attempt to read a prior web citation',gap:'metadata',targets:['W1'],clarification:null}:
+  {message:'海纳目录返回 ERA5 候选 [S1]。',sections:[],limitation:'目录候选需按适用条件核对。',followUp:'',researchNotes:[],calculationRequests:[]};
+process.stdout.write(JSON.stringify(stage));
+`,{mode:0o700});
+  process.env.PATH=dir+path.delimiter+oldPath;
+  process.env.ONEEARTH_DISCOVERY_URL=origin;
+  try{
+    const services:RuntimeServices={tasks:runtime,
+      push:{latest:()=>assert.fail("must not query the constellation catalogue")} as unknown as RuntimeServices["push"],
+      coverage:async()=>assert.fail("no grid attachment"),researchRegionService:{locate:async()=>null},
+      adminBoundaryDir:dir,canonicalCache:new Map()};
+    for(const scenario of ["match","empty","unavailable"] as const){
+      scopedHaina=scenario;
+      const context={filters:emptyFilters(),gridSystem:"h3" as const,layer:"all" as const,caseId:null,citation:null,selection:null,
+        camera:{center:[105,25] as [number,number],zoom:1,reason:"test"}};
+      const body={query:scopedQuestion,conversationId:randomUUID(),turnId:randomUUID(),context,
+        history:[{role:"assistant" as const,text:"Unrelated past source",
+          conversationReferences:[{kind:"web" as const,url:priorUrl,title:"Unrelated past paper"}]}],
+        config:{executor:"codex" as const,model:""}};
+      const id=randomUUID();
+      runtime.submit(id,body);runtime.claim();
+      const before=scopedCalls.length,readBefore=webReads.length;
+      const response=await executeTurn(services,id,body,AbortSignal.timeout(5500),event=>runtime.append(id,event));
+      assert.equal(response.error,undefined,JSON.stringify(response.error));
+      runtime.finish(id,"complete",response);
+      assert.deepEqual(scopedCalls.slice(before),["haina"]);
+      assert.equal(webReads.length,readBefore);
+      const reply=response.result as DiscoveryResponse;
+      const binding=runtime.events(id,0).find(row=>row.discoveryBinding)!.discoveryBinding as {discoveryId:string};
+      const terminal=await task(await request("/tasks/"+binding.discoveryId));
+      const acquired=events(terminal).at(-1)!.result as DataSearchResult;
+      assert.deepEqual(acquired.plan.sourcePolicy,{mode:"restricted",sources:["haina"]});
+      const actualCalls=events(terminal).flatMap(event=>{
+        const call=event.call as {id?:string;status?:string}|undefined;
+        return call?.status==="running"&&call.id?.startsWith("source-")?[call.id]:[];
+      });
+      assert.deepEqual(actualCalls,["source-haina"]);
+      t.diagnostic("Scoped runtime "+scenario+": "+JSON.stringify(acquired.sourceStatus.map(({source,status,count})=>({source,status,count}))));
+      if(scenario==="match"){
+        assert.deepEqual(reply.answerNotes?.references?.map(ref=>ref.kind==="asset"?ref.id:ref.url),["haina:"+hainaRecords[0].id]);
+        assert.ok(!reply.answerNotes?.webSources?.length);
+      }else{
+        assert.match(reply.message,scenario==="empty"?/未返回符合条件/:/无法确认有无匹配/);
+        assert.match(reply.message,/其他来源/);
+        assert.ok(!reply.answerNotes?.references?.length);
+      }
+    }
+    const prompts=readFileSync(runtimeModelLog,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+    assert.equal(prompts.filter(call=>call.initial).length,3);
+    assert.equal(prompts.filter(call=>call.review).length,1);
+    assert.deepEqual(prompts.find(call=>call.review).input.materials.exactReadTargets,[]);
+    const final=prompts.find(call=>!call.initial&&!call.review).input;
+    assert.deepEqual(final.sourceConstraint.sources,["haina"]);
+    assert.deepEqual(final.webResults,[]);
+    assert.ok(final.catalogue.every((row:{id:string})=>row.id.startsWith("haina:")));
+  }finally{
+    if(oldPath===undefined)delete process.env.PATH;else process.env.PATH=oldPath;
+    if(oldOrigin===undefined)delete process.env.ONEEARTH_DISCOVERY_URL;else process.env.ONEEARTH_DISCOVERY_URL=oldOrigin;
+    runtime.close();
+  }
+
+  const conditional={...business,query:conditionalQuestion};
+  scopedHaina="match";
+  const conditionalBefore=scopedCalls.length;
+  const parentScope=await task(await submit(randomUUID(),conditional,false),true);
+  const parentResult=events(parentScope).at(-1)!.result as DataSearchResult;
+  assert.equal(parentResult.plan.sourcePolicy?.mode,"restricted");
+  assert.equal(parentResult.plan.sourcePolicy.fallback,"no_match");
+  assert.deepEqual(parentResult.haina.map(asset=>asset.id),["haina:"+hainaRecords[0].id]);
+  assert.deepEqual(scopedCalls.slice(conditionalBefore),["haina"]);
+  scopedHaina="empty";
+  const childScope=await task(await submit(randomUUID(),{...conditional,
+    continuation:{previousId:parentScope.id,focus:"补查同一记录的目录字段"}},false),true);
+  assert.notEqual(childScope.id,parentScope.id);
+  const childResult=events(childScope).at(-1)!.result as DataSearchResult;
+  assert.deepEqual(childResult.plan.sourcePolicy,{mode:"restricted",sources:["haina"]});
+  assert.deepEqual(scopedCalls.slice(conditionalBefore),["haina","haina"]);
+  assert.equal(childResult.sourceStatus.find(row=>row.source==="文献资料检索")?.status,"not_requested");
+  t.diagnostic("Conditional fallback scope: parent hit -> supplemental zero, Haina only in both");
 
   const messageId = randomUUID();
   const receipts = await Promise.all(Array.from({length:8},() => submit(messageId,business).then(r=>task(r,true))));

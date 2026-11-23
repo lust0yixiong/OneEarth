@@ -1,5 +1,6 @@
 import type {QuestionDecision, SearchRun, ToolCall} from "../src/domain/types";
 import type {DataSearchResult} from "./data-search";
+import {discoverySourceNames} from "../src/domain/discovery-source-policy";
 import type {TurnPlan, TurnTarget} from "./turn-planning";
 import {mergeWebEvidence} from "./merge-web-evidence";
 import {currentAssertionView,type CurrentAssertionReading} from "./runtime-assertion-evidence";
@@ -29,7 +30,17 @@ const instructions=`你负责决定同一轮研究任务的下一步。原问题
 - read：材料中只有摘要、身份或已有正文缺少本轮特定字段时，选一至两个尚未读过的公开网页编号，并写下要核对的具体字段。未取得正文的摘要不能当作已读原文。已有页面已经包含所需字段就不重复读取。
 - discover：关键事实缺失、对象已经明确但已得材料没有可直接读取的合适来源时，给出一个具体证据缺口，由独立发现服务决定渠道和检索策略。不得重复已尝试的缺口。禁止把用户私有样本、未公开指标或内容放进缺口。
 - clarify：仅在现有目标缺少关键对象或用户必须决定研究范围时，请用户补充一项关键信息；仅仅资料或上游不可用时，说明证据界限后用 answer。
+materials.sourcePolicy 的 restricted 是已确定的来源边界。补查只能在这一边界内，材料不足时说明缺口并请用户决定是否扩大。preferred 只影响查找顺序。
 按给出的可用动作选一个。只输出 JSON。只有 read/discover 填 gap（具体证据缺口），只有 read 填 targets（候选编号），只有 clarify 填 clarification（给用户的问题）。`;
+
+/** Do not use a named fallback as a direct-read authorization if discovery did not activate it. */
+export function scopedDiscoverySources(retrieval?:DataSearchResult){
+  const policy=retrieval?.plan.sourcePolicy;
+  if(!retrieval||policy?.mode!=="restricted")return;
+  if(!policy.fallback)return policy.sources;
+  return policy.sources.filter(source=>source==="constellation"?policy.sources[0]===source:
+    retrieval.sourceStatus.some(row=>row.source===discoverySourceNames[source]&&row.status!=="not_requested"));
+}
 
 function materialView({retrieval,reads,assertionReadings}:Materials,targets:TurnTarget[],question:string){
   const runs=[...(retrieval?.searches||[]),...reads];
@@ -44,8 +55,12 @@ function materialView({retrieval,reads,assertionReadings}:Materials,targets:Turn
     }catch{return;}
     candidates.set(url,{key:"web:"+url,kind:"web",basis:"history",url,title,discoveredBy});
   }
-  for(const target of targets)if(target.url&&!target.alreadyRead)webTarget(target.url,target.title,target.discoveredBy);
-  for(const hit of web)webTarget(hit.url,hit.title,hit.discoveredBy);
+  const policy=retrieval?.plan.sourcePolicy;
+  const restricted=scopedDiscoverySources(retrieval);
+  if(!restricted||restricted.includes("web")){
+    for(const target of targets)if(target.url&&!target.alreadyRead)webTarget(target.url,target.title,target.discoveredBy);
+    for(const hit of web)webTarget(hit.url,hit.title,hit.discoveredBy);
+  }
   const indexed=[...candidates.values()].map((source,i)=>({label:"W"+(i+1),source}));
   const allowed=new Map(indexed.map(({label,source})=>[label,source]));
   const references=new Map(indexed.map(({label,source})=>[source.url,label]));
@@ -59,7 +74,7 @@ function materialView({retrieval,reads,assertionReadings}:Materials,targets:Turn
     web:web.map(hit=>({label:references.get(hit.url),url:hit.url,title:hit.title,stage:hit.stage,
       snippet:hit.snippet.slice(0,170),excerpt:hit.pageExcerpt?.slice(0,420)})),
     exactReadTargets:indexed.map(({label,source})=>({label,url:source.url,title:source.title})),
-    channels:retrieval?.sourceStatus,
+    sourcePolicy:policy,channels:retrieval?.sourceStatus,
     exactReads:reads.map(({query,status,engine,hits})=>({query,status,engine,hits:hits.length})),
   };
   return {view,allowed};
@@ -86,7 +101,8 @@ function joinedDiscovery(previous:DataSearchResult,next:DataSearchResult):DataSe
   const statuses=new Map(previous.sourceStatus.map(row=>[row.source,row]));
   for(const channel of next.sourceStatus){
     const old=statuses.get(channel.source);
-    statuses.set(channel.source,old?{...channel,count:old.count+channel.count,
+    if(old&&old.status!=="not_requested"&&channel.status==="not_requested")continue;
+    statuses.set(channel.source,old&&old.status!=="not_requested"?{...channel,count:old.count+channel.count,
       status:old.status===channel.status?channel.status:"partial",
       detail:[...new Set([old.detail,channel.detail].filter(Boolean))].join("；")}:channel);
   }

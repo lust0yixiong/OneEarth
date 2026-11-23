@@ -1,8 +1,8 @@
 import {researchExecutor} from "../../server/research-executor";
 import test from "node:test";
 import assert from "node:assert/strict";
-import {requiredDataSearch,parseDataSearch,fallbackDataSearch,recoverDataSearch,dataSearchSchema,type DataSearchPlan} from "../../server/data-search";
-import {searchHaina} from "../../server/haina-search";
+import {continuationSourcePolicy,requiredDataSearch,parseDataSearch,fallbackDataSearch,recoverDataSearch,dataSearchSchema,type DataSearchPlan} from "../../server/data-search";
+import {searchHaina,type HainaSearchResult} from "../../server/haina-search";
 import {isWorkspaceCommand} from "./research-question";
 import {assets} from "./datasets";
 import {catalogueRows} from "../../server/chat-executor";
@@ -17,7 +17,7 @@ const plan:DataSearchPlan={
   paper:{name:"",facets:[{need:"温度",queries:["land surface temperature"]}],region:[],scenario:["urban heat"]},
   web:[{web:"urban heat island observation datasets",dataset:"land surface temperature"}],
 };
-const emptyHaina={assets:[],total:0,synced:"2026-11-13T00:00:00Z",endpoint:"https://haina.example/datasetList",warning:""};
+const emptyHaina:HainaSearchResult={assets:[],total:0,synced:"2026-11-13T00:00:00Z",endpoint:"https://haina.example/datasetList",warning:""};
 test("general and follow-up questions are not implicit workspace operations",()=>{
   for(const q of ["为什么城市里更热","Retrieve atmospheric variables from satellite radiometer and sounder data products",
     "继续比较这两份数据","这些值是实测还是推算的？","你好","查看这些数据是否足够验证这个结论"])
@@ -188,8 +188,160 @@ test('no credible English means assertion request is explicitly absent while Chi
   const s=fakeDeps('not JSON',{previousResearchIntent:{purpose:'比较河流地貌证据',task:'核对原始资料',region:null,time:null,months:[]}});
   const r=await requiredDataSearch('先说有哪些方法',new AbortController().signal,s.deps);
   assert.deepEqual(s.executed,['haina','web']);const status=r.sourceStatus.find(s=>s.source==='文献资料检索')!;
-  assert.equal(status.status,'failed');assert.match(status.detail,/未请求/);assert.doesNotMatch(JSON.stringify(r.plan.paper),/research data|先说/);
+  assert.equal(status.status,'not_requested');assert.match(status.detail,/未请求/);assert.doesNotMatch(JSON.stringify(r.plan.paper),/research data|先说/);
   assert.match(r.plan.web[0].web,/河流地貌/);
+});
+
+test("named catalogue bounds are enforced before lookup, including zero results and channel failure",async()=>{
+  for(const [question,fails] of [
+    ["海纳内部有哪些这类数据？",false],["只查海纳，有哪些地表温度产品？",true],["能在海纳找到这类数据吗？",false],
+  ] as const){
+    const actual:string[]=[];
+    const fixture=fakeDeps(JSON.stringify(plan),{haina:()=>{actual.push("haina");if(fails)throw Error("fixture offline");return emptyHaina;}});
+    const result=await requiredDataSearch(question,new AbortController().signal,fixture.deps);
+    assert.deepEqual(actual,["haina"]);
+    assert.deepEqual(fixture.executed,[]);
+    assert.deepEqual(result.plan.sourcePolicy,{mode:"restricted",sources:["haina"]});
+    assert.deepEqual(result.plan.paper.facets,[]);assert.deepEqual(result.plan.web,[]);
+    assert.deepEqual(result.sourceStatus.find(row=>row.source==="海纳专区检索"),fails
+      ? {source:"海纳专区检索",status:"failed",count:0,detail:"fixture offline"}
+      : {source:"海纳专区检索",status:"done",count:0,detail:""});
+    assert.ok(result.sourceStatus.filter(row=>row.source!=="海纳专区检索").every(row=>row.status==="not_requested"));
+    assert.ok(!fixture.calls.some(call=>["source-paper","source-web"].includes(call.id)));
+  }
+});
+
+test("preferred sources start first, named source comparisons stay bounded, and a mention alone keeps discovery open",async()=>{
+  for(const [question,expected,mode] of [
+    ["优先查海纳，找适合的地表温度数据",["haina","paper","web"],"preferred"],
+    ["对照海纳和论文，找可用的地表温度资料",["haina","paper"],"restricted"],
+    ["优先海纳，再看论文里的地表温度资料",["haina","paper"],"restricted"],
+    ["先查海纳，再查论文",["haina","paper"],"restricted"],
+    ["我之前见过海纳，帮我找几份可用的地表温度数据",["paper","haina","web"],undefined],
+  ] as const){
+    const fixture=fakeDeps(JSON.stringify(plan));
+    const result=await requiredDataSearch(question,new AbortController().signal,fixture.deps);
+    assert.deepEqual(fixture.executed,expected);
+    assert.equal(result.plan.sourcePolicy?.mode,mode);
+  }
+});
+
+test("restricted plans need no paper or web terms and repair cannot broaden a recovered or persisted limit",async()=>{
+  const policy={mode:"restricted",sources:["haina"]} as const;
+  const question="看看目录中的地表温度";
+  const restricted={...plan,sourcePolicy:policy,paper:{},web:[]};
+  const minimal=fakeDeps(JSON.stringify(restricted));
+  const parsed=await requiredDataSearch(question,new AbortController().signal,minimal.deps);
+  assert.deepEqual(parsed.plan.sourcePolicy,policy);assert.deepEqual(minimal.executed,["haina"]);
+  const recovered=fakeDeps(c=>JSON.stringify(c?plan:{...restricted,hainaQueries:[]}));
+  await requiredDataSearch(question,new AbortController().signal,recovered.deps);
+  assert.deepEqual(recovered.executed,["haina"]);
+  const broken=fakeDeps("{invalid");
+  await requiredDataSearch("只查海纳，这类观测有哪些？",new AbortController().signal,broken.deps);
+  assert.deepEqual(broken.executed,["haina"]);
+  const continuation=fakeDeps(JSON.stringify({...plan,sourcePolicy:{mode:"restricted",sources:["paper","haina"]}}),
+    {lockedSourcePolicy:policy,lockQuestion:true});
+  assert.deepEqual((await requiredDataSearch(question,new AbortController().signal,continuation.deps)).plan.sourcePolicy,policy);
+  assert.deepEqual(continuation.executed,["haina"]);
+});
+
+test("a named fallback waits for confirmed zero hits, including when web is the leading source",async()=>{
+  for(const status of ["hit","zero","failed"] as const){
+    let start!:()=>void,finish!:(value:typeof emptyHaina)=>void,fail!:(reason:Error)=>void;
+    const entered=new Promise<void>(resolve=>{start=resolve;});
+    const pending=new Promise<typeof emptyHaina>((resolve,reject)=>{finish=resolve;fail=reject;});
+    const actual:string[]=[];
+    const fixture=fakeDeps(JSON.stringify(plan),{
+      haina:()=>{actual.push("haina");start();return pending;},
+      paper:async()=>{actual.push("paper");return {records:[],tools:[],incomplete:[]};},
+    });
+    const running=requiredDataSearch("优先海纳，找不到再看论文",new AbortController().signal,fixture.deps);
+    await entered;
+    assert.deepEqual(actual,["haina"]);assert.deepEqual(fixture.executed,[]);
+    if(status==="failed")fail(Error("upstream unavailable"));
+    else finish({...emptyHaina,assets:status==="hit"?searchHaina(["ERA5"]).slice(0,1):[]});
+    const result=await running;
+    assert.deepEqual(actual,status==="zero"?["haina","paper"]:["haina"]);
+    assert.deepEqual(fixture.executed,[]);
+    assert.deepEqual(result.plan.sourcePolicy,{mode:"restricted",sources:["haina","paper"],fallback:"no_match"});
+    assert.equal(result.sourceStatus.find(row=>row.source==="网络检索")?.status,"not_requested");
+    assert.equal(result.sourceStatus.find(row=>row.source==="文献资料检索")?.status,status==="zero"?"done":"not_requested");
+  }
+  const fixture=fakeDeps(JSON.stringify(plan),{
+    web:async()=>[{engine:"Bing",query:"surface temperature",status:"done",hits:[{title:"Record",url:"https://example.org/source",snippet:""}]}],
+    refineWeb:async()=>JSON.stringify({checks:[],discoveryQueries:[]}),
+  });
+  const result=await requiredDataSearch("先查公开网络，找不到再查论文",new AbortController().signal,fixture.deps);
+  assert.deepEqual(fixture.executed,[]);
+  assert.equal(result.sourceStatus.find(row=>row.source==="文献资料检索")?.status,"not_requested");
+});
+
+test("a same-turn supplement inherits only the conditional channels actually opened by its parent",async()=>{
+  const question="优先海纳，找不到再看论文";
+  const parentResults=["hit","zero","failed"] as const;
+  for(const status of parentResults){
+    const parentFixture=fakeDeps(JSON.stringify(plan),{haina:()=>{
+      if(status==="failed")throw Error("fixture outage");
+      return {...emptyHaina,assets:status==="hit"?searchHaina(["ERA5"]).slice(0,1):[]};
+    }});
+    const parent=await requiredDataSearch(question,new AbortController().signal,parentFixture.deps);
+    const lockedSourcePolicy=continuationSourcePolicy(JSON.parse(JSON.stringify(parent)),question);
+    const sources=status==="zero"?["haina","paper"]:["haina"];
+    assert.deepEqual(lockedSourcePolicy,{mode:"restricted",sources});
+    const supplement=fakeDeps(JSON.stringify({...plan,sourcePolicy:null}),{lockedSourcePolicy,lockQuestion:true});
+    const child=await requiredDataSearch(question,new AbortController().signal,supplement.deps);
+    assert.deepEqual(child.plan.sourcePolicy,lockedSourcePolicy);
+    assert.deepEqual(supplement.executed,sources);
+    assert.equal(child.sourceStatus.find(row=>row.source==="海纳专区检索")?.count,0);
+    assert.equal(child.sourceStatus.find(row=>row.source==="网络检索")?.status,"not_requested");
+  }
+});
+
+test("preferred search completes its leading lookup before deciding whether to use other channels",async()=>{
+  for(const [question,status,expected] of [
+    ["优先海纳","hit",["haina"]],
+    ["优先海纳","zero",["haina","paper","web"]],
+    ["优先海纳","failed",["haina","paper","web"]],
+    ["先查海纳，再查论文","hit",["haina","paper"]],
+  ] as const){
+    let start!:()=>void,finish!:(value:HainaSearchResult)=>void,fail!:(reason:Error)=>void;
+    const entered=new Promise<void>(resolve=>{start=resolve;});
+    const pending=new Promise<HainaSearchResult>((resolve,reject)=>{finish=resolve;fail=reject;});
+    const actual:string[]=[];
+    const fixture=fakeDeps(JSON.stringify(plan),{
+      haina:()=>{actual.push("haina");start();return pending;},
+      paper:async()=>{actual.push("paper");return {records:[],tools:[],incomplete:[]};},
+      web:async()=>{actual.push("web");return [];},
+    });
+    const running=requiredDataSearch(question,new AbortController().signal,fixture.deps);
+    await entered;
+    assert.deepEqual(actual,["haina"]);
+    if(status==="failed")fail(Error("fixture outage"));
+    else finish({...emptyHaina,assets:status==="hit"?searchHaina(["ERA5"]).slice(0,1):[]});
+    const result=await running;
+    assert.deepEqual(actual,expected);
+    if(expected.length===1)assert.ok(result.sourceStatus.filter(row=>row.source!=="海纳专区检索")
+      .every(row=>row.status==="not_requested" && row.detail.includes("优先来源已返回候选")));
+  }
+});
+
+test("natural follow-ups retain an earlier limit even when the planner outputs null, until released or formally changed",async()=>{
+  const old={mode:"restricted",sources:["haina"]} as const;
+  const history=[{role:"user",text:"海纳内部有哪些地表温度数据？"},{role:"assistant",text:"已在海纳核对。"}];
+  for(const question of ["还有别的时段吗？","换个话题，找能做水温对照的数据","这次不限来源，再找一些同类数据"]){
+    const fixture=fakeDeps(JSON.stringify({...plan,sourcePolicy:null}),{history});
+    const result=await requiredDataSearch(question,new AbortController().signal,fixture.deps);
+    assert.deepEqual(result.plan.sourcePolicy,question.startsWith("还有")?old:undefined);
+    assert.deepEqual(fixture.executed,question.startsWith("还有")?["haina"]:["paper","haina","web"]);
+  }
+  const original="只查海纳，有哪些地表温度资料？";
+  for(const choice of ["proposed","edited"] as const){
+    const approved="这轮改为只查论文里的地表温度资料";
+    const fixture=fakeDeps(JSON.stringify(plan),{history,lockedSourcePolicy:old});
+    const result=await requiredDataSearch(original,new AbortController().signal,fixture.deps,
+      {checkMessageId:"check",originalQuestion:original,choice,dataQuestion:approved});
+    assert.equal(result.plan.questionMode,"confirmed");assert.deepEqual(fixture.executed,["paper"]);
+  }
 });
 test('fallback public queries do not include private sample measurements',()=>{
   const r=fallbackDataSearch('我的私有样本数值是 123.456, 987.654，请说明误差核对原则',{previousResearchIntent:{purpose:'核对传感器标定误差',task:'解释方法',region:null,time:null,months:[]}});

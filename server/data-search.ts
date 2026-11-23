@@ -13,8 +13,11 @@ import type {HainaCatalogStatus,HainaSearchResult} from "./haina-search";
 import {validWindow,windowFilters,type UtcWindow} from "../src/domain/time-window";
 import {sourceIdentityInstructions} from "./source-identity";
 import {complementInput,complementPlan,type WebComplementInput,type WebComplementPlan} from "./web-complement";
+import {allowsDiscoverySource,discoverySourceNames,discoverySources,explicitDiscoverySourcePolicy,parseDiscoverySourcePolicy,releasesDiscoverySourcePolicy,
+  type DiscoverySourcePolicy} from "../src/domain/discovery-source-policy";
 
 export interface DataSearchPlan {
+  sourcePolicy?:DiscoverySourcePolicy;
   researchIntent?:ResearchIntent;
   skippedSources?:{paper?:string;web?:string;haina?:string};
   clarification?:string;
@@ -40,18 +43,35 @@ export interface DataSearchResult {
   searches:SearchRun[];
   webChecks?:WebComplementPlan;
   issues:string[];
-  sourceStatus:{source:string;status:"done"|"partial"|"failed";count:number;detail:string}[];
+  sourceStatus:{source:string;status:"done"|"partial"|"failed"|"not_requested";count:number;detail:string}[];
 }
+
+/** A smaller evidence gap cannot reopen a fallback withheld for the original goal. */
+export function continuationSourcePolicy(parent:DataSearchResult, originalQuestion:string):DiscoverySourcePolicy|null {
+  const policy=parseDiscoverySourcePolicy(parent.plan.sourcePolicy)??explicitDiscoverySourcePolicy(originalQuestion);
+  if(policy?.mode!=="restricted" || policy.fallback!=="no_match")return policy??null;
+  const started=policy.sources.filter(channel=>channel!=="constellation" && parent.sourceStatus.some(receipt=>
+    receipt.source===discoverySourceNames[channel] && ["done","partial","failed"].includes(receipt.status)));
+  // If no receipt proves a lookup started, the original first source is still allowed to be tried.
+  return {mode:"restricted",sources:started.length?started:policy.sources.slice(0,1)};
+}
+
 const shortEnglishSchema={type:'string',pattern:'^[A-Za-z][A-Za-z0-9_.-]*(?: [A-Za-z0-9][A-Za-z0-9_.-]*){0,2}$',maxLength:120};
 /** Structured planning output constrains shape; runtime checks still own intent/approval and valid calendar intervals. */
 export const dataSearchSchema={type:'object',additionalProperties:false,
-  required:['questionMode','dataQuestion','dataNeed','researchIntent','conversationContext','conversationPeriod','conversationWindow','clarification','hainaQueries','paper','web'],
+  required:['questionMode','dataQuestion','dataNeed','researchIntent','conversationContext','conversationPeriod','conversationWindow','clarification','sourcePolicy','hainaQueries','paper','web'],
   properties:{
     questionMode:{type:'string',enum:['preserve','reframe']},dataQuestion:{type:'string',minLength:1,maxLength:4000},dataNeed:{type:['string','null'],maxLength:4000},
     researchIntent:researchIntentSchema,
     conversationContext:{type:'string',maxLength:1600},conversationPeriod:{type:['array','null'],items:{type:'integer',minimum:1000,maximum:2300},minItems:2,maxItems:2},
     conversationWindow:{type:['array','null'],items:{type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}(?:T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z)?$'},minItems:2,maxItems:2},
     clarification:{type:['string','null'],minLength:1,maxLength:500},hainaQueries:{type:'array',items:{type:'string',minLength:1,maxLength:160},maxItems:4},
+    sourcePolicy:{anyOf:[{type:"null"},{type:"object",additionalProperties:false,required:["mode","sources"],properties:{
+      mode:{type:"string",enum:["restricted","preferred"]},sources:{type:"array",minItems:1,maxItems:4,items:{type:"string",enum:discoverySources}},
+    }},{type:"object",additionalProperties:false,required:["mode","sources","fallback"],properties:{
+      mode:{type:"string",enum:["restricted"]},sources:{type:"array",minItems:2,maxItems:4,items:{type:"string",enum:discoverySources}},
+      fallback:{type:"string",enum:["no_match"]},
+    }}]},
     paper:{type:'object',additionalProperties:false,required:['name','facets','region','scenario'],properties:{name:{type:'string',maxLength:240},facets:{type:'array',maxItems:6,items:{type:'object',additionalProperties:false,required:['need','queries'],properties:{need:{type:'string',minLength:1,maxLength:100},queries:{type:'array',minItems:1,maxItems:3,items:shortEnglishSchema}}}},region:{type:'array',maxItems:6,items:{type:'string',maxLength:120}},scenario:{type:'array',maxItems:3,items:shortEnglishSchema}}},
     web:{type:'array',maxItems:3,items:{type:'object',additionalProperties:false,required:['web','dataset'],properties:{web:{type:'string',pattern:'^\\S+(?: \\S+){0,11}$',maxLength:120},dataset:{type:'string',pattern:'^\\S+(?: \\S+){0,7}$',maxLength:80}}}},
   }};
@@ -67,7 +87,7 @@ clarification 只是澄清原意，不是改写问题的确认。需要把原问
 用户的短回复如“大兴安岭，2020—2023年”“先了解机制”“配合分析”是对你上次问题的回答，需结合原研究目的继续，不把短回复单独当作新研究任务。保留已明确条件，用户本轮只改年份或深度时仅覆盖对应条件；明确换话题时清除不相关条件。用户说不知道、暂不限、先给概览时，可以按已知条件给有限答复，不反复催问。助手此前提议的产品、地区、方法不自动变成用户已经选择的条件。
 researchIntent 每轮都返回 {purpose,task,region,time,months}，即使只问了一句或需要澄清。purpose 概括用户研究什么、想理解或判断什么；task 是本轮实际要做的事。region、time 是用户已经明确或指代可从前文确定的研究区与时段，未知为 null；不能取镜头位置、产品覆盖范围或助手建议。months 为用户限定的月份数组，未限定为 []。普通追问保留已明确目的与范围，仅更新用户修改的条件；明确换课题时重置无关信息。与 history 中的 researchIntent 和原话共同核对，不能以摘要取代原话。按地域语境理解季节，夏季在北半球可为 [6,7,8]，不确定时澄清。跨年季节如2020—2023年各年夏季，time 写清“2020—2023年各年6—8月”，conversationPeriod 保留四年，conversationWindow=null，不能伪造一个连续区间为季节观测。季节等限定必须进入相关检索参数并传给回答；宽泛的产品检索命中仍需核对这些条件。
 conversationContext 用最多1600字记录当前讨论的研究目的、用户已明确的对象与条件、用户已确认的产品及仍未知的关键点。只归纳用户表达和确认，不把助手建议、检索命中或推断写成用户要求；新话题以新目的替换旧摘要。即使本轮需要追问，也返回更新后的摘要，供下一轮使用。
-用户明确限定单一来源时，在摘要中保留固定短语“仅用论文研究数据”“仅用海纳专区”或“仅用星座直推”；普通追问继续保留。用户扩大来源范围、取消限定或换话题时删除这项限定，不能把曾经的限定当成永久偏好。服务端会据此限制正文引用与球上结果；检索运行记录仍如实保留。
+用 sourcePolicy 表示本轮允许的来源范围。只问某一目录内部有哪些数据（如“海纳内部有哪些这类数据”）是 restricted，即使未说“只”。明确要求仅对照两个来源，restricted 列出两者。指定优先考虑某渠道且允许其他渠道，才用 preferred。若用户要求只在前一指定渠道确认零命中后再看下一指定渠道，用 restricted、按顺序列出来源并设置 fallback="no_match"；上游失败不算查无结果。提到来源作背景或开放寻找数据时为 null。来源编码为 paper（文献资料）、haina（海纳专区）、web（公开网络）、constellation（星座直推）。当前明确条件优先；同一目标的普通追问保留此前范围，用户明确扩大范围、取消限定或换题时才重新判断。任何明确限制在没有结果或上游故障时仍有效。
 conversationPeriod 单独返回当前讨论中用户明确的研究年份区间 [起始年,结束年]，仅一年则两端相同；用户只改时段时更新，其他追问沿用已经明确的时段。未指定年份或新话题不再限定年份时返回 null。不要采用检索结果的覆盖年份、论文发表年、产品版本年或助手提出但未经用户确认的年份。这个区间将同步到球的时间筛选，不能从未知的“近些年”猜测年份。
 用户明确到月份或日期时，另用 conversationWindow 返回 UTC 左闭右开区间的两个 ISO 日期字符串，例如2020年7月为 ["2020-07-01","2020-08-01"]，同时 conversationPeriod 为 [2020,2020]。用户只确定年份、不再限定月份日期或换话题时，conversationWindow 返回 null；不要把年份筛选伪装成更精确的观测时间。已有用户明确的月份日期在普通追问中沿用，不能丢失。
 默认 questionMode="preserve"，dataQuestion 原样保留 question。已经是数据问题，或能直接从数据角度回答的科学问题，都不需要改写；没有出现“数据”二字也可能是数据问题。追问沿用已明确对象，只处理本轮新增疑问，指代可在检索参数中结合上下文解析。
@@ -75,8 +95,8 @@ conversationPeriod 单独返回当前讨论中用户明确的研究年份区间 
 任何 reframe 都必须先向用户求证，本次仅提出待确认的问题，不代表用户同意。如果输入含 confirmedQuestion，则用户已经明确选择了该问题：以它为固定目标，questionMode 必须为 preserve，不能再次转换。originalQuestion 仅供核对来源，不得覆盖用户本次选择。
 dataQuestion 只写待回答的问题本身，不加入“待确认”“这样理解是否符合原意”等求证话术；求证交互由界面呈现，以免确认后把求证话术误当成研究问题。
 dataNeed 与 dataQuestion 分开：仅用户明确要求找数、选数、获取数据或明确提出数据条件时，用字符串复述已给条件（不增加假设）；其他情况为 null。候选变量与检索主题是探索线索，不代表用户已确认的数据需求。
-仅在入口动作规划已决定需要发现数据或补充外部证据后进入本流程；解释已有材料、读取指定来源或界面操作不由本流程处理。进入本流程后固定检索文献资料、海纳、网络，你只生成各路查询参数，不能选择或跳过必要来源。不要生成结论或声称取得了文件。
-仅输出 JSON {questionMode,dataQuestion,dataNeed,researchIntent,conversationContext,conversationPeriod,conversationWindow,clarification,hainaQueries,paper,web}。不需追问时 clarification=null。需要先澄清时可仅返回 {questionMode:"preserve",dataQuestion:原问题,dataNeed:null,conversationContext,conversationPeriod,conversationWindow,clarification:自然追问}，此时不必填写检索参数。
+仅在入口动作规划已决定需要发现数据或补充外部证据后进入本流程；解释已有材料、读取指定来源或界面操作不由本流程处理。按本轮来源范围生成检索词；开放查找仍为文献资料、海纳和网络生成词。未获许可的渠道保留空参数（hainaQueries=[]、paper={name:"",facets:[],region:[],scenario:[]}、web=[]）。不要生成结论或声称取得了文件。
+仅输出 JSON {questionMode,dataQuestion,dataNeed,researchIntent,conversationContext,conversationPeriod,conversationWindow,clarification,sourcePolicy,hainaQueries,paper,web}。不需追问时 clarification=null；需要澄清时可留空检索参数，同时保留已明确的 sourcePolicy。
 例如：“IMERG Late 和 Final 有什么区别？”原样保留，dataNeed=null；“这些值是实测还是推算的？”原样保留，检索已谈及对象的来源依据，dataNeed=null；“研究西北太平洋2020—2023年的海表温度、叶绿素和海色变化，可以找到哪些卫星与其他资料？说明变量、版本和入口。”原样保留，可以整理其明确的数据需求。
 hainaQueries 给出一到四个与本轮疑问相符的中文或英文检索短语，不必堆成产品清单。
 paper 为 {name,facets,region,scenario}。明确指定数据集名/DOI 时在 name 写英文名称，否则留空。facets 按实际检索主题给出零到六项，每项为 {need:中文检索主题,queries:一到三个英文短语}；每条 queries 必须为 1—3 个英文词，例如 ["canopy height","tree height"]，不能含中文，不能把问题译成一条长句。name 为空时至少一个主题。need 是文献资料接口的字段名，不代表用户已确认的数据需求，不强行拆成多项。region 是英文地名字符串数组，保留常见名称变体；scenario 也是数组，至多三条，每条 1—3 个英文词。时空条件保留在原问题和 dataNeed 中，检索先找对象与变量，再核对实际覆盖，不把所有条件堆进每条短语。
@@ -104,6 +124,15 @@ export function fallbackDataSearch(query:string,context:PlanningContext={}):Data
   };
 }
 function rawPlan(raw:string){try{if(raw.length>40000)return;const v=JSON.parse(raw.trim().replace(/^```(?:json)?\s*|\s*```$/gi,''));return v&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:undefined;}catch{return;}}
+const emptyPaper = ():PaperPlan => ({name:"",facets:[],region:[],scenario:[]});
+
+function scopedPlan(plan:DataSearchPlan, policy:DiscoverySourcePolicy|undefined):DataSearchPlan {
+  return {...plan,...(policy ? {sourcePolicy:policy} : {}),
+    ...(allowsDiscoverySource(policy,"paper") ? {} : {paper:emptyPaper()}),
+    ...(allowsDiscoverySource(policy,"haina") ? {} : {hainaQueries:[]}),
+    ...(allowsDiscoverySource(policy,"web") ? {} : {web:[]})};
+}
+
 /** Recover only JSON data. Never evaluate malformed output or auto-execute a surviving conversion proposal. */
 export function recoverDataSearch(raws:string[],query:string,context:PlanningContext={},confirmed=false):DataSearchPlan{
   let plan=fallbackDataSearch(query,context);
@@ -148,11 +177,15 @@ export function recoverDataSearch(raws:string[],query:string,context:PlanningCon
   plan.conversationContext=[plan.conversationContext?'历史摘要（可能过时，当前以本轮原话为准）：'+plan.conversationContext.replace(/\n?本轮用户原话（优先于旧摘要）：[^\n]*/g,'').replace(/^历史摘要（可能过时，当前以本轮原话为准）：/,'').slice(0,800):'','本轮用户原话（优先于旧摘要）：'+query.slice(0,450)].filter(Boolean).join('\n').slice(0,1600);
   return plan;
 }
-export function parseDataSearch(raw:string,query:string):DataSearchPlan {
+export function parseDataSearch(raw:string,query:string,forcedPolicy?:DiscoverySourcePolicy|null):DataSearchPlan {
   const value=JSON.parse(raw.trim().replace(/^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$/gi,""));
   if(!value || !["preserve","reframe"].includes(value.questionMode))throw Error("未明确问题理解方式");
   if(typeof value.dataQuestion!=="string" || !value.dataQuestion.trim() || value.dataQuestion.length>4000)
     throw Error("未生成有效数据问题");
+  const requestedPolicy=parseDiscoverySourcePolicy(value.sourcePolicy);
+  if(value.sourcePolicy!==undefined && value.sourcePolicy!==null && !requestedPolicy)
+    throw Error("发现来源范围格式无效");
+  const policy=forcedPolicy===undefined ? explicitDiscoverySourcePolicy(query) ?? requestedPolicy : forcedPolicy??undefined;
   const dataNeed=needText(value.dataNeed);
   if(value.researchIntent!==undefined && !validResearchIntent(value.researchIntent))throw Error("研究意图格式无效");
   const researchIntent=value.researchIntent as ResearchIntent|undefined;
@@ -185,20 +218,25 @@ export function parseDataSearch(raw:string,query:string):DataSearchPlan {
   }
   // A proposed conversion needs no executable retrieval plan. Missing query
   // parameters must never turn a known reframe into an automatic search.
-  if(value.questionMode==="reframe")return {...fallbackDataSearch(query),questionMode:"reframe",
-    dataQuestion:value.dataQuestion.trim(),dataNeed,researchIntent,conversationContext,conversationPeriod,conversationWindow};
-  if(clarification && value.questionMode==="preserve")return {
+  if(value.questionMode==="reframe")return scopedPlan({...fallbackDataSearch(query),questionMode:"reframe",
+    dataQuestion:value.dataQuestion.trim(),dataNeed,researchIntent,conversationContext,conversationPeriod,conversationWindow},policy);
+  if(clarification && value.questionMode==="preserve")return scopedPlan({
     ...fallbackDataSearch(query),questionMode:"preserve",clarification:clarification.trim(),researchIntent,conversationContext,conversationPeriod,conversationWindow,
-  };
+  },policy);
   const hainaQueries:unknown=value.hainaQueries;
-  if(!Array.isArray(hainaQueries))throw Error("缺少海纳检索词");
-  const terms=[...new Set(hainaQueries.filter((q):q is string=>typeof q==="string").map(q=>q.trim()).filter(Boolean))].slice(0,4);
-  if(!terms.length || terms.some(q=>q.length>160))throw Error("海纳检索词无效");
-  return {questionMode:value.questionMode,dataQuestion:value.questionMode==="preserve"?query.trim():value.dataQuestion.trim(),researchIntent,conversationContext,conversationPeriod,conversationWindow,
+  const useHaina=allowsDiscoverySource(policy,"haina");
+  if(useHaina && !Array.isArray(hainaQueries))throw Error("缺少海纳检索词");
+  const terms=useHaina && Array.isArray(hainaQueries)
+    ? [...new Set(hainaQueries.filter((q):q is string=>typeof q==="string").map(q=>q.trim()).filter(Boolean))].slice(0,4) : [];
+  if(useHaina && (!terms.length || terms.some(q=>q.length>160)))throw Error("海纳检索词无效");
+  return scopedPlan({questionMode:value.questionMode,dataQuestion:query.trim(),researchIntent,conversationContext,conversationPeriod,conversationWindow,
     dataNeed,hainaQueries:terms,
-    paper:readPaperPlan(JSON.stringify(value.paper)),web:parseSearchPlan(JSON.stringify(value.web))};
+    paper:allowsDiscoverySource(policy,"paper")?readPaperPlan(JSON.stringify(value.paper)):emptyPaper(),
+    web:allowsDiscoverySource(policy,"web")?parseSearchPlan(JSON.stringify(value.web)):[]},policy);
 }
 type Dependencies={
+  /** undefined is a new delegation. null explicitly preserves a prior open delegation. */
+  lockedSourcePolicy?:DiscoverySourcePolicy|null;
   initialPlan?:string;
   lockQuestion?:boolean;
   resumingClarification?:boolean;
@@ -219,6 +257,17 @@ type Dependencies={
 export async function requiredDataSearch(query:string,signal:AbortSignal,deps:Dependencies,decision?:QuestionDecision):Promise<DataSearchResult> {
   if(decision && !validQuestionDecision(decision,query))throw Error("问题确认与原请求不一致，请重新确认。");
   const target=decision?.dataQuestion || query;
+  const releases=(text:string)=>changesTopic(text)||releasesDiscoverySourcePolicy(text);
+  const confirmedChange=!!decision&&decision.choice!=="original"&&!deps.lockQuestion&&!deps.resumingClarification;
+  const current=confirmedChange ? target : query;
+  const explicitPolicy=explicitDiscoverySourcePolicy(current);
+  const historical=(deps.history||[]).filter(turn=>turn.role==="user").map(turn=>turn.text||turn.message||"").reverse()
+    .find(text=>explicitDiscoverySourcePolicy(text)||releases(text));
+  const inheritedPolicy=!releases(current) && historical && !releases(historical)
+    ? explicitDiscoverySourcePolicy(historical) : undefined;
+  let fixedPolicy=confirmedChange && (explicitPolicy || releases(current)) ? explicitPolicy
+    : deps.lockedSourcePolicy===undefined ? explicitPolicy || inheritedPolicy : deps.lockedSourcePolicy;
+  let invalidSourcePolicy=false;
   let plan=fallbackDataSearch(target,deps);
   const rawAttempts:string[]=[];
   const issues:string[]=[],sourceStatus:DataSearchResult["sourceStatus"]=[];
@@ -231,7 +280,13 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
     let raw:string|undefined;
     try{
       raw=!correction&&deps.initialPlan!==undefined?deps.initialPlan:await deps.plan(correction);rawAttempts.push(raw);
-      const parsed=parseDataSearch(raw,target);
+      const rawPolicy=rawPlan(raw)?.sourcePolicy;
+      const candidate=parseDiscoverySourcePolicy(rawPolicy);
+      if(rawPolicy!==undefined && rawPolicy!==null && !candidate)invalidSourcePolicy=true;
+      if(fixedPolicy===undefined && candidate?.mode==="restricted") fixedPolicy=candidate;
+      if(invalidSourcePolicy && fixedPolicy===undefined && candidate?.mode!=="restricted")
+        throw Error("请明确修复已有来源范围，不能因格式错误扩大检索。");
+      const parsed=parseDataSearch(raw,target,fixedPolicy);
       if(deps.resumingClarification && parsed.questionMode==='preserve' && String(rawPlan(raw)?.dataQuestion).trim() !== target.trim())
         throw Error('澄清后的 preserve 必须保留原有效问题。');
       if(((decision&&!deps.resumingClarification)||deps.lockQuestion)&&parsed.questionMode==='reframe')throw Error('用户已选择问题，请沿固定问题生成检索参数，不再转换。');
@@ -245,12 +300,14 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
     catch(error){signal.throwIfAborted();deps.stage('正在核对检索参数');
       plan=await planningAttempt('data-question-repair',{issue:error instanceof Error?error.message:'参数格式无效',previous:(rawAttempts.at(-1)||'').slice(0,12000)});
     }
-    const named=explicitDatasetName(target,plan.paper.name);
-    if(named!==plan.paper.name)plan={...plan,paper:{...plan.paper,name:named,requestedName:plan.paper.name}};
-    const prior=complementInput(target,plan.conversationContext,[],plan.paper.name,[],[],[],deps.references);
-    const resolved=prior.entities.filter(e=>e.pinned&&e.kind==="dataset"&&e.doi);
-    if(resolved.length===1&&plan.paper.name&&!/10\.\d{4,9}\//.test(plan.paper.name))
-      plan={...plan,paper:{...plan.paper,name:resolved[0].doi!,requestedName:plan.paper.name}};
+    if(allowsDiscoverySource(plan.sourcePolicy,"paper")){
+      const named=explicitDatasetName(target,plan.paper.name);
+      if(named!==plan.paper.name)plan={...plan,paper:{...plan.paper,name:named,requestedName:plan.paper.name}};
+      const prior=complementInput(target,plan.conversationContext,[],plan.paper.name,[],[],[],deps.references);
+      const resolved=prior.entities.filter(e=>e.pinned&&e.kind==="dataset"&&e.doi);
+      if(resolved.length===1&&plan.paper.name&&!/10\.\d{4,9}\//.test(plan.paper.name))
+        plan={...plan,paper:{...plan.paper,name:resolved[0].doi!,requestedName:plan.paper.name}};
+    }
     if(decision && !deps.resumingClarification && plan.questionMode==="reframe" && plan.dataQuestion!==target)
       throw Error("不能再次转换已确认的问题，将按用户选择检索。");
     if(decision && !(deps.resumingClarification && plan.questionMode==="reframe"))
@@ -260,6 +317,10 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
     signal.throwIfAborted();
     if(deps.lockQuestion)throw Error("补充发现未能形成具体且符合原问题的检索参数。");
     plan=recoverDataSearch(rawAttempts,target,deps,!!decision&&!deps.resumingClarification);
+    const policy=fixedPolicy??undefined;
+    plan=scopedPlan(plan,policy);
+    if(invalidSourcePolicy && fixedPolicy===undefined && !policy && plan.questionMode!=="reframe")
+      plan={...plan,clarification:"本轮允许查询哪些来源？"};
     if(deps.resumingClarification && plan.questionMode!=="reframe")
       throw Error("未能核对澄清是否仍符合原目标，未发起检索。");
     issues.push(decision?"问题规划未完成，已保留用户确认的问题；各来源是否发出请求以执行记录为准。":"问题理解未完成，已保留研究任务与本轮原话；各来源按可恢复参数分别处理。");
@@ -296,13 +357,19 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
       issues.push(source+"："+detail);
       sourceStatus.push({source,status:"failed",count:0,detail});
       deps.report({...call,status:"failed",error:detail});
-      deps.stage(source+" · 检索失败，其余来源继续查询");
+      deps.stage(source+" · 检索失败");
       return undefined;
     }
   }
-  function notRequested(source:string,id:string,detail:string){
-    sourceStatus.push({source,status:'failed',count:0,detail});issues.push(source+'：'+detail);
-    deps.report({id,kind:'tool',name:source,input:'未发出来源请求',status:'failed',error:detail});
+  const blockedSources=new Map<keyof typeof discoverySourceNames,string>();
+  function runSource<T>(source:keyof typeof discoverySourceNames, work:()=>Promise<T>):Promise<T|undefined> {
+    const allowed=allowsDiscoverySource(plan.sourcePolicy,source);
+    const blocked=blockedSources.get(source);
+    const detail=!allowed ? "未请求：超出本轮限定的来源。"
+      : blocked ?? plan.skippedSources?.[source];
+    if (!detail) return work();
+    sourceStatus.push({source:discoverySourceNames[source],status:"not_requested",count:0,detail});
+    if(allowed&&!blocked)issues.push(discoverySourceNames[source]+"："+detail);
     return Promise.resolve(undefined);
   }
   function paperFinding(records:PaperRecord[], partial:boolean) {
@@ -328,17 +395,19 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
         : "本轮网络检索未取得可用线索。",
       items:hits.slice(0,2).map(h=>({title:h.title,url:h.url,detail:(h.pageExcerpt?"已取得页面摘录":"检索结果摘要")+" · "+h.url}))});
   }
-  const paperTask=plan.skippedSources?.paper?notRequested('文献资料检索','source-paper',plan.skippedSources.paper):search("文献资料检索","source-paper",plan.paper,async()=>{const result=await deps.paper(plan.paper);paperFinding(result.records,!!result.incomplete.length);return result;},r=>r.records.length,
-    r=>r.incomplete.length?"未完成调用："+r.incomplete.join("、"):"",r=>({notices:r.notices,truncated:r.truncated}));
-  const hainaTask=plan.skippedSources?.haina?notRequested('海纳专区检索','source-haina',plan.skippedSources.haina):search("海纳专区检索","source-haina",plan.hainaQueries,async()=>{const result=await deps.haina(plan.hainaQueries);hainaFinding(result);return result;},r=>r.assets.length,r=>r.warning,
-    r=>({endpoint:r.endpoint,areaId:"2",catalogTotal:r.total,synced:r.synced,method:"专区目录接口分页同步后检索"}));
+  const lookupPaper=()=>runSource("paper",()=>search(discoverySourceNames.paper,"source-paper",plan.paper,async()=>{
+    const result=await deps.paper(plan.paper);paperFinding(result.records,!!result.incomplete.length);return result;
+  },r=>r.records.length,r=>r.incomplete.length?"未完成调用："+r.incomplete.join("、"):"",r=>({notices:r.notices,truncated:r.truncated})));
+  const lookupHaina=()=>runSource("haina",()=>search(discoverySourceNames.haina,"source-haina",plan.hainaQueries,async()=>{
+    const result=await deps.haina(plan.hainaQueries);hainaFinding(result);return result;
+  },r=>r.assets.length,r=>r.warning,r=>({endpoint:r.endpoint,areaId:"2",catalogTotal:r.total,synced:r.synced,method:"专区目录接口分页同步后检索"})));
   let webChecks:WebComplementPlan|undefined;
-  const webTask=plan.skippedSources?.web?notRequested('网络检索','source-web',plan.skippedSources.web):search("网络检索","source-web",plan.web,async()=>{
-    // All initial lookups start together. Spend the page-read budget after the
-    // assertion methods and dataset identities can guide it, without repeating searches.
+  const lookupWeb=()=>runSource("web",()=>search(discoverySourceNames.web,"source-web",plan.web,async()=>{
+    // Spend the page-read budget after taking stock of any other searches already in progress.
     if(!deps.refineWeb){const result=await deps.web(plan.web);webFinding(result,false);return result;}
     const initial=await deps.web(plan.web,{readPages:false});
     webFinding(initial,true);
+    // A complement may inspect receipts from branches already started. It cannot open a branch itself.
     const [paper,haina]=await Promise.all([paperTask,hainaTask]);
     signal.throwIfAborted();
     const input=complementInput(target,plan.conversationContext,plan.web,plan.paper.name,paper?.records||[],haina?.assets||[],initial,deps.references);
@@ -364,8 +433,43 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
     webFinding(result,false);
     return result;
   },r=>new Set(r.flatMap(s=>s.hits.map(h=>h.url))).size,
-    r=>[...new Set(r.filter(s=>s.status==="failed").map(s=>s.engine+" "+(s.error||"请求失败")))].join("；"));
-  const [paper,haina,web]=await Promise.all([paperTask,hainaTask,webTask]);
+    r=>[...new Set(r.filter(s=>s.status==="failed").map(s=>s.engine+" "+(s.error||"请求失败")))].join("；")));
+  let paperTask:ReturnType<typeof lookupPaper>|undefined,hainaTask:ReturnType<typeof lookupHaina>|undefined,webTask:ReturnType<typeof lookupWeb>|undefined;
+  const tasks={
+    paper:()=>paperTask??=lookupPaper(),
+    haina:()=>hainaTask??=lookupHaina(),
+    web:()=>webTask??=lookupWeb(),
+  };
+  const policy=plan.sourcePolicy;
+  const receiptFor=(source:keyof typeof discoverySourceNames)=>sourceStatus.find(row=>row.source===discoverySourceNames[source]);
+  if(policy?.mode==="restricted"&&policy.fallback==="no_match"){
+    let confirmedZero=true;
+    for(const source of policy.sources){
+      if(source==="constellation"){
+        // This source is outside discovery's execution ownership.
+        confirmedZero=false;
+        continue;
+      }
+      if(!confirmedZero)blockedSources.set(source,"未请求：先行来源未确认零命中。");
+      await tasks[source]();
+      const receipt=receiptFor(source);
+      confirmedZero=receipt?.status==="done"&&receipt.count===0;
+    }
+  }else if(policy?.mode==="restricted"){
+    for(const source of policy.sources)if(source!=="constellation")await tasks[source]();
+  }else if(policy?.mode==="preferred"){
+    for(const source of policy.sources){
+      if(source==="constellation")continue;
+      await tasks[source]();
+      if((receiptFor(source)?.count??0)>0){
+        for(const remaining of Object.keys(discoverySourceNames) as (keyof typeof discoverySourceNames)[]){
+          if(!receiptFor(remaining))blockedSources.set(remaining,"未请求：优先来源已返回候选。");
+        }
+        break;
+      }
+    }
+  }
+  const [paper,haina,web]=await Promise.all([tasks.paper(),tasks.haina(),tasks.web()]);
   signal.throwIfAborted();
   return {plan,papers:paper?.records||[],paperNotices:paper?.notices,haina:haina?.assets||[],
     ...(haina?.records && haina.catalog ? {hainaRecords:haina.records,hainaCatalog:haina.catalog} : {}),

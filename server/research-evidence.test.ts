@@ -101,3 +101,30 @@ test("a model cannot invent a read target or convert a pinned source into discov
   });
   assert.equal(trace.at(-1)?.status,"failed");
 });
+
+for(const fallback of [false,true])test("a Haina search cannot read a prior web citation before web is authorized, fallback="+fallback,async()=>{
+  const sourcePolicy:NonNullable<DataSearchResult["plan"]["sourcePolicy"]>=fallback
+    ? {mode:"restricted",sources:["haina","web"],fallback:"no_match"}
+    : {mode:"restricted",sources:["haina"]};
+  const retrieval:DataSearchResult={...start,plan:{...start.plan,sourcePolicy},
+    sourceStatus:[{source:"海纳专区检索",status:"done",count:1,detail:""},
+      {source:"网络检索",status:"not_requested",count:0,detail:"未启动"}]};
+  const withPriorWeb={...plan,targets:[{key:"web:"+address,kind:"web" as const,title:"Prior citation",
+    basis:"history" as const,url:address}]};
+  const trace:ToolCall[]=[];
+  const result=await continueResearch(question,withPriorWeb,{retrieval,reads:[]},new AbortController().signal,{
+    model:async prompt=>{
+      const input=JSON.parse(prompt.slice(prompt.lastIndexOf("\n{")+1));
+      assert.deepEqual(input.materials.sourcePolicy,sourcePolicy);
+      assert.deepEqual(input.materials.exactReadTargets,[]);
+      assert.ok(!input.actions.includes("read"));
+      return JSON.stringify({action:"read",reason:"mistakenly read the prior citation",gap:"metadata",targets:["W1"],clarification:null});
+    },
+    read:async()=>assert.fail("no out-of-scope read"),discover:async()=>assert.fail("no implicit search"),
+    stage:()=>{},report:call=>trace.push(call),
+  });
+  assert.deepEqual(result.reads,[]);
+  assert.equal(result.retrieval,retrieval);
+  assert.equal(trace.at(-1)?.status,"failed");
+  assert.equal(JSON.parse(trace.at(-1)!.output!).fallback,"answer-with-available-materials");
+});

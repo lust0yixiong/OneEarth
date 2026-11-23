@@ -3,6 +3,7 @@ import {sourceExcerpts,scopeSourceTabs} from "./evidence-excerpts";
 import {rankEvidence} from "./evidence-ranking";
 import {mergeWebEvidence} from "./merge-web-evidence";
 import type {DataSearchResult} from "./data-search";
+import {scopedDiscoverySources} from "./research-evidence";
 import type {TurnPlan} from "./turn-planning";
 import {rememberReadEvidence,withPreviousReadings} from "../src/domain/read-evidence";
 import {conversationReferenceProvenance} from "../src/domain/reference-memory";
@@ -140,8 +141,8 @@ function evidence(query:string, ctx:DiscoveryContext, base:DiscoveryResponse, hi
 }
 
 // Budget prompt text, not the number of datasets. Interleave live assertions with ranked catalogue matches.
-export function catalogueRows(query:string,ctx:DiscoveryContext,base:DiscoveryResponse,history:Turn[],papers:PaperRecord[],requiredHaina?:Asset[],restriction?:"paper"|"haina"|"constellation",focusQuery=query,searchPhrases:string[]=[],onlyIds?:ReadonlySet<string>) {
-  const source = restriction || onlySource(query) || (requiredHaina ? "" : ctx.filters.source);
+export function catalogueRows(query:string,ctx:DiscoveryContext,base:DiscoveryResponse,history:Turn[],papers:PaperRecord[],requiredHaina?:Asset[],restriction?:""|"paper"|"haina"|"constellation",focusQuery=query,searchPhrases:string[]=[],onlyIds?:ReadonlySet<string>) {
+  const source = restriction ?? (onlySource(query) || (requiredHaina ? "" : ctx.filters.source));
   if (source !== ctx.filters.source) ctx = {...ctx,filters:{...ctx.filters,source}};
   const catalog = onlyIds ? [...onlyIds].flatMap(id=>assetById.get(id)||[]).filter(a=>!source||a.origins.includes(source)) : base.paperOnly ? [] : evidence(query,ctx,base,history);
   const live = !source || source === "paper" ? [...new Map(papers.map(r=>[r.id,r])).values()] : [];
@@ -238,11 +239,16 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     if(retrieval?.questionCheck || retrieval?.clarification || retrieval?.plan.questionMode==="reframe")
       throw Error("转换后的问题尚未得到用户确认，不能生成答复。");
     const start=Date.now();
-    const selectedOnly=turn?new Set(turn.plan.targets.flatMap(t=>t.id?[t.id]:[])):undefined;
+    const policy=retrieval?.plan.sourcePolicy;
+    const restricted=scopedDiscoverySources(retrieval);
+    const selectedOnly=turn?new Set(turn.plan.targets.flatMap(t=>t.id?[t.id]:[])):
+      restricted?new Set(restricted.includes("constellation")?base.catalogMatch?.ids:[]):undefined;
     const selectedUrls=turn?new Set(turn.plan.targets.flatMap(t=>t.url?[t.url]:[])):undefined;
     if(turn&&!base.gridCoverage){context={...context,filters:{...context.filters,source:onlySource(query)||""}};}
-    const expanded=!turn&&expandsSources(query);
-    const source = expanded?undefined:onlySource(query) || onlySource(retrieval?.plan.conversationContext || "");
+    const expanded=!policy&&!turn&&expandsSources(query);
+    const single=restricted?.length===1?restricted[0]:undefined;
+    const source = policy ? (single==="web"?undefined:single) :
+      expanded?undefined:onlySource(query) || onlySource(retrieval?.plan.conversationContext || "");
     if(expanded){
       context={...context,filters:{...context.filters,source:""}};
       base={...base,filters:{...(base.filters || context.filters),source:""}};
@@ -251,16 +257,20 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       context = {...context,filters:{...context.filters,source}};
       if(!turn)base={...base,filters:{...(base.filters || context.filters),source}};
     }
-    if (context.filters.source && context.filters.source !== "constellation") constellationFeed = undefined;
+    if (restricted?!restricted.includes("constellation"):context.filters.source && context.filters.source !== "constellation") constellationFeed = undefined;
     const target=[retrieval?.plan.questionMode==="confirmed"?retrieval.plan.dataQuestion:query,
       retrieval?.plan.conversationContext].filter(Boolean).join("\n");
     const searchPhrases=[...(retrieval?.plan.paper.facets.flatMap(f=>f.queries)||[]),...(retrieval?.plan.web.map(q=>q.web)||[]),...(retrieval?.plan.hainaQueries||[])];
     const previousAssertions=history.filter(t=>t.role==="assistant" && t.conversationAssertionEvidence!==undefined).at(-1)?.conversationAssertionEvidence || [];
     const priorAssertions=turn?.priorEvidence?.assertions??(selectedOnly?previousAssertions.filter(r=>selectedOnly.has(r.assetId)):previousAssertions);
-    const rows=withCurrentAssertionReadings(withAssertionMemory(catalogueRows(target,context,base,history,papers,retrieval?.haina,source,retrieval?.plan.questionMode==="confirmed"?retrieval.plan.dataQuestion:query,searchPhrases,selectedOnly),priorAssertions,query,source||context.filters.source,!!turn?.priorEvidence),assertionReadings,query);
+    const rows=withCurrentAssertionReadings(withAssertionMemory(catalogueRows(target,context,base,history,
+      restricted&&!restricted.includes("paper")?[]:papers,restricted&&!restricted.includes("haina")?[]:retrieval?.haina,
+      policy?source||"":source,retrieval?.plan.questionMode==="confirmed"?retrieval.plan.dataQuestion:query,searchPhrases,selectedOnly),
+      priorAssertions,query,source||context.filters.source,!!turn?.priorEvidence),assertionReadings,query);
     const previousReadings=history.filter(t=>t.role==="assistant" && t.conversationEvidence!==undefined).at(-1)?.conversationEvidence || [];
     const priorReadings=turn?.priorEvidence?.readings??(selectedUrls?previousReadings.filter(r=>selectedUrls.has(r.url)):previousReadings);
-    const modelHistory=synthesisHistory(history.map(({conversationEvidence:_,conversationAssertionEvidence:__,...turn})=>turn));
+    const modelHistory=synthesisHistory((restricted?history.filter(item=>item.role==="user"):history)
+      .map(({conversationEvidence:_,conversationAssertionEvidence:__,...turn})=>turn));
     const searches:SearchRun[]=retrieval?.searches || turn?.searches || [];
     const readReceipts=sourceReadReceipts(searches);
     const webIssue=retrieval?.issues.join("\n") || turn?.searches.filter(r=>r.status==="failed").map(r=>"指定来源未能读取："+(r.error||"尚未取得正文")).join("；") || "";
@@ -270,7 +280,8 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     const fresh=[...new Map([...selectedWeb,...mergeWebEvidence(searches)].map(hit=>[hit.url,hit])).values()]
       .map(h=>userSources.has(h.url)?{...h,discoveredBy:"user" as const}:h);
     const memoryOptions={query:target,focusUrls:[...userSources,...(/刚才|此前|这份|前面|继续|你提到|这个|该/.test(query)?history.filter(t=>t.role==="assistant").at(-1)?.conversationReferences?.flatMap(r=>r.kind==="web"?[r.url]:[])||[]:[])]};
-    const webHits=source?[]:withPreviousReadings(fresh,priorReadings,memoryOptions);
+    const webHits=restricted?(restricted.includes("web")?mergeWebEvidence(searches):[]):
+      source?[]:withPreviousReadings(fresh,priorReadings,memoryOptions);
     const sourceReadComparisons=compareSourceReadings(webHits,sourceHistory,priorReadings,rows.length);
     const answerSchema=sourceReadComparisons.length?{...synthesisResponseSchema,required:[...synthesisResponseSchema.required,"sourceChanges"],
       properties:{...synthesisResponseSchema.properties,sourceChanges:sourceChangeSchema}}:synthesisResponseSchema;
@@ -307,10 +318,10 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     const prompt=synthesisInstructions+(sourceReadComparisons.length?"\n"+sourceChangeInstructions:"")+"\n"+JSON.stringify({question:query,questionMode:retrieval?.plan.questionMode,
       turnAction:turn&&{action:turn.plan.action,goal:turn.plan.goal,evidenceNeed:turn.plan.evidenceNeed,targets:turn.plan.targets.map(({excerpt,...t})=>t),
         rule:"本轮没有执行数据发现检索。只围绕指定对象、已提供摘录和相关历史证据回答；通用原理可解释，但不能伪称本轮查获。未读来源不能说已读，缺少具体事实时明确边界，不补造数据集、论文事实或观测数。不要把本轮问题重新改成找数据。"},
-      sourceConstraint:source?{source,rule:"用户明确限定本轮仅使用此来源。正文、引用和结论只能依据本轮提供的该来源记录；不能沿用历史回答或其他渠道的结论代替证据。没有匹配材料时明确说明缺项。"}:undefined,
+      sourceConstraint:restricted||source?{sources:restricted||[source],rule:"用户明确限定本轮的来源范围。正文、引用和结论只能依据本轮提供的各指定渠道记录。没有匹配材料时说明缺项；如需要扩大来源，询问用户是否同意。"}:undefined,
       researchIntent:retrieval?.plan.researchIntent||turn?.plan.researchIntent,conversationContext:retrieval?.plan.conversationContext||turn?.plan.conversationContext,
       dataQuestion:retrieval?.plan.dataQuestion,dataNeed:retrieval?.plan.dataNeed,mandatorySearches:retrieval?.sourceStatus,history:modelHistory,
-      referenceProvenance:conversationReferenceProvenance(history),
+      referenceProvenance:restricted?[]:conversationReferenceProvenance(history),
       sourceReadComparisons,
       executionScope:{externalCommunicationAvailable:false,permissionsRequestedByPlatform:false,currentSourceReads:readReceipts,currentAssertionReads:rows.flatMap(row=>row.currentAssertionReadings||[]),discoveryDelegated:!!retrieval,requiredExactSourceReferences:exactReadRefs,
         authorizedParentEvidence:parentCitations.length?{citations:parentCitations,rule:"这些编号来自可追溯的父研究记录。回答所用的事实应逐项引用实际支持它的历史摘录，区分文献资产、目录和实际文件。即便名相同，也必须按具体来源和取得层级判断。不得声称本轮执行了读取，也不得从正文补猜链接。"}:undefined,

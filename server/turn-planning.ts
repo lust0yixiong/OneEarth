@@ -2,6 +2,7 @@ import {assetById} from "../src/domain/datasets";
 import type {AnswerReference,DiscoveryContext,ReadEvidence,ToolCall} from "../src/domain/types";
 import {researchIntentSchema,validResearchIntent,type ResearchIntent} from "../src/domain/research-intent";
 import {isWorkspaceCommand} from "../src/domain/research-question";
+import {explicitDiscoverySourcePolicy} from "../src/domain/discovery-source-policy";
 import {navigationTarget} from "./place-lookup";
 import {restoredIntent,clarificationBlockReason,type PlanningContext} from "./plan-adaptation";
 import type {NumberedReference} from "./follow-up-reference";
@@ -55,6 +56,7 @@ export const turnPlanOutputContract=`
 export const turnPlanningInstructions=`先决定本轮要做什么，再决定是否检索。只返回规定 JSON，不直接写最终答复。
 本轮原话/confirmedQuestion是固定目标；goal只归纳目标，不得把解释、整理或操作改写成找数据。引用对象是待处理对象，附了对象本身不意味着要搜索。history中的推荐不是用户已经选定的产品，历史标题也不等于已读全文。
 有 confirmedQuestion 时，用户已经做出选择，按这个问题继续。此前的改题提议和等待确认要求已经处理。
+用户问某渠道内有哪些可用资料（例如“海纳内部有哪些这类数据”），是在该渠道找资料，用 search。此前的论文、网页或资料编号可以说明“这类”指什么，不构成改查该渠道或重开旧来源的授权。保留原话中的渠道范围、优先顺序和明确排除项。若用户只要求解释已存内容或打开某个确切对象，沿 respond 或 read 的原规则。
 action规则：
 - respond：一般概念/能力说明、问候，或根据本轮摘录和历史已读材料解释、翻译、改写、总结、比较、核算、追问。已有内容足够完成本轮目标时优先复用；evidenceNeed为none或existing。不要为简单解释重新查三个库，也不要因为有地名/年份/数据集名就检索。
 - read：目标明确且缺的是指定对象的正文/详情/具体页，或用户要求重新核对该对象。只选已提供的目标key，evidenceNeed=read；先读它，不以其他来源代替，不重跑全渠道发现。
@@ -119,6 +121,8 @@ export function explicitlyRequestsDiscovery(question:string){
     !/(?:新的|更多|扩展|补充).{0,8}(?:资料|来源|数据|文献|论文)/.test(q))return false;
   const object=/(?:数据(?:集)?|资料|文献|论文|产品|观测(?:记录)?|datasets?|papers?|observations?|sources?|literature)/i;
   if(!object.test(q))return false;
+  if(explicitDiscoverySourcePolicy(q)&&/(?:有哪些|有什么|有没有|能(?:找|查)到(?:哪些|什么))[^。！？\n]{0,60}(?:数据|资料|文献|论文|产品|观测)/.test(q))
+    return true;
   return /^(?:(?:请|麻烦|帮我|我想|想要|我需要|需要|能否|可以|再|继续)\s*)*(?:查找|寻找|检索|搜索|搜集|找出|推荐|找)(?!.{0,12}(?:的含义|是什么意思|这个词|这句话))/.test(q)
     || /(?<![不无别])(?<!不要)(?<!无需)(?<!不必)(?:想|需要|希望|帮我|再|继续)(?:要)?(?:查找|寻找|检索|搜索|找出|找)(?:新的|更多|可用|相关|哪些)?[^。！？\n]{0,100}(?:数据|资料|文献|论文|产品|观测)/.test(q)
     || /^(?:please\s+)?(?:find|search|retrieve|look for|recommend)\b/i.test(q);

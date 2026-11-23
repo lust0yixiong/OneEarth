@@ -52,7 +52,7 @@ test("the chosen or edited question is fixed even when planning tries to convert
       web:async()=>{executed.push("web");return [];},report:()=>{},stage:()=>{},
     },decision);
     assert.deepEqual(executed,["haina","web"]);
-    assert.equal(result.sourceStatus.find(s=>s.source==="文献资料检索")?.status,"failed");
+    assert.equal(result.sourceStatus.find(s=>s.source==="文献资料检索")?.status,"not_requested");
     assert.match(result.sourceStatus.find(s=>s.source==="文献资料检索")?.detail||"",/未请求/);
     assert.equal(result.questionCheck,undefined);
     assert.equal(result.plan.dataQuestion,decision.dataQuestion);

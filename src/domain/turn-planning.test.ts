@@ -132,3 +132,12 @@ test('the planning prompt ends with the turn-plan contract so weaker models cann
  assert.doesNotMatch(turnPlanningInstructions,/hainaQueries|searchPlan/);
  assert.throws(()=>parseTurnPlan(JSON.stringify({questionMode:'preserve',dataQuestion:'定位到杭州市',dataNeed:null,hainaQueries:['杭州市']}),input('定位到杭州市')),/检索计划/);
 });
+
+test('a named-channel catalogue question cannot be replaced by reading a prior citation',()=>{
+ const i=input('海纳内部有哪些这类数据？'),url='https://example.org/old-reference';
+ i.history=[{role:'assistant',text:'以前取得的资料',conversationReferences:[{kind:'web',title:'原引用',url}]}];
+ assert.throws(()=>parseTurnPlan(JSON.stringify(route(i,'read',['web:'+url])),i),/必要检索/);
+ assert.equal(parseTurnPlan(JSON.stringify(route(i,'search',['web:'+url])),i).action,'search');
+ const explain=input('解释这段海纳目录资料里的单位，不需再检索');
+ assert.equal(parseTurnPlan(JSON.stringify(route(explain,'respond')),explain).action,'respond');
+});
