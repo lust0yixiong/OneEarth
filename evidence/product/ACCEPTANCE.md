@@ -1,5 +1,15 @@
 # Mac mini 产品验收
 
+## Mac mini Chat 观测资料入口静态发布
+
+2026-11-23 09:29:55（上海时间），[常驻 5474](http://127.0.0.1:5474/) 完成 Chat 静态发布。前端 `db9c05aced0e40d72591850fd7b1df5ea62615f0`，基线 `653836b9bc7f237fc2e51108ac89a766193b186d`，3,424 文件构建 SHA-256 为 `cfc0bd196b0e8c268dcc42fccf6b1a986b4856a437cb22ae32ccccf3fb718a54`，在线首页 SHA-256 为 `e47d28fcc1ab16c3024a2d1b3e98b5e372cd9dcbaf2a4dd2cfd50d3804193036`。应用角色继续运行 `a5b7d8d`，同一发布目录提供静态资源，应用、PostgreSQL 与 Garage PID 与切前一致。
+
+7043 上版与 7044 候选读取同一份非空的正式材料快照。桌面和窄屏的 Chat 输入区由一处「选择观测资料」下拉变为零处。公开 KEO 注册来源卡可附加并移除同一确认版本；读取归档的 WSPD、130,402 条观测和 SHA 引用仍可打开。类型检查及构建通过，815 项测试中 810 通过、5 个既有环境门控跳过。独立隔离验收零研究提交。
+
+正式发布原子替换首页，21 项新资源与上版兼容资产并存。前一首页的 ETag 请求取得新版首页。保留旧首页及静态回退计划。线上材料目录、公开来源原档、读取归档及既有森林图层均做了切前/切后只读核对。
+
+独立正式复验与总体签收通过。桌面、窄屏均无选择框，输入与来源卡附加正常，旧归档刷新一致，零研究提交。独立 Chrome 证据 `~/Library/Application Support/OneEarth Next/iterations/observation-picker-independent/primary-validated/checks.json` 的 SHA-256 为 `93d5983512bbe917239679dc09029efe09a406ec1642408b8c430bfdfc305125`。主程证据从 `~/Library/Application Support/OneEarth Next/iterations/remove-observation-picker/` 运行 `shasum -a 256 -c evidence/release-proof.sha256` 核对。
+
 ## Mac mini 四项可视化案例静态发布
 
 2026-11-23 08:44:31（上海时间），[5474 案例页](http://127.0.0.1:5474/?view=cases) 完成静态发布。前端源码 `ac7c757fda332037e26e341c75fb16e3f841fbeb`，基线 `964fd5c244efc9a041cafc5fafb7a92ecb8a1c13`，3,424 件构建清单 SHA-256 为 `7238389057b35522d471c3cc65e8c97d34704135225261848b8bc2df95581ae4`，在线首页 SHA-256 为 `a175cc0113e9605f1d389f16b7b490a8faf3ecad51cd262af73fa0f6287aa2a9`。五个应用角色运行 `a5b7d8dbdba41e6139740d4612e20023e84ceaf6`。发布路径 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.9-a5b7d8d/dist`，应用和存储进程前后为同一批 PID。
