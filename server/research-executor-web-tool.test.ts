@@ -36,7 +36,7 @@ test("initial, continuation, confirmation and trusted clarification get independ
     await executor.discover(messageIds[1],{...input(),continuation:{previousId:taskId,focus:"再核官方出处"}},()=>{});
     await executor.discover(messageIds[2],input("已确认的新目标"),()=>{},{target:{discoveryId:taskId,contextId},afterSeq:0});
     await executor.discover(messageIds[3],{continuedFrom:taskId,clarificationReply:{text:"补充原条件",afterSeq:0}},()=>{},{target:{discoveryId:taskId,contextId},afterSeq:0,webToolQuestion:"查找NOAA风场资料"});
-    await executor.discover(messageIds[4],input("只在海纳查找风场资料"),()=>{});
+    await executor.discover(messageIds[4],{...input("只在海纳查找风场资料"),decision:{checkMessageId:randomUUID(),choice:"proposed",originalQuestion:"只在海纳查找风场资料",dataQuestion:"查找风场资料"}},()=>{});
     assert.deepEqual(grants.map(g=>g.messageId),messageIds.slice(0,4));assert.equal(new Set(tokens).size,4);assert.deepEqual(bound,tokens);assert.deepEqual(revoked,tokens);assert.equal(received[4].message.parts[0].data.input.runtimeWebToolGrant,undefined);
   }finally{await executor.close();}
 });

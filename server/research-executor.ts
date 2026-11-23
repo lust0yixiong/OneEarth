@@ -37,7 +37,7 @@ export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|un
     model:(prompt:string,options?:ExecutorOptions,modelSignal=signal)=>runExecutor(config,prompt,modelSignal,options),
     discover:async(id:string,input:Omit<DiscoveryBusinessInput,"deepseekTools">|DiscoveryClarificationInput,emit:(event:DiscoveryEvent)=>void,options:DiscoveryA2AOptions&{webToolQuestion?:string}={})=>{
       if(protocol==="v1"&&("clarificationReply" in input||options.target))throw Error("该研究记录需要原发现服务的 A2A 续行接口。");
-      const question="clarificationReply" in input?options.webToolQuestion:input.decision?.dataQuestion??input.query;
+      const question="clarificationReply" in input?options.webToolQuestion:input.query;
       const grant=question?await reserve(id,{kind:"discovery",question}):undefined;
       const bind=async(taskId:string)=>{if(grant)await webTools!.authority.bind(grant,taskId);};
       const boundOptions:DiscoveryA2AOptions={...options,onAccepted:async binding=>{await options.onAccepted?.(binding);await bind(binding.discoveryId);}};
