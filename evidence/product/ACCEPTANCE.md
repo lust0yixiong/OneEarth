@@ -1,5 +1,19 @@
 # Mac mini 产品验收
 
+## Mac mini 四项可视化案例静态发布
+
+2026-11-23 08:44:31（上海时间），[5474 案例页](http://127.0.0.1:5474/?view=cases) 完成静态发布。前端源码 `ac7c757fda332037e26e341c75fb16e3f841fbeb`，基线 `964fd5c244efc9a041cafc5fafb7a92ecb8a1c13`，3,424 件构建清单 SHA-256 为 `7238389057b35522d471c3cc65e8c97d34704135225261848b8bc2df95581ae4`，在线首页 SHA-256 为 `a175cc0113e9605f1d389f16b7b490a8faf3ecad51cd262af73fa0f6287aa2a9`。五个应用角色运行 `a5b7d8dbdba41e6139740d4612e20023e84ceaf6`。发布路径 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.9-a5b7d8d/dist`，应用和存储进程前后为同一批 PID。
+
+案例页按次序显示全球气象站与美洲闪电、全球地震、全球风场、全球降水。科学问题区只显示标题。气象页和卡片使用相同标题及美洲卫星视域说明。风场卡按所存 GFS 清单显示起报 2026-11-06 00:00 UTC 与 F000、F006、F012 三个预报时效。常驻降水目录提供 2023、2024 各十二个月，案例卡、图层、数据线索及详情均使用同源 `GET /precip-data/catalog.json` 显示可选年月。海纳 1846764 和 1846639 可从数据触达搜索进入详情并在球上可视化，支持切月、切城、刷新和 `?viz=forest`、`?viz=c40` 旧入口。
+
+[6944 隔离候选](http://127.0.0.1:6944/) 通过独立 Chrome 复测及总体验收。使用冻结图层和旧版真实数据索引，确认旧投影中的 2000–2026 不再充作 OneEarth 降水可用范围。目录只列 2023 年 1、3、12 月时，默认进入 12 月，精确 3 月深链仍进入 3 月。旧全年清单存在时，目录未发布月份禁用并置灰；跨年缺月、合成 2028 年月内部分覆盖、空目录、无效响应和 503 均有独立对照。类型检查和构建通过，815 项测试中 810 通过、5 个既有环境门控跳过。
+
+正式发布原子替换首页。新引入 18 个内容哈希资源，保留 39 个兼容资源供旧页面使用，57 项均经线上字节和压缩传输核对。旧 ETag 条件请求返回新首页。雨量目录、森林 8 月切片、C40 北京对象与旧研究的前后字节一致。静态回退在隔离副本按新旧真实构建演练通过，回退只置回上版首页。
+
+独立上线复核与总体签收通过。Chrome 从实际数据触达进入森林和 C40 数据集详情，分别切至 2023-08-15 和北京并刷新；旧直链能在干净上下文打开。实际气象站、两颗卫星闪电接口和 USGS 地震/台站返回成功。风场实际切层及预报时效，降水从正式目录点入并取得真实数值瓦片，精确 2023 年 3 月深链保持原年月。两阶段浏览器验收均为零研究提交，降水目录及图层资源请求均为 GET。独立索引 `~/Library/Application Support/OneEarth Next/iterations/visualization-case-curation-independent/independent-release-acceptance.json` 的 SHA-256 为 `90b376025b7817be6862192bc147343f3beb2343c67c6d508821a160d13f599f`。
+
+主程证据根位于 `~/Library/Application Support/OneEarth Next/iterations/visualization-case-curation/`。从该目录运行 `shasum -a 256 -c evidence/release-proof.sha256` 核验构建、浏览器、在线资源和回退记录。上版首页及回退计划见 `static-rollback/`。下文保留上版发布的历史记录。
+
 ## Mac mini 科学问题案例目录静态发布
 
 2026-11-23 08:23（上海时间），[5474](http://127.0.0.1:5474) 完成静态发布。前端源码 `ac09bb362661b25f6525ba5ebf37fc1d17d44421`，基线 `0d859776f29e11e74c95f19b84c7824639751a20`。3,424 件构建清单 SHA-256 为 `8c44e05471d79f6ddc49b84d4006f2fa4050127dd9f5b3ffa05ead5bbbd86797`，在线首页 SHA-256 为 `ae9ad8dab09958ade5b6cdb085bccc56c9fc715d21ef2a73a2c8f3d10c8814d2`。五个应用角色继续运行 `a5b7d8dbdba41e6139740d4612e20023e84ceaf6`，发布目录仍为 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.9-a5b7d8d`。PostgreSQL、Garage、launchd 及五个应用角色的 PID 前后一致。
