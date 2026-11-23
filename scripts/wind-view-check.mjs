@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+const baseUrl = process.env.ONEEARTH_URL || "http://127.0.0.1:5274";
 const browser = await chromium.launch({
   executablePath:
     process.env.CHROME_PATH ||
@@ -31,7 +32,7 @@ const centerPixel = () => p.locator("canvas[data-painted]").evaluate(canvas => {
   return Array.from(canvas.getContext("2d").getImageData(x, canvas.height / 2, 1, 1).data);
 });
 try {
-  await p.goto("http://127.0.0.1:5274/?task=Q19", { waitUntil: "networkidle" });
+  await p.goto(new URL("/?task=Q19", baseUrl).href, { waitUntil: "networkidle" });
   const native = p.locator(".need-card").filter({ hasText: "PANGAEA 891386" });
   assert(await native.getByRole("button", { name: /数据速览/ }).isEnabled());
   assert.equal(
@@ -45,11 +46,15 @@ try {
     .getByRole("navigation", { name: "主导航" })
     .getByRole("button", { name: "案例", exact: true })
     .click();
-  const library = p.locator(".case-library");
-  await library.waitFor();
-  assert.equal(await p.getByRole("heading", { name: "数据集可视化" }).count(), 0);
-  await p.getByLabel("搜索研究案例").fill("全球风场");
-  await library.getByRole("button", { name: /全球风场如何分布/ }).click();
+  const scienceCases = p.getByRole("region", { name: "科学问题案例" });
+  await scienceCases.waitFor();
+  assert.equal(await scienceCases.locator(":scope > *").count(), 1);
+  const visualCases = p.getByRole("region", { name: "数据可视化" });
+  await visualCases.getByRole("button", { name: /全球风场 · 沿风而行/ }).click();
+  await ready();
+  assert.equal(new URL(p.url()).searchParams.get("viz"), "gfs-wind");
+
+  await p.goto(new URL("/?task=wind", p.url()).href);
   const windDataset = p.locator(".need-card").filter({ hasText: "NCEP GFS" });
   assert(await windDataset.getByRole("button", { name: /数据速览/ }).isEnabled());
   assert.equal(await p.locator(".wind-controls").count(), 0);
@@ -237,7 +242,7 @@ try {
     viewport: { width: 390, height: 844 },
     reducedMotion: "reduce",
   });
-  await mobile.goto("http://127.0.0.1:5274/?task=wind&viz=gfs-wind", {
+  await mobile.goto(new URL("/?task=wind&viz=gfs-wind", baseUrl).href, {
     waitUntil: "networkidle",
   });
   await mobile.waitForFunction(
@@ -274,7 +279,7 @@ try {
   await retry.route("**/visualizations/gfs/wind.bin", (route) =>
     route.fulfill({ status: 503, body: "unavailable" }),
   );
-  await retry.goto("http://127.0.0.1:5274/?task=wind&viz=gfs-wind", {
+  await retry.goto(new URL("/?task=wind&viz=gfs-wind", baseUrl).href, {
     waitUntil: "networkidle",
   });
   await retry.locator(".wind-load[role=alert]").waitFor();

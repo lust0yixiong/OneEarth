@@ -170,4 +170,3 @@ export const sourceLabels: Record<string, string> = {
   haina: "海纳收录",
   expert: "科学家推荐",
 };
-export const featuredIds = ["Q02", "Q07", "Q14", "Q19", "Q20"];

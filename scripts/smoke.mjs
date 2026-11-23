@@ -1,5 +1,6 @@
 import { chromium } from "playwright-core";
 import assert from "node:assert/strict";
+const baseUrl = process.env.ONEEARTH_URL || "http://127.0.0.1:5274";
 const browser = await chromium.launch({
   executablePath:
     process.env.CHROME_PATH ||
@@ -16,11 +17,11 @@ page.on("console", (m) => {
   if (m.type() === "error") errors.push(m.text());
 });
 try {
-  await page.goto("http://127.0.0.1:5274/", { waitUntil: "networkidle" });
+  await page.goto(new URL("/", baseUrl).href, { waitUntil: "networkidle" });
   await page.locator("canvas[data-painted]").waitFor();
   await page.screenshot({ path: "/tmp/oneearth-app-global.png" });
   console.log("global ready", await page.locator(".map-legend").innerText());
-  const home=await (await page.request.get("http://127.0.0.1:5274/api/settings/chat-home")).json();
+  const home=await (await page.request.get(new URL("/api/settings/chat-home", baseUrl).href)).json();
   await page.waitForFunction(questions=>JSON.stringify([...document.querySelectorAll(".suggested-queries button")].map(b=>b.textContent))===JSON.stringify(questions),home.questions);
   assert.deepEqual(await page.locator(".suggested-queries button").allTextContents(),home.questions);
   const q = page.getByRole("textbox", { name: "向 OneEarth 提问" });
@@ -46,10 +47,12 @@ try {
     () => document.querySelector(".need-card .fit")?.textContent === "未满足",
   );
   await page.getByRole("button", { name: "案例", exact: true }).click();
-  await page.locator(".featured-case").first().waitFor();
-  assert.equal(await page.locator(".featured-case").count(), 5);
+  const scienceCases = page.getByRole("region", { name: "科学问题案例" });
+  await scienceCases.waitFor();
+  assert.equal(await scienceCases.locator(":scope > *").count(), 1);
+  assert.equal(await scienceCases.getByRole("heading", { name: "科学问题案例" }).count(), 1);
   await page.screenshot({ path: "/tmp/oneearth-app-cases.png" });
-  await page.locator(".featured-case").filter({ hasText: "79 North" }).click();
+  await page.goto(new URL("/?task=Q19", page.url()).href);
   await page.waitForFunction(() =>
     document.querySelector(".earth-task-card")?.textContent?.includes("Q19"),
   );
