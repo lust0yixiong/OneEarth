@@ -7,8 +7,12 @@ export type DiscoverySourcePolicy =
 
 export function parseDiscoverySourcePolicy(value:unknown):DiscoverySourcePolicy|undefined {
   if (!value || typeof value!=="object" || Array.isArray(value)) return;
-  const {mode,sources,fallback} = value as {mode?:unknown;sources?:unknown;fallback?:unknown};
-  if (Object.keys(value).some(key=>!["mode","sources","fallback"].includes(key)) || (mode!=="restricted"&&mode!=="preferred") ||
+  const {mode:canonicalMode,scope,sources,fallback} = value as {mode?:unknown;scope?:unknown;sources?:unknown;fallback?:unknown};
+  const hasMode=Object.hasOwn(value,"mode"),hasScope=Object.hasOwn(value,"scope");
+  // Some planning providers render the mode as "scope". Keep exactly one value.
+  const mode=hasMode?canonicalMode:scope;
+  if (hasMode===hasScope || Object.keys(value).some(key=>!["mode","scope","sources","fallback"].includes(key)) ||
+      (mode!=="restricted"&&mode!=="preferred") ||
       !Array.isArray(sources) || !sources.length || sources.length>discoverySources.length ||
       !sources.every((source):source is DiscoverySource=>discoverySources.some(allowed=>source===allowed)) ||
       new Set(sources).size!==sources.length) return;

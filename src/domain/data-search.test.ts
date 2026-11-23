@@ -247,9 +247,9 @@ test("restricted plans need no paper or web terms and repair cannot broaden a re
 
 test("nullable planning fallback keeps the selected channel and validates meaningful fallback conditions",async()=>{
   const question="请先找 USGS 官方说明并读取地表温度换算依据";
-  for(const source of ["web","haina"] as const){
+  for(const [source,field] of [["web","mode"],["web","scope"],["haina","scope"]] as const){
     const fixture=fakeDeps(JSON.stringify({...plan,dataQuestion:question,
-      sourcePolicy:{mode:"restricted",sources:[source],fallback:null}}));
+      sourcePolicy:{[field]:"restricted",sources:[source],fallback:null}}));
     const result=await requiredDataSearch(question,new AbortController().signal,fixture.deps);
     assert.deepEqual(result.plan.sourcePolicy,{mode:"restricted",sources:[source]});
     assert.deepEqual(fixture.executed,[source]);
@@ -265,7 +265,17 @@ test("nullable planning fallback keeps the selected channel and validates meanin
     {...conditional,sources:["web"]},{...conditional,mode:"preferred"},{...conditional,fallback:"always"},
     {...conditional,fallback:null,sources:[]},{...conditional,fallback:null,sources:["unknown"]},
     {...conditional,fallback:null,sources:["web","web"]},{...conditional,fallback:null,extra:true},
+    {...conditional,scope:"preferred"},{...conditional,scope:"restricted"},
+    {scope:"unknown",sources:["web"],fallback:null},
   ])assert.throws(()=>parseDataSearch(JSON.stringify({...plan,sourcePolicy}),question),/发现来源范围格式无效/);
+  const repaired=fakeDeps(correction=>{
+    if(!correction)return JSON.stringify({...plan,sourcePolicy:{mode:"restricted",scope:"preferred",sources:["web"]}});
+    assert.match(correction.issue,/sourcePolicy.*mode.*sources.*fallback/);
+    return JSON.stringify({...plan,sourcePolicy:{mode:"restricted",sources:["web"]}});
+  });
+  assert.deepEqual((await requiredDataSearch(question,new AbortController().signal,repaired.deps)).plan.sourcePolicy,
+    {mode:"restricted",sources:["web"]});
+  assert.deepEqual(repaired.executed,["web"]);
 });
 
 test("a named fallback waits for confirmed zero hits, including when web is the leading source",async()=>{

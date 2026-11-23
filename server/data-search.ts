@@ -57,6 +57,7 @@ export function continuationSourcePolicy(parent:DataSearchResult, originalQuesti
 }
 
 const shortEnglishSchema={type:'string',pattern:'^[A-Za-z][A-Za-z0-9_.-]*(?: [A-Za-z0-9][A-Za-z0-9_.-]*){0,2}$',maxLength:120};
+const sourcePolicyFormat='sourcePolicy 对象使用 mode（restricted 或 preferred）和 sources（合法来源的非空列表，不重复）；只有 restricted 的多个来源可添加 fallback="no_match"，其余情况省略 fallback。';
 /** Structured planning output constrains shape; runtime checks still own intent/approval and valid calendar intervals. */
 export const dataSearchSchema={type:'object',additionalProperties:false,
   required:['questionMode','dataQuestion','dataNeed','researchIntent','conversationContext','conversationPeriod','conversationWindow','clarification','sourcePolicy','hainaQueries','paper','web'],
@@ -89,6 +90,7 @@ clarification 只是澄清原意，不是改写问题的确认。需要把原问
 researchIntent 每轮都返回 {purpose,task,region,time,months}，即使只问了一句或需要澄清。purpose 概括用户研究什么、想理解或判断什么；task 是本轮实际要做的事。region、time 是用户已经明确或指代可从前文确定的研究区与时段，未知为 null；不能取镜头位置、产品覆盖范围或助手建议。months 为用户限定的月份数组，未限定为 []。普通追问保留已明确目的与范围，仅更新用户修改的条件；明确换课题时重置无关信息。与 history 中的 researchIntent 和原话共同核对，不能以摘要取代原话。按地域语境理解季节，夏季在北半球可为 [6,7,8]，不确定时澄清。跨年季节如2020—2023年各年夏季，time 写清“2020—2023年各年6—8月”，conversationPeriod 保留四年，conversationWindow=null，不能伪造一个连续区间为季节观测。季节等限定必须进入相关检索参数并传给回答；宽泛的产品检索命中仍需核对这些条件。
 conversationContext 用最多1600字记录当前讨论的研究目的、用户已明确的对象与条件、用户已确认的产品及仍未知的关键点。只归纳用户表达和确认，不把助手建议、检索命中或推断写成用户要求；新话题以新目的替换旧摘要。即使本轮需要追问，也返回更新后的摘要，供下一轮使用。
 用 sourcePolicy 表示本轮允许的来源范围。只问某一目录内部有哪些数据（如“海纳内部有哪些这类数据”）是 restricted，即使未说“只”。明确要求仅对照两个来源，restricted 列出两者。指定优先考虑某渠道且允许其他渠道，才用 preferred。若用户要求只在前一指定渠道确认零命中后再看下一指定渠道，用 restricted、按顺序列出来源并设置 fallback="no_match"；上游失败不算查无结果。提到来源作背景或开放寻找数据时为 null。来源编码为 paper（文献资料）、haina（海纳专区）、web（公开网络）、constellation（星座直推）。当前明确条件优先；同一目标的普通追问保留此前范围，用户明确扩大范围、取消限定或换题时才重新判断。任何明确限制在没有结果或上游故障时仍有效。
+非 null 的 sourcePolicy 使用精确字段名 mode 和 sources，例如 {"mode":"restricted","sources":["web"]}。只有用户指定的确认零命中后备才增加 fallback 字段，例如 {"mode":"restricted","sources":["haina","paper"],"fallback":"no_match"}。日常限制和优先顺序省略 fallback。
 conversationPeriod 单独返回当前讨论中用户明确的研究年份区间 [起始年,结束年]，仅一年则两端相同；用户只改时段时更新，其他追问沿用已经明确的时段。未指定年份或新话题不再限定年份时返回 null。不要采用检索结果的覆盖年份、论文发表年、产品版本年或助手提出但未经用户确认的年份。这个区间将同步到球的时间筛选，不能从未知的“近些年”猜测年份。
 用户明确到月份或日期时，另用 conversationWindow 返回 UTC 左闭右开区间的两个 ISO 日期字符串，例如2020年7月为 ["2020-07-01","2020-08-01"]，同时 conversationPeriod 为 [2020,2020]。用户只确定年份、不再限定月份日期或换话题时，conversationWindow 返回 null；不要把年份筛选伪装成更精确的观测时间。已有用户明确的月份日期在普通追问中沿用，不能丢失。
 默认 questionMode="preserve"，dataQuestion 原样保留 question。已经是数据问题，或能直接从数据角度回答的科学问题，都不需要改写；没有出现“数据”二字也可能是数据问题。追问沿用已明确对象，只处理本轮新增疑问，指代可在检索参数中结合上下文解析。
@@ -185,7 +187,7 @@ export function parseDataSearch(raw:string,query:string,forcedPolicy?:DiscoveryS
     throw Error("未生成有效数据问题");
   const requestedPolicy=parseDiscoverySourcePolicy(value.sourcePolicy);
   if(value.sourcePolicy!==undefined && value.sourcePolicy!==null && !requestedPolicy)
-    throw Error("发现来源范围格式无效");
+    throw Error("发现来源范围格式无效。"+sourcePolicyFormat);
   const policy=forcedPolicy===undefined ? explicitDiscoverySourcePolicy(query) ?? requestedPolicy : forcedPolicy??undefined;
   const dataNeed=needText(value.dataNeed);
   if(value.researchIntent!==undefined && !validResearchIntent(value.researchIntent))throw Error("研究意图格式无效");
@@ -286,7 +288,7 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
       if(rawPolicy!==undefined && rawPolicy!==null && !candidate)invalidSourcePolicy=true;
       if(fixedPolicy===undefined && candidate?.mode==="restricted") fixedPolicy=candidate;
       if(invalidSourcePolicy && fixedPolicy===undefined && candidate?.mode!=="restricted")
-        throw Error("请明确修复已有来源范围，不能因格式错误扩大检索。");
+        throw Error("请修复已有 sourcePolicy，保留原渠道限制。"+sourcePolicyFormat);
       const parsed=parseDataSearch(raw,target,fixedPolicy);
       if(deps.resumingClarification && parsed.questionMode==='preserve' && String(rawPlan(raw)?.dataQuestion).trim() !== target.trim())
         throw Error('澄清后的 preserve 必须保留原有效问题。');
