@@ -244,7 +244,7 @@ export function constellationService(filename: string, sources: PushSources) {
     res.write("retry: 3000\nevent: ready\ndata: {}\n\n");
     clients.add(res);
     const keepalive = setInterval(() => res.write(": heartbeat\n\n"), 25000);
-    req.on("close", () => {
+    res.once("close", () => {
       clients.delete(res);
       clearInterval(keepalive);
     });
@@ -367,5 +367,6 @@ export function constellationService(filename: string, sources: PushSources) {
     },
     status:()=>({configured:Object.values(sources).filter(s=>!s.test).length,
       sources:Object.entries(sources).filter(([,s])=>!s.test).map(([id,s])=>({id,name:s.name}))}),
+    endStreams: () => { for (const response of clients) response.end(); },
     close: () => db?.close() };
 }

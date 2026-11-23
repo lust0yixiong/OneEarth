@@ -64,15 +64,18 @@ const services = {
   worker:["server/runtime-worker.ts"],
   runtime:["server/runtime-api.ts"],
   web:["server/index.ts"],
+  workbench:["server/index.ts"],
   spatial:["server/spatial-service.ts"],
   seed:["scripts/seed-spatial.ts"],
   baseline:[".local/baseline/server/index.ts"],
   haina:["scripts/probe-haina.py"],
 };
-const serviceDatabase = {discovery:"DISCOVERY",worker:"RUNTIME",runtime:"RUNTIME",spatial:"SPATIAL",seed:"SPATIAL",web:null};
+const serviceDatabase = {discovery:"DISCOVERY",worker:"RUNTIME",runtime:"RUNTIME",workbench:"RUNTIME",spatial:"SPATIAL",seed:"SPATIAL",web:null};
 const roles = process.argv.slice(2);
-if (!roles.length) roles.push("discovery","spatial","worker","runtime","web");
+if (!roles.length) roles.push("discovery","spatial","worker","workbench");
 if (!roles.every(role => Object.hasOwn(services,role))) throw Error("未知 OneEarth 服务。");
+if (new Set(roles).size !== roles.length || (roles.includes("workbench") && roles.some(role => role==="web" || role==="runtime")))
+  throw Error("工作台后端与旧网关或运行时 API 角色不能同时启动。");
 const children = [];
 let stopping = false;
 function stop(signal = "SIGTERM") {
@@ -89,6 +92,10 @@ for (const role of roles) {
     for(const database of ["RUNTIME","DISCOVERY","SPATIAL"]){
       if(database!==serviceDatabase[role]) delete childEnv["ONEEARTH_"+database+"_DATABASE_URL"];
     }
+  }
+  if (role==="workbench") {
+    for (const name of ["ONEEARTH_OBJECT_ENDPOINT","ONEEARTH_OBJECT_BUCKET","ONEEARTH_OBJECT_PREFIX",
+      "ONEEARTH_OBJECT_PATH_STYLE","AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN"]) delete childEnv[name];
   }
   const child = spawn(executable,args,{
     stdio:"inherit",cwd:root,env:childEnv,

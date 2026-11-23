@@ -1,0 +1,93 @@
+import express from "express";
+import { mkdirSync } from "node:fs";
+import { accessGuard } from "./access";
+import { resultSnapshots } from "./result-snapshots";
+import { releaseVersion } from "./version";
+import { validateTurn } from "./runtime-input";
+import { taskRoutes } from "./task-store";
+import { postgresTaskStore } from "./postgres-task-store";
+import { runtimePaperRoutes } from "./runtime-paper-routes";
+import { queryHainaCatalog, queryPapers } from "./discovery-a2a-client";
+import { runtimeWorkbenchQueries } from "./runtime-workbench-queries";
+import { authorizeObservationDigest } from "./observation-execution";
+import { prepareObservationInput, hasObservationCheck, recoverObservationRecord } from "./runtime-observation";
+import { hasObservationResearch, prepareObservationResearch, observationMaterialsRoutes } from "./runtime-observation-authority";
+import { recoverObservationResearchRecord } from "./runtime-observation-research";
+import { runtimeWebToolStore } from "./runtime-web-tool-store";
+import { runtimeWebToolChannel } from "./runtime-web-tool-router";
+import { runtimeChatChannel } from "./runtime-chat-channel";
+import { prepareRuntimeChat } from "./runtime-chat-turn";
+import { runtimeServices } from "./runtime-services";
+
+const badRequest: express.ErrorRequestHandler = (_error, _req, res, next) => {
+  if (res.headersSent) { next(_error); return; }
+  res.status(400).json({error:"运行时任务请求无效。"});
+};
+
+/** Both listeners use one API, one Chat owner and one tools coordinator. */
+export async function createRuntimeApi(state: string) {
+  mkdirSync(state, {recursive:true, mode:0o700});
+  const dispose: (() => void | Promise<void>)[] = [];
+  let stop: Promise<void> | undefined;
+  let close: Promise<void> | undefined;
+  const stopWork: (() => void | Promise<void>)[] = [];
+  const stopAccepting = () => stop ??= stopWorkers();
+  async function stopWorkers() {
+    const results = await Promise.allSettled(stopWork.map(async quit => { await quit(); }));
+    const failed = results.find(result => result.status === "rejected");
+    if (failed) throw failed.reason;
+  }
+  const closeResources = () => close ??= cleanUp();
+  async function cleanUp() {
+    let failure = await stopAccepting().catch((error: unknown) => ({error}));
+    for (const cleanup of dispose.reverse()) {
+      try { await cleanup(); } catch (error) { failure ??= {error}; }
+    }
+    if (failure) throw failure.error;
+  }
+
+  try {
+    const tasks = await postgresTaskStore("runtime");
+    dispose.push(() => tasks.close());
+    const webTools = await runtimeWebToolStore();
+    dispose.push(() => webTools.close());
+    const webChannel = await runtimeWebToolChannel(webTools);
+    stopWork.push(() => webChannel.close());
+    const services = runtimeServices(state, tasks, webTools);
+    dispose.push(() => services.push.close());
+    stopWork.push(() => services.push.endStreams());
+    const queries = runtimeWorkbenchQueries(state, queryPapers, queryHainaCatalog, services.push);
+    dispose.push(() => queries.close());
+    const snapshots = await resultSnapshots();
+    dispose.push(() => snapshots.close());
+
+    const business = express.Router();
+    // Coverage and feed routes own their streaming formats and body limits.
+    business.use(queries.router);
+    business.use("/api/results", snapshots.router);
+    business.use(["/api/paper-records", "/api/tasks", "/api/chat/messages"], express.json({limit:"256kb"}));
+    business.use("/api/paper-records", runtimePaperRoutes());
+    business.use(observationMaterialsRoutes());
+    const chat = await runtimeChatChannel(business, tasks, (id,input) =>
+      prepareRuntimeChat(services, id, input, tasks.chat.latestCompleted));
+    stopWork.push(() => chat.close());
+    taskRoutes(business, "/api/tasks", tasks, input => validateTurn(tasks,input),
+      {researchRecords:true, prepareWhen:input=>hasObservationCheck(input)||hasObservationResearch(tasks,input),
+        prepare:(id,input)=>hasObservationCheck(input)?prepareObservationInput(tasks,id,input,authorizeObservationDigest):prepareObservationResearch(tasks,id,input),
+        recoverRecord:async task=>(await recoverObservationRecord(tasks,task))??recoverObservationResearchRecord(tasks,task),
+        onCancelled:id=>chat.cancel(id)});
+    business.use(badRequest);
+
+    const compatibility = express();
+    compatibility.disable("x-powered-by");
+    compatibility.use(accessGuard());
+    compatibility.use(webChannel.router);
+    compatibility.use(business);
+    compatibility.get("/api/health", (_req,res) => res.json({status:"ok",service:"runtime",version:releaseVersion}));
+    compatibility.use(badRequest);
+    return {business, compatibility, stopAccepting, close:closeResources};
+  } catch (error) {
+    await closeResources().catch(() => console.error("OneEarth could not release runtime API resources"));
+    throw error;
+  }
+}

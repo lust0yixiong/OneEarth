@@ -29,5 +29,5 @@ export async function resultSnapshots(){
     if(!row?.equal){res.status(409).json({error:"该编号已属于另一份结果。"});return;}
     res.sendStatus(200);
   });
-  return router;
+  return {router,close:()=>database.end()};
 }

@@ -4,7 +4,7 @@ import { assets, observationAssets, registerHaina, registerObservations, replace
 import { cases, resources } from "../src/domain/catalog";
 import { validHainaRecord, type HainaRecord } from "../src/domain/haina-record";
 import { paperId, validPaperRecord, type PaperRecord } from "../src/domain/paper-record";
-import { constellationService, parseSources } from "./constellations";
+import type { constellationService } from "./constellations";
 import { dataAccessIndex, dataAccessRouter } from "./data-access";
 import type { HainaCatalogPage, PaperQuery, PaperQueryOutput } from "./discovery-materials-contract";
 import { researchPdf } from "./research-pdf";
@@ -103,13 +103,12 @@ export function hainaCatalogueProjection(read: ReadHainaPage, publish: (records:
   };
 }
 
-export function runtimeWorkbenchQueries(state: string, readPapers: ReadPaperPage, readHaina: ReadHainaPage) {
+export function runtimeWorkbenchQueries(state: string, readPapers: ReadPaperPage, readHaina: ReadHainaPage,
+  observations: ReturnType<typeof constellationService>) {
   const router = express.Router();
   const spatial = spatialProxy(process.env.ONEEARTH_SPATIAL_URL || "http://127.0.0.1:5276");
   router.use(["/api/coverage", "/api/spatial"], spatial);
 
-  const sources = parseSources(process.env.ONEEARTH_PUSH_SOURCES);
-  const observations = constellationService(process.env.ONEEARTH_OBSERVATION_DB || path.join(state, "observations.sqlite"), sources);
   router.use("/api/constellations", observations.router);
   const index = dataAccessIndex(path.join(state, "data-access.sqlite"));
   let paperVersion = 0;
@@ -163,5 +162,5 @@ export function runtimeWorkbenchQueries(state: string, readPapers: ReadPaperPage
     else res.status(500).json({ error: "服务暂时无法完成请求。" });
   };
   router.use(errors);
-  return router;
+  return {router,close:()=>index.close()};
 }

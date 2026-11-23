@@ -5,19 +5,21 @@ import {worldLightning} from "./world-lightning";
 import {lightning} from "./lightning";
 
 import {administrativeOrientation} from "./admin-orientation";
-import { deepSeekKey, serviceModels, setServiceKey } from "./model-service";
+import { createModelService } from "./model-service";
 import { mkdirSync } from "node:fs";
 import { accessGuard, workbenchLan } from "./access";
 import { staticAssets } from "./static-assets";
 import { listModels } from "./model-list";
 import { randomUUID } from "node:crypto";
-import { runExecutor } from "./executor";
+import { createModelExecutor } from "./executor";
 import { validChatModel } from "../src/domain/chat-model";
 import {chatHomeSettings} from "./chat-home";
 import {sourcePreview} from "./source-preview";
 import { simulationGrid } from "./simulation-grid";
 import { parseSources } from "./constellations";
 import { spatialProxy } from "./spatial-proxy";
+import { createRuntimeApi } from "./runtime-api-service";
+import { serveHttp } from "./http-lifecycle";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,19 +48,34 @@ const host = process.env.ONEEARTH_HOST || "127.0.0.1";
 const lanInterface=process.env.ONEEARTH_LAN_INTERFACE;
 if(lanInterface&&host!=="127.0.0.1")throw Error("局域网入口要求 ONEEARTH_HOST=127.0.0.1。");
 const lan=workbenchLan(lanInterface);
+const port = Number(process.env.PORT || 5274);
+const runtimePort = Number(process.env.ONEEARTH_RUNTIME_PORT || port+3);
+const merged = process.env.ONEEARTH_ROLE !== "web";
+const vite = process.env.NODE_ENV === "production" ? undefined : await import("vite").then(({createServer}) =>
+  createServer({root,server:{middlewareMode:true},appType:"spa"}));
+const runtime = await (merged ? createRuntimeApi(stateDir) : Promise.resolve(undefined)).catch(async error => {
+  await vite?.close();
+  throw error;
+});
+const modelSettings = createModelService();
+const runModelTest = createModelExecutor(modelSettings.configureService);
 app.use(accessGuard(process.env.ONEEARTH_ALLOWED_HOSTS,lan));
 app.use("/internal", (_req,res)=>res.status(404).json({error:"未找到对应接口。"}));
 app.use("/api/simulation-grid", simulationGrid(path.join(dataDir,"grid-data")));
 app.disable("x-powered-by");
 app.use("/api/orientation",administrativeOrientation(process.env.ONEEARTH_ADMIN_BOUNDARY_DIR || path.join(root,".local","admin-boundaries"),
   {baseUrl:process.env.ONEEARTH_ADMIN_BOUNDARIES_URL}));
-const runtimeUrl = process.env.ONEEARTH_RUNTIME_URL || "http://127.0.0.1:5277";
 const configuredPushSources = Object.keys(parseSources(process.env.ONEEARTH_PUSH_SOURCES)).length;
-const runtime = spatialProxy(runtimeUrl);
-app.post("/api/paper-records/search",spatialProxy(runtimeUrl,{timeout:40000}));
-app.use(["/api/chat/messages","/api/tasks","/api/results","/api/paper-records","/api/data-access","/api/coverage","/api/spatial",
-  "/api/research-record","/api/catalog","/api/haina/catalog","/api/observation-materials"], runtime);
-app.use("/api/constellations",spatialProxy(runtimeUrl,{timeout:40000,authorization:true}));
+if (runtime) {
+  app.use(runtime.business);
+} else {
+  // Explicit gateway-only diagnostics preserve the previous split role.
+  const runtimeUrl = process.env.ONEEARTH_RUNTIME_URL || "http://127.0.0.1:"+runtimePort;
+  app.post("/api/paper-records/search",spatialProxy(runtimeUrl,{timeout:40000}));
+  app.use(["/api/chat/messages","/api/tasks","/api/results","/api/paper-records","/api/data-access","/api/coverage","/api/spatial",
+    "/api/research-record","/api/catalog","/api/haina/catalog","/api/observation-materials"], spatialProxy(runtimeUrl));
+  app.use("/api/constellations",spatialProxy(runtimeUrl,{timeout:40000,authorization:true}));
+}
 const geo = spatialProxy(process.env.ONEEARTH_SPATIAL_URL || "http://127.0.0.1:5276");
 app.use(["/precip-data","/visualizations/haina/1846764","/visualizations/haina/1846639"],geo);
 app.get("/api/lightning/world",worldLightning(path.join(root,".local","lightning")));
@@ -92,14 +109,14 @@ app.post("/api/models/service/:action",async(req,res)=>{
   const {config,key}=req.body || {};
   if (!validChatModel(config) || !config.provider || config.provider==="native") {res.status(400).json({error:"请核对模型服务地址。"});return;}
   if(req.params.action==="key" && typeof key==="string" && key.trim() && key.length<8192 && !/[\r\n]/.test(key)){
-    setServiceKey(config,key.trim());res.json({ok:true});return;
+    modelSettings.setServiceKey(config,key.trim());res.json({ok:true});return;
   }
   if(req.params.action!=="list"){res.status(400).json({error:"无效的服务设置。"});return;}
-  try {res.set("Cache-Control","no-store").json({models:await serviceModels(config)});}
+  try {res.set("Cache-Control","no-store").json({models:await modelSettings.serviceModels(config)});}
   catch(err){res.status(502).json({error:err instanceof Error?err.message:"无法读取模型清单。"});}
 });
 app.get("/api/models/deepseek/tools", (_req,res) => res.set("Cache-Control","no-store").json({
-  configured:!!deepSeekKey(),
+  configured:!!modelSettings.deepSeekKey(),
   defaults:{search:process.env.ONEEARTH_DEEPSEEK_SEARCH==="true",fetch:process.env.ONEEARTH_DEEPSEEK_FETCH==="true"},
 }));
 app.get("/api/models/:executor",async(req,res)=>{
@@ -116,7 +133,7 @@ app.post("/api/models/test",async(req,res)=>{
   try {
     const token="OneEarth-"+randomUUID().slice(0,8);
     const start=Date.now();
-    const reply=await runExecutor(config,"Reply with exactly this text: "+token,controller.signal);
+    const reply=await runModelTest(config,"Reply with exactly this text: "+token,controller.signal);
     if(!reply.includes(token))throw Error("执行器已响应，但回复未通过连接校验。");
     res.json({elapsedMs:Date.now()-start});
   } catch(err){if(!controller.signal.aborted)res.status(502).json({error:err instanceof Error?err.message:"连接失败。"});}
@@ -129,19 +146,13 @@ app.use(["/grid-data", "/s2-data"], (_req, res) =>
 app.use("/api", (_req, res) =>
   res.status(404).json({ error: "未找到对应接口。" }),
 );
-if (process.env.NODE_ENV === "production") {
+if (!vite) {
   app.use("/assets", staticAssets(path.join(distDir, "assets")));
   app.use(express.static(distDir));
   app.get("/{*path}", (_req, res) =>
     res.sendFile(path.join(distDir, "index.html")),
   );
 } else {
-  const { createServer } = await import("vite");
-  const vite = await createServer({
-    root,
-    server: { middlewareMode: true },
-    appType: "spa",
-  });
   app.use(vite.middlewares);
 }
 app.use(
@@ -160,15 +171,12 @@ app.use(
     });
   },
 );
-const port = Number(process.env.PORT || 5274);
-const server = app.listen(port, host, () => {
-  console.log("OneEarth app http://" + (host.includes(":") ? `[${host}]` : host) + ":" + port);
-  if(lan){
-    const lanServer=app.listen(port,lan.address,()=>console.log("OneEarth LAN http://"+lan.address+":"+port));
-    lanServer.on("error",(error)=>console.error("OneEarth LAN: "+error.message));
-  }else if(lanInterface)console.warn("OneEarth LAN: 指定网络接口当前没有唯一可用的私有 IPv4 地址。");
-});
-server.on("error", (error) => {
-  console.error(error.message);
-  process.exitCode = 1;
+if(lanInterface&&!lan)console.warn("OneEarth LAN: 指定网络接口当前没有唯一可用的私有 IPv4 地址。");
+await serveHttp([
+  ...(runtime?[{app:runtime.compatibility,host:"127.0.0.1",port:runtimePort,label:"OneEarth runtime compatibility"}]:[]),
+  {app,host,port,label:"OneEarth workbench"},
+  ...(lan?[{app,host:lan.address,port,label:"OneEarth LAN",optional:true}]:[]),
+], {
+  async stopAccepting() { await Promise.all([runtime?.stopAccepting(),vite?.close()]); },
+  async close() { await runtime?.close(); },
 });

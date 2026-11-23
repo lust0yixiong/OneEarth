@@ -1,4 +1,4 @@
-import type {Express} from "express";
+import type {Router} from "express";
 import type {PostgresChatMessages} from "./postgres-chat-messages";
 import {submissionFingerprint} from "./postgres-chat-messages";
 import {requestPerformance, type ExecutorTiming} from "./request-performance";
@@ -11,7 +11,7 @@ export type ChatPreparation = {error: string} | {kind: "research"; checkpoint?: 
 
 const interrupted = {error: "服务中断了本轮消息。请重新发送以继续。", code: "chat_interrupted"};
 
-export async function runtimeChatChannel(app: Express, tasks: TaskStore & {chat: PostgresChatMessages},
+export async function runtimeChatChannel(app: Router, tasks: TaskStore & {chat: PostgresChatMessages},
   prepare: (id: string, input: unknown) => Promise<ChatPreparation>) {
   const {chat} = tasks;
   await chat.acquire();

@@ -34,6 +34,16 @@ function validPrivate(directory){
   const stat=statSync(directory);
   if(stat.uid!==process.getuid()||(stat.mode&0o077)!==0)throw Error("OneEarth 独立配置须仅当前用户可访问。");
 }
+function appEnvironment(){
+  const current=file(labels.app);
+  if(!existsSync(current))return {};
+  validPrivate(current);
+  const text=execFileSync("/usr/bin/plutil",["-extract","EnvironmentVariables","json","-o","-",current],{encoding:"utf8"});
+  const values=JSON.parse(text);
+  if(!values || Array.isArray(values) || Object.values(values).some(value=>typeof value!=="string"))
+    throw Error("现有 OneEarth 启动环境格式无效。");
+  return values;
+}
 function applicationPath(candidate){
   if(!candidate||!path.isAbsolute(candidate))throw Error("发布目录和数据目录须为绝对路径。");
   const real=realpathSync(candidate);
@@ -109,6 +119,7 @@ if(action==="install"){
       ") (literal "+JSON.stringify(legacyAgent)+"))",
   ].join("\n");
   const app=["/usr/bin/sandbox-exec","-p",profile,node,"--env-file="+config,path.join(release,"scripts/launch.mjs")];
+  const previousAppEnvironment=appEnvironment();
   const haveStorage=!!registered(labels.db)&&!!registered(labels.objects);
   if(!haveStorage){
     // Adopt only this installation's previously initiated PostgreSQL and Garage.
@@ -122,7 +133,7 @@ if(action==="install"){
   await portsMatch([pg,s3],true);
   stop(labels.app);
   await portsMatch(appPorts,false);
-  writeJob(labels.app,release,app,{...env,ONEEARTH_PORT:"5474",ONEEARTH_DISCOVERY_PORT:"5475",
+  writeJob(labels.app,release,app,{...previousAppEnvironment,...env,ONEEARTH_PORT:"5474",ONEEARTH_DISCOVERY_PORT:"5475",
     ONEEARTH_SPATIAL_PORT:"5476",ONEEARTH_RUNTIME_PORT:"5477",ONEEARTH_DATA_DIR:data,ONEEARTH_HOST:"127.0.0.1"});
   await boot(labels.app);
 }else if(action==="restart"){

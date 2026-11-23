@@ -12,15 +12,23 @@ export interface ExecutorOptions {
   outputSchema?: Record<string, unknown>;
 }
 
-let active=0;
-export async function runExecutor(config:ChatModel,prompt:string,signal:AbortSignal,options?:ExecutorOptions) {
+export function createModelExecutor(configure = configureService) {
+  const slots = {active:0};
+  return (config:ChatModel,prompt:string,signal:AbortSignal,options?:ExecutorOptions) =>
+    executeModel(config,prompt,signal,options,configure,slots);
+}
+
+export const runExecutor = createModelExecutor();
+
+async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,options:ExecutorOptions|undefined,
+  configure:typeof configureService,slots:{active:number}) {
   if(options?.webSearch && (config.executor!=="codex" || (config.provider && config.provider!=="native")))
     throw Error("当前执行器未接入原生联网检索。");
   config=resolvedChatModel(config);
-  if(active>=10) throw Error("模型执行器正在处理其他请求，请稍后重试。");
-  const timing:ExecutorTiming={kind:'model-executor',model:config.model,executor:config.executor,startedAt:Date.now(),activeAtStart:active,localQueueMs:0,
+  if(slots.active>=10) throw Error("模型执行器正在处理其他请求，请稍后重试。");
+  const timing:ExecutorTiming={kind:'model-executor',model:config.model,executor:config.executor,startedAt:Date.now(),activeAtStart:slots.active,localQueueMs:0,
     elapsedMs:0,promptBytes:Buffer.byteLength(prompt),outputBytes:0};
-  active++;
+  slots.active++;
   let dir:string|undefined;
   try {
     dir=await mkdtemp(path.join(tmpdir(),"oneearth-chat-"));
@@ -37,7 +45,7 @@ export async function runExecutor(config:ChatModel,prompt:string,signal:AbortSig
     for (const [name,value] of Object.entries(process.env)) {
       if (/^(?:HOME|PATH|SHELL|USER|LOGNAME|TMPDIR|LANG|LC_[A-Z_]+|XDG_[A-Z_]+|CODEX_HOME|CLAUDE_CONFIG_DIR|OPENAI_API_KEY|ANTHROPIC_[A-Z_]+|HTTPS?_PROXY|NO_PROXY|NODE_EXTRA_CA_CERTS)$/.test(name)) env[name]=value;
     }
-    configureService(config,args,env);
+    configure(config,args,env);
     if(config.provider && config.provider!=="native" && !config.model)throw Error("请选择模型服务提供的模型。");
     if(config.model) args.push("--model",config.model);
     if(config.executor==="codex") args.push("-");
@@ -58,5 +66,5 @@ export async function runExecutor(config:ChatModel,prompt:string,signal:AbortSig
       });
       child.stdin.end(prompt);
     });
-  } finally {timing.elapsedMs=Date.now()-timing.startedAt;requestPerformance.getStore()?.push(timing);active--; if(dir) await rm(dir,{recursive:true,force:true});}
+  } finally {timing.elapsedMs=Date.now()-timing.startedAt;requestPerformance.getStore()?.push(timing);slots.active--; if(dir) await rm(dir,{recursive:true,force:true});}
 }
