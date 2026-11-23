@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { isForestDate, type HainaForestManifest } from "../domain/regional-cases";
+import { isForestDate, type HainaForestFrame, type HainaForestManifest } from "../domain/regional-cases";
+import {forestFrameManifestPath} from "../domain/workspace-view-context";
+import {readWorkspacePublication} from "./workspace-publication-client";
 import type { ForestImage } from "../globe/regional-layer";
 
-const base = "/visualizations/haina/1846764";
+const base = forestFrameManifestPath.slice(0,-"/manifest.json".length);
+type ForestPublication={manifest:HainaForestManifest;revision?:string};
 function checkedManifest(data: HainaForestManifest) {
   if (data.datasetId !== "haina:1846764" || !Array.isArray(data.frames) || !data.frames.length ||
     data.grid?.width !== 370 || data.grid?.height !== 303 || data.grid.bounds?.length !== 4 ||
@@ -17,27 +20,34 @@ function checkedManifest(data: HainaForestManifest) {
 
 export function useForestLayer(layer: { frame: number; date?: string } | null, playing: boolean) {
   const active = layer !== null;
-  const [manifest, setManifest] = useState<HainaForestManifest | null>(null);
+  const [publication, setPublication] = useState<ForestPublication | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState(false);
-  const [imageError, setImageError] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState<{ route: string; image: ForestImage } | null>(null);
+  const [imageError, setImageError] = useState<HainaForestFrame | null>(null);
+  const [loaded, setLoaded] = useState<{ frame: HainaForestFrame; image: ForestImage } | null>(null);
   const [catalogAttempt, retryCatalog] = useState(0);
   const [imageAttempt, retryImage] = useState(0);
   useEffect(() => {
-    if (!active) { setManifest(null); return; }
+    if (!active) { setPublication(null); setCatalogLoading(false); setCatalogError(false); return; }
     const request = new AbortController();
-    setCatalogError(false);
-    void fetch(base + "/manifest.json", { signal: request.signal, cache: "no-cache" })
+    setCatalogLoading(true);
+    void fetch(forestFrameManifestPath,{signal:AbortSignal.any([request.signal,AbortSignal.timeout(10000)]),cache:"no-cache"})
       .then(async response => {
         if (!response.ok) throw Error("森林日期目录读取失败");
-        const data = checkedManifest(await response.json());
-        if (!request.signal.aborted) setManifest(data);
-      }).catch(() => { if (!request.signal.aborted) setCatalogError(true); });
+        const {bytes,revision}=await readWorkspacePublication(response);
+        const manifest=checkedManifest(JSON.parse(new TextDecoder().decode(bytes)));
+        if (request.signal.aborted) return;
+        setPublication(current=>current?.revision && current.revision===revision ? current : {manifest,revision});
+        setCatalogError(false);
+      }).catch(() => { if (!request.signal.aborted) setCatalogError(true); })
+      .finally(()=>{if (!request.signal.aborted) setCatalogLoading(false);});
     return () => request.abort();
   }, [active, catalogAttempt]);
+  const manifest=publication?.manifest ?? null;
+  const dateIndices=useMemo(()=>new Map(manifest?.frames.map((frame,index)=>[frame.date,index])),[manifest]);
   const date = layer && manifest ?
     (layer.date ?? manifest.defaultDate ?? manifest.frames[layer.frame]?.date ?? manifest.frames[0].date) : "";
-  const index = useMemo(() => manifest?.frames.findIndex(frame => frame.date === date) ?? -1, [manifest, date]);
+  const index = dateIndices.get(date) ?? -1;
   const frame = manifest?.frames[index] ?? null;
   useEffect(() => {
     setLoaded(null);
@@ -58,14 +68,14 @@ export function useForestLayer(layer: { frame: number; date?: string } | null, p
           const context = canvas.getContext("2d")!;
           context.drawImage(bitmap, 0, 0);
           const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
-          setLoaded({ route: frame.image, image: { pixels: data, width: canvas.width, height: canvas.height, bounds: manifest.grid.bounds } });
+          setLoaded({ frame, image: { pixels: data, width: canvas.width, height: canvas.height, bounds: manifest.grid.bounds } });
         } finally {
           bitmap.close();
         }
-      }).catch(() => { if (!request.signal.aborted) setImageError(frame.image); });
+      }).catch(() => { if (!request.signal.aborted) setImageError(frame); });
     return () => request.abort();
   }, [frame, manifest, imageAttempt]);
-  const image = loaded && frame?.image === loaded.route ? loaded.image : null;
+  const image = loaded?.frame===frame ? loaded?.image ?? null : null;
   const next = playing && image && index >= 0 ? manifest?.frames[index + 1] : undefined;
   useEffect(() => {
     if (!next) return;
@@ -76,6 +86,7 @@ export function useForestLayer(layer: { frame: number; date?: string } | null, p
     }).catch(() => {});
     return () => request.abort();
   }, [next]);
-  return { manifest, date, frame, index, image, catalogError, imageError: frame !== null && frame.image === imageError,
+  return { manifest, date, frame, index, image, dateIndices, revision:catalogError ? undefined : publication?.revision,
+    catalogLoading, catalogError, imageError:frame!==null && frame===imageError,
     retryCatalog: () => retryCatalog(attempt => attempt + 1), retryImage: () => retryImage(attempt => attempt + 1) };
 }

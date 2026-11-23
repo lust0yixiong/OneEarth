@@ -1,3 +1,4 @@
+import {workspaceEffectActivity} from "./workspace-effect";
 import {availableChatOperations, chatCandidateBatch, chatCandidateItems, chatCandidateKey, saveChatResearchList} from "./chat-workspace-operations";
 import {validWorkspaceOperationKind, workspaceCandidateOperationAllowed} from "./workspace-operations";
 import {projectWorkspaceView, workspaceActionState, type WorkspaceSurfaceReading} from "./workspace-view-projection";
@@ -507,10 +508,12 @@ async function loadInitialSession(): Promise<State> {
         if(!cachedResearch){
           const stored=await readSession(saved.conversationId);
           state.clarificationReply=stored?.workspace.clarificationReply ?? null;
+          const proposed=reply.workspaceAction ?? reply.workspaceOperation;
           const messages:Message[]=[
             {id:saved.turnId,role:"user",text:saved.question,time:saved.created},
             {id:saved.id,role:"assistant",text:reply.message,time:saved.updated,replyTo:saved.turnId,
-              chatMessage:true,...(reply.workspaceAction || reply.workspaceOperation ? {historicalReply:true} : {}),
+              chatMessage:true,...(proposed ? {historicalReply:true,
+                activity:workspaceEffectActivity(saved.id,proposed,"proposed",reply.message,"实际应用状态以原浏览器保存的回执为准。")} : {}),
               workspacePending:reply.workspacePending,researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
               conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
               answerNotes:reply.answerNotes,runTrace:reply.runTrace,researchRegion:reply.researchRegion,
@@ -1283,7 +1286,7 @@ function useWorkspaceValue(initialState: State) {
     }
   },[publishChatProgress]);
   const executeDiscovery = useCallback(
-    async (attempt: DiscoveryAttempt, retrying: boolean, saved?: ChatDelivery) => {
+    async (attempt: DiscoveryAttempt, retrying: boolean, saved?: ChatDelivery, restoring=false) => {
       if ([...requests.current.values()].some(({progress})=>progress.userMessageId===attempt.userMessageId)) return;
       const q = attempt.query;
       const current = latest.current;
@@ -1371,7 +1374,7 @@ function useWorkspaceValue(initialState: State) {
           && requestWorkspaceKey(ownCamera?{...now,camera:current.camera}:now)===attempt.workspaceKey;
       };
       const receiveRegion=(region:ResearchRegion|null)=>{
-        if(regionReceived || !isCurrent())return;
+        if(regionReceived || !isCurrent() || restoring)return;
         regionReceived=true;
         if(!workspaceCurrent())return;
         const now=latest.current,previous=now.researchRegion;
@@ -1412,6 +1415,13 @@ function useWorkspaceValue(initialState: State) {
           r = await receive();
         }
         if (!isCurrent()) return;
+        const proposed=r.workspaceAction ?? r.workspaceOperation;
+        if (proposed && restoring) {
+          const message="已接回原操作记录。本次恢复未执行操作。";
+          await complete(message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,historicalReply:true,
+            activity:workspaceEffectActivity(delivery.id,proposed,"not-applied",r.message,message)});
+          return;
+        }
         if (r.workspaceOperation !== undefined) {
           const now=latest.current;
           const question=now.messages.find(message=>message.id===attempt.userMessageId);
@@ -1424,7 +1434,7 @@ function useWorkspaceValue(initialState: State) {
           const staleWorkspace=()=>!workspaceCurrent() ||
             workspaceActionState(originalViewport)!==workspaceActionState(projectWorkspaceView(latest.current,surfaceReading.current?.()));
           const staleTarget=!!target && validWorkspaceOperationKind(kind) && attempt.workspaceOperationKeys?.[kind]!==target.key;
-          let stale=staleWorkspace() || staleTarget;
+          let stale=staleWorkspace() || staleTarget,applied=false;
           let message="当前工作台无法应用这项操作。";
           if (!stale && !legacy && operation && "ids" in operation) {
             const {ids,kind}=operation;
@@ -1447,6 +1457,7 @@ function useWorkspaceValue(initialState: State) {
                     patch({inspector:{comparison:comparison(chosen,batch.filters,batch.selection),comparedBatch:{...batch,ids}},evidence:null});
                     message="已打开对照 · "+chosen.map(asset=>asset.title).join("、");
                   }
+                  applied=true;
                 }
               } catch {
                 if (!isCurrent()) return;
@@ -1456,25 +1467,32 @@ function useWorkspaceValue(initialState: State) {
           } else if (!stale && target && !legacy) {
             try {
               if (kind==="open-saved") {
-                patch({view:"discover",search:{...emptySearch,savedOnly:true},inspector:null,evidence:null});
+                patch({view:"discover",search:{...emptySearch,savedOnly:true},listLibraryOpen:false,inspector:null,evidence:null});
+                applied=true;
                 message="已打开收藏。";
               } else if (kind==="open-research-lists") {
                 patch({view:"discover",listLibraryOpen:true,inspector:null,evidence:null,
                   origin:now.view==="earth" ? remember(now) : now.origin});
+                applied=true;
                 message="已打开本浏览器保存的研究清单。";
               } else if (kind==="return-to-results") {
                 leaveDetail();
+                applied=true;
                 message="已返回进入前的视图并恢复原筛选。";
               } else if (target.save) {
                 message=saveChatResearchList(delivery.id,target.save,localStorage);
+                applied=true;
                 window.dispatchEvent(new Event("oneearth-list-changed"));
               }
             } catch (error) {
               message=error instanceof Error ? error.message : "暂时无法完成本轮操作。";
             }
           }
-          await complete(stale ? "工作台已变化，本轮操作未应用。" : message,
-            {id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,workspacePending:r.workspacePending,conversationContext:r.conversationContext,
+          if (stale) message="工作台已变化，本轮操作未应用。";
+          await complete(message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,
+            workspacePending:r.workspacePending,conversationContext:r.conversationContext,
+            activity:workspaceEffectActivity(delivery.id,r.workspaceOperation,applied&&!stale?"applied":"not-applied",r.message,
+              applied && kind==="open-saved" ? "已提交收藏视图与仅收藏筛选。目录读取状态在资料页显示。" : message),
             ...(stale ? {historicalReply:true} : {})});
           return;
         }
@@ -1498,7 +1516,10 @@ function useWorkspaceValue(initialState: State) {
           const message = control && target ? "已将" + control.label + "切换到「" + target.label + "」。"
             : stale ? "工作台已变化，本轮操作未应用。"
             : "当前视图无法应用这项操作。";
-          await complete(message, {id:delivery.id, replyTo:attempt.userMessageId,
+          const raster=action?.layerId==="forest" || action?.layerId==="c40";
+          await complete(target && raster ? message+" 图层载入状态见球面。" : message, {id:delivery.id, replyTo:attempt.userMessageId,
+            activity:workspaceEffectActivity(delivery.id,action,target?"applied":"not-applied",r.message,
+              target ? "已向浏览器控件提交「"+target.label+"」。"+(raster?"图层载入结果独立显示。":"") : message),
             runTrace:r.runTrace, workspacePending:r.workspacePending, ...(stale ? {historicalReply:true} : {}),
             researchIntent:r.researchIntent, conversationContext:r.conversationContext,
             conversationEvidence:r.conversationEvidence, conversationAssertionEvidence:r.conversationAssertionEvidence});
@@ -1687,7 +1708,7 @@ function useWorkspaceValue(initialState: State) {
           next.origin = s.origin || remember(s);
         if (s.visualization && r.visualization === null && s.origin)
           Object.assign(next, s.origin, { origin: null, evidence: null });
-        const historicalReply = !workspaceCurrent();
+        const historicalReply = restoring || !workspaceCurrent();
         const effective = { ...s, ...next };
         const modelBatch: CandidateSet | undefined = r.modelIds?.length ? {
           title:q, ids:r.modelIds, caseId:r.caseId || s.caseId, filters:answerFilters(s.filters,r.filters),
@@ -1899,7 +1920,7 @@ function useWorkspaceValue(initialState: State) {
         if (answer && !answer.failed) {
           await removeChatDelivery(session, delivery.id);
         } else if (!answer) {
-          void executeDiscovery(delivery.attempt, true, delivery);
+          void executeDiscovery(delivery.attempt, true, delivery, true);
         }
       }
     }
