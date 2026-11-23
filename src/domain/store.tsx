@@ -1,5 +1,5 @@
 import {projectWorkspaceView, workspaceActionState, type WorkspaceSurfaceReading} from "./workspace-view-projection";
-import {authorizesWorkspaceViewAction, workspaceViewActionAllowed} from "./workspace-view-context";
+import {authorizesWorkspaceViewAction, workspaceViewActionAllowed, type WorkspaceViewPublication} from "./workspace-view-context";
 import { canReplyToDiscoveryClarification, discoveryClarificationResult, loadResearchRecord, openTaskEvents } from "./runtime-client";
 import {datasetScope,mergeScope,scopedQuestionContext,scopeDetail,scopeLabel,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
@@ -123,7 +123,7 @@ export interface State {
   search: SearchState;
   overview: "catalog" | "simulation";
   origin: ReturnPoint | null;
-  fieldLayer: {id:RegionalId;frame:number;year?:number} | null;
+  fieldLayer: {id:RegionalId;frame:number;year?:number;city?:string} | null;
   visualization: VisualizationState | null;
   view: View;
   caseId: string | null;
@@ -350,6 +350,10 @@ function initial(sessionId: string, url = new URL(location.href), saved: Record<
   const requestedLayer=url.searchParams.get("viz");
   const fieldId=requestedLayer && Object.hasOwn(globeCases,requestedLayer) ? requestedLayer as RegionalId : undefined;
   const fieldLayer=fieldId && view==="earth" ? {id:fieldId,frame:restore && saved.fieldLayer?.id===fieldId && Number.isInteger(saved.fieldLayer.frame) && saved.fieldLayer.frame>=0 && saved.fieldLayer.frame<layerFrameCount(fieldId)?saved.fieldLayer.frame:globeCases[fieldId].month} : null;
+  if(fieldLayer?.id==="c40"){
+    const city=url.searchParams.get("city") ?? (restore ? saved.fieldLayer?.city : undefined);
+    if(typeof city==="string" && /^[a-z0-9][a-z0-9-]{0,79}$/.test(city))Object.assign(fieldLayer,{city});
+  }
   if(fieldLayer?.id==="rain"){
     const requested=Number(url.searchParams.get("rainYear"));
     const savedYear=restore?saved.fieldLayer?.year:undefined;
@@ -881,13 +885,16 @@ function useWorkspaceValue(initialState: State) {
     else if (state.visualization)
       url.searchParams.set("viz", state.visualization.id);
     else url.searchParams.delete("viz");
+    if(state.view==="earth" && state.fieldLayer?.id==="c40" && state.fieldLayer.city)
+      url.searchParams.set("city",state.fieldLayer.city);
+    else url.searchParams.delete("city");
     if(state.fieldLayer?.id==="rain"){
       if(state.fieldLayer.year!==undefined)url.searchParams.set("rainYear",String(state.fieldLayer.year));
       else url.searchParams.delete("rainYear");
       url.searchParams.set("rainMonth",String(state.fieldLayer.frame+1));
     }else{url.searchParams.delete("rainYear");url.searchParams.delete("rainMonth");}
     history.replaceState({ ...history.state, oneearthSession: state.sessionId, oneearthPath: url.pathname + url.search }, "", url);
-  }, [state.linkStatus, state.sessionId, state.caseId, state.view, state.search.source,state.search.section,state.search.page,state.search.query,state.search.type,state.search.capability,state.search.savedOnly, state.filters.source, state.mapResult, state.dataView, state.visualization,state.fieldLayer?.id,state.fieldLayer?.year,state.fieldLayer?.frame]);
+  }, [state.linkStatus, state.sessionId, state.caseId, state.view, state.search.source,state.search.section,state.search.page,state.search.query,state.search.type,state.search.capability,state.search.savedOnly, state.filters.source, state.mapResult, state.dataView, state.visualization,state.fieldLayer?.id,state.fieldLayer?.year,state.fieldLayer?.frame,state.fieldLayer?.city]);
   useEffect(() => () => request.current?.abort(), []);
   const openCase = useCallback(
     (id: string, need = -1) => {
@@ -1353,11 +1360,15 @@ function useWorkspaceValue(initialState: State) {
           const lastQuestion = latestState.messages.slice().reverse().find(message => message.role === "user");
           const stale = !workspaceCurrent() || workspaceActionState(original) !== workspaceActionState(currentView)
             || (!!lastQuestion && lastQuestion.id !== attempt.userMessageId);
-          const allowed = authorizesWorkspaceViewAction(q) && workspaceViewActionAllowed(original, action)
-            && workspaceViewActionAllowed(currentView, action);
-          const applied = !stale && allowed && surface?.surface === latestState.view && !!surface.applyControl?.(action);
-          const control = applied ? currentView.activeLayer?.controls.find(item => item.id === action.controlId) : undefined;
-          const target = control?.options.find(item => item.id === action.valueId);
+          const isPublishedChoice = (publication:WorkspaceViewPublication, valueId:string) =>
+            !!surface?.resolvePublishedChoice?.(publication, valueId);
+          const allowed = authorizesWorkspaceViewAction(q) && workspaceViewActionAllowed(original, action, isPublishedChoice)
+            && workspaceViewActionAllowed(currentView, action, isPublishedChoice);
+          const control = !stale && allowed && surface?.surface === latestState.view
+            ? currentView.activeLayer?.controls.find(item => item.id === action.controlId) : undefined;
+          const choice = control?.options.find(item => item.id === action.valueId)
+            ?? (control?.publication ? surface?.resolvePublishedChoice?.(control.publication, action.valueId) : undefined);
+          const target = choice && surface?.applyControl?.(action) ? choice : undefined;
           const message = control && target ? "已将" + control.label + "切换到「" + target.label + "」。"
             : stale ? "工作台已变化，本轮操作未应用。"
             : "当前视图无法应用这项操作。";
@@ -1862,7 +1873,7 @@ function useWorkspaceValue(initialState: State) {
       const contextDataset=contextAssetId && assetById.get(contextAssetId)?.datasetId;
       const layerId=(Object.keys(globeCases) as RegionalId[]).find(id=>q.includes(datasetLayers[id]) || q.includes(globeCases[id].title) ||
         ({rain:/全球.*(?:陆地)?降水|GPM.?IMERG|IMERG.*降水|NOAA.?CPC|CPC.*降水/i,rivers:/巴西.*河|GloFAS/i,lightning:/美国.*(?:地闪|闪电)|NLDN/i,forest:/大兴安岭|森林.*嵌入|1846764/i,c40:/C40|landuse|城市.*嵌入|1846639/i})[id]?.test(q)) || (/这份|这个数据|该数据/.test(q) && contextDataset ? regionalForDataset(contextDataset) : undefined);
-      if(layerId && isWorkspaceCommand(q) && /打开|切换|展示|显示|可视化|在球上看/.test(q) && !/能否|哪些|是否|有没有/.test(q)){
+      if(layerId && !(layerId==="c40" && s.fieldLayer?.id==="c40") && isWorkspaceCommand(q) && /打开|切换|展示|显示|可视化|在球上看/.test(q) && !/能否|哪些|是否|有没有/.test(q)){
         add("user",q);openVisualization(layerId);
         add("assistant","已在数据地球打开「"+globeCases[layerId].title+"」。",{candidates:{
           caseId:null,ids:[datasetLayers[layerId]],title:globeCases[layerId].dataset,originKind:"chat",layer:"all",filters:emptyFilters(),selection:null,

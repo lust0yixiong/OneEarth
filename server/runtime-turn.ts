@@ -43,6 +43,7 @@ import { discoverObservations } from "./observation-query";
 import { resolveSceneQuery } from "./earth-search";
 import { discover } from "../src/domain/discovery";
 import {authorizesWorkspaceViewAction,workspaceViewActionAllowed} from "../src/domain/workspace-view-context";
+import {resolveWorkspaceC40Publication} from "./workspace-c40-publication";
 
 export interface RuntimeServices {
   webTools?:RuntimeWebToolAuthority;
@@ -284,11 +285,23 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         throw error;
       }
     }
+    const c40View=context.workspaceView?.activeLayer?.id==="c40";
+    const c40PublicationRequested=c40View&&
+      context.workspaceView?.activeLayer?.controls.some(control=>control.publication?.kind==="c40-cities");
+    const workspaceResolution=clarification?undefined:await resolveWorkspaceC40Publication(context.workspaceView,decision?.dataQuestion||query,signal);
+    if(workspaceResolution){
+      context={...context,workspaceView:workspaceResolution.view};
+      if(c40PublicationRequested)report({id:"workspace-c40-publication",kind:"tool",name:"核对当前已发布城市选项",status:workspaceResolution.issue?"partial":"done",
+        input:JSON.stringify({revision:body.context.workspaceView?.activeLayer?.controls.find(control=>control.id==="city")?.publication?.revision}),
+        output:JSON.stringify({revision:workspaceResolution.proof?.revision,shortlist:workspaceResolution.proof?.ids,
+          matched:workspaceResolution.matches,read:workspaceResolution.read,issue:workspaceResolution.issue})});
+    }
     const prepared = clarification?{plan:{action:"search",evidenceNeed:"discover",goal:clarification.goal,targets:[],
       reason:"研究者明确补充原委托，沿已受理发现身份和等待水位继续。",clarification:null,
       ...turnMetadata(query,{previousResearchIntent:planningIntent,history,conversationContext})} as TurnPlan,retrieval:undefined as import("./data-search").DataSearchResult|undefined}:
       navigation ? navigationTurn(navigation) : await prepareTurn({
       question:decision?.dataQuestion||query, context, history, conversationContext,gridCoverage,
+      workspacePublication:workspaceResolution?.proof,
       ...(internal.observationUnavailable?{observationUnavailable:true as const}:{}),
       previousResearchIntent:planningIntent,confirmedQuestion:decision?.dataQuestion,numbered:selected,
       numberedRead:ref?.kind==="web"?savedReadings.find(read=>read.url===ref.url):undefined,
@@ -400,6 +413,10 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       if(turn.action==="workspace"&&turn.workspaceAction){
         if(!authorizesWorkspaceViewAction(decision?.dataQuestion||query)||!workspaceViewActionAllowed(context.workspaceView,turn.workspaceAction))throw new TurnPlanningFailure();
         const action=turn.workspaceAction,layer=context.workspaceView!.activeLayer!,control=layer.controls.find(c=>c.id===action.controlId)!;
+        if(action.publicationRevision&&!await workspaceResolution?.revalidate?.(signal)){
+          report({id:"workspace-c40-publication-final",kind:"tool",name:"重验城市选择的发布修订",input:action.publicationRevision,status:"partial",output:"目录已变化或暂不可用，未交付切换动作。"});
+          return complete({message:"城市目录已变化或暂不可用，本轮未切换城市。请刷新当前目录后再选择。",clarification:true,...continuity});
+        }
         const choice=control.options.find(c=>c.id===action.valueId)!;
         report({id:"workspace-action",kind:"tool",name:"确认当前界面控件目标",input:JSON.stringify(action),status:"done",
           output:JSON.stringify({validated:true,application:"交由网页核对发问时状态后应用"})});
@@ -485,8 +502,20 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         const operationKeys=["camera","gridSystem","filters","clearSelection","view","selectCenter","previewNeed","inspectId","dataView","visualization","catalogQuery","mesh","layer","researchRegion"];
         const isActionable=()=>operationKeys.some(key=>Object.hasOwn(operation,key));
         let actionable=isActionable(),navigationHandled=false;
-        if(!actionable){
-          const navigation=navigationTarget(targetQuery,!!context.workspaceView);
+        const requestedNavigation=navigationTarget(targetQuery,!!context.workspaceView);
+        const menuTarget=requestedNavigation&&["切换到","切到"].includes(requestedNavigation.verb);
+        const explicitCameraNavigation=requestedNavigation&&!menuTarget;
+        const localCameraOperation=operation.camera?.reason==="按对话调整视野"||operation.view||operation.gridSystem||operation.visualization||operation.dataView;
+        if(c40View&&menuTarget&&!localCameraOperation&&
+          !["inspectId","previewNeed","selectCenter","catalogQuery","mesh","layer"].some(key=>Object.hasOwn(operation,key))){
+          // A failed menu selection must not reuse a research case's place filter.
+          operation={message:"当前目录没有确定的城市选择。"};actionable=false;
+        }
+        if(c40View&&!explicitCameraNavigation&&operation.camera&&!localCameraOperation){
+          delete operation.camera;delete operation.fly;delete operation.clearSelection;delete operation.placeLabel;actionable=isActionable();
+        }
+        if(!actionable&&(!c40View||explicitCameraNavigation)){
+          const navigation=requestedNavigation;
           if(navigation){
             navigationHandled=true;
             try{
@@ -504,7 +533,9 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         }
         report({id:"workspace-action",kind:"tool",name:"执行当前界面操作",input:targetQuery,status:actionable?"done":"partial",
           output:actionable||navigationHandled?operation.message:"本轮未识别到可执行的界面变更。"});
-        return complete({...operation,...(!actionable&&!navigationHandled?{message:"本轮没有执行界面切换。可点击引用打开预览，或明确指定要切换的网格、时段或图层。"}:{}),...continuity});
+        return complete({...operation,...(!actionable&&!navigationHandled?c40View
+          ?{message:(workspaceResolution?.issue||"没有确定当前界面中的可选城市")+"。本轮未切换城市；请明确目录中的城市名称或刷新后选择。",clarification:true}
+          :{message:"本轮没有执行界面切换。可点击引用打开预览，或明确指定要切换的网格、时段或图层。"}:{}),...continuity});
       }
       let summary="本轮只处理已指定对象和已有内容，没有执行数据发现检索。";
       const priorEvidence=context.citation||context.attachedScope?.some(item=>item.kind!=="reference")

@@ -13,13 +13,14 @@ const extraRequest=/(?:然后|接着|并且|帮我|帮忙|分析|研究|查看|�
 const pronouns=/^(?:那边|那里|这儿|这里|这片|那片|这个|那个|这|那)$/u;
 
 export function navigationTarget(query:string,plannedWorkspace=false):NavigationTarget|null{
-  const text=query.trim().replace(/[。.!！?？\s]+$/u,"");
+  const stripped=query.trim().replace(/[。.!！?？\s]+$/u,"");
+  const text=plannedWorkspace?stripped.replace(/[，,；;]\s*(?:保持|保留)(?:当前|现有|原有)?图层(?:不变)?$/u,""):stripped;
   if(/[？?]/u.test(text)||/(?:哪些|什么|怎么|为什么|是否|多少)/u.test(text))return null;
   const english=text.match(englishNavigation);
   // A semantic planner has already chosen a geographic workspace operation.
   // Legacy clients retain their explicit-navigation shortcut and grammar.
   const match=english?null:text.match(navigationPattern)||
-    (plannedWorkspace?text.match(/^(?:(?:请|麻烦|帮我)\s*)*(?:把|将)?(?:地图|地球|视图|视角)?\s*(切换到)\s*(.+)$/u):null);
+    (plannedWorkspace?text.match(/^(?:(?:请|麻烦|帮我)\s*)*(?:把|将)?(?:地图|地球|视图|视角)?\s*(切换到|切到)\s*(.+)$/u):null);
   const raw=english?english[1]:match?.[2];
   if(!raw)return null;
   const place=(plannedWorkspace?raw.replace(/\s*(?:看看|看一下|看一看|瞧瞧|吧|一下)$/u,""):raw).trim().replace(/^[「『“‘"']+|[」』”‘"']+$/gu,"").trim();

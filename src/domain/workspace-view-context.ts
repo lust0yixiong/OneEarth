@@ -1,9 +1,16 @@
 import type { Camera, Coordinate, Filters, GridSystem, MapLayer, View } from "./types";
 
 export type WorkspaceViewChoice = {id:string;label:string};
+export const c40CityManifestPath="/visualizations/haina/1846639/manifest.json";
+export type WorkspaceViewPublication = {kind:"c40-cities";revision:string;total:number};
+
+export function c40CityPublicationRevision(etag:string|null|undefined) {
+  return etag?.match(/^"([0-9a-f]{64})"$/)?.[1];
+}
+
 export type WorkspaceViewDisplayFact = {label:string;value:string};
 export type WorkspaceViewControl = {
-  id:string;label:string;current:WorkspaceViewChoice;options:WorkspaceViewChoice[];ordered:boolean;
+  id:string;label:string;current:WorkspaceViewChoice;options:WorkspaceViewChoice[];ordered:boolean;publication?:WorkspaceViewPublication;
 };
 
 export type WorkspaceViewContext = {
@@ -33,7 +40,9 @@ export type WorkspaceViewContext = {
   catalogue?: {section?:string;type?:string;source?:string;capability?:string;page?:number;savedOnly?:boolean};
 };
 
-export type WorkspaceViewAction = {kind:"set-control";layerId:string;controlId:string;valueId:string};
+export type WorkspaceViewAction = {
+  kind:"set-control";layerId:string;controlId:string;valueId:string;publicationRevision?:string;
+};
 
 type Fields = Record<string,unknown>;
 function object(value:unknown, keys:string[]):value is Fields {
@@ -81,12 +90,20 @@ function mapContext(v:unknown) {
 function choice(v:unknown):v is WorkspaceViewChoice {
   return object(v,["id","label"])&&id(v.id)&&label(v.label);
 }
+function publicationRevision(value:unknown):value is string {
+  return typeof value==="string"&&/^[0-9a-f]{64}$/.test(value);
+}
+function publication(v:unknown):v is WorkspaceViewPublication {
+  return object(v,["kind","revision","total"])&&v.kind==="c40-cities"&&
+    publicationRevision(v.revision)&&integer(v.total,1,10000);
+}
 function control(v:unknown):v is WorkspaceViewControl {
-  if(!object(v,["id","label","current","options","ordered"])||!id(v.id)||!label(v.label)||
+  if(!object(v,["id","label","current","options","ordered","publication"])||!id(v.id)||!label(v.label)||
       !choice(v.current)||typeof v.ordered!=="boolean"||!Array.isArray(v.options)||v.options.length>36||!v.options.every(choice))
     return false;
   const current=v.current;
-  return new Set(v.options.map(option=>option.id)).size===v.options.length&&
+  return (v.publication===undefined||publication(v.publication)&&v.options.length>0&&v.options.length<=v.publication.total)&&
+    new Set(v.options.map(option=>option.id)).size===v.options.length&&
     (!v.options.length||v.options.some(option=>option.id===current.id&&option.label===current.label));
 }
 function displayFacts(v:unknown) {
@@ -96,7 +113,8 @@ function displayFacts(v:unknown) {
 function activeLayer(v:unknown) {
   return object(v,["id","title","datasetId","status","controls","display"])&&id(v.id)&&label(v.title)&&optional(v.datasetId,id)&&optional(v.display,displayFacts)&&
     member(v.status,["ready","loading","unavailable"])&&Array.isArray(v.controls)&&v.controls.length<=8&&
-    v.controls.every(control)&&new Set(v.controls.map(item=>item.id)).size===v.controls.length&&
+    v.controls.every(control)&&v.controls.every(item=>!item.publication||v.id==="c40"&&item.id==="city")&&
+    new Set(v.controls.map(item=>item.id)).size===v.controls.length&&
     (v.status==="ready"||v.controls.every(item=>!item.options.length));
 }
 function focus(v:unknown) {
@@ -122,12 +140,16 @@ export function validWorkspaceViewContext(value:unknown):value is WorkspaceViewC
 }
 
 /** Bind the model's absolute selection to the interface that exposed that choice. */
-export function workspaceViewActionAllowed(view:WorkspaceViewContext|undefined, action:unknown):action is WorkspaceViewAction {
-  if(!object(action,["kind","layerId","controlId","valueId"])||action.kind!=="set-control"||
-      !id(action.layerId)||!id(action.controlId)||!id(action.valueId))return false;
+export function workspaceViewActionAllowed(view:WorkspaceViewContext|undefined, action:unknown,
+  publishedChoice?: (publication:WorkspaceViewPublication,valueId:string)=>boolean):action is WorkspaceViewAction {
+  if(!object(action,["kind","layerId","controlId","valueId","publicationRevision"])||action.kind!=="set-control"||
+      !id(action.layerId)||!id(action.controlId)||!id(action.valueId)||
+      !optional(action.publicationRevision,publicationRevision))return false;
   const layer=view?.activeLayer;
+  const valueId=action.valueId;
   return layer?.status==="ready"&&layer.id===action.layerId&&layer.controls.some(item=>
-    item.id===action.controlId&&item.options.some(option=>option.id===action.valueId));
+    item.id===action.controlId&&item.publication?.revision===action.publicationRevision&&
+    (item.options.some(option=>option.id===valueId)||!!item.publication&&publishedChoice?.(item.publication,valueId)===true));
 }
 
 /** Confirm permission for a UI change after the planner identifies its target. */

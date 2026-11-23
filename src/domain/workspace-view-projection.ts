@@ -4,7 +4,7 @@ import {assetById} from "./datasets";
 import {datasetLayers, globeCases} from "./regional-cases";
 import type {State} from "./store";
 import type {Camera, View} from "./types";
-import type {WorkspaceViewAction, WorkspaceViewContext} from "./workspace-view-context";
+import type {WorkspaceViewAction, WorkspaceViewChoice, WorkspaceViewContext, WorkspaceViewPublication} from "./workspace-view-context";
 
 export type WorkspaceSurfaceReading = {
   surface: View;
@@ -15,6 +15,7 @@ export type WorkspaceSurfaceReading = {
   candidates?: WorkspaceViewContext["candidates"];
   display?: WorkspaceViewContext["display"];
   applyControl?: (action: WorkspaceViewAction) => boolean;
+  resolvePublishedChoice?: (publication:WorkspaceViewPublication, valueId:string) => WorkspaceViewChoice | undefined;
 };
 
 const clean = (value: string | undefined, max: number) =>

@@ -3,7 +3,7 @@ import type {RainCatalog} from "../domain/rainfall";
 import {geoEquirectangular,geoPath,type GeoProjection} from "d3-geo";
 import {feature} from "topojson-client";
 import atlas from "world-atlas/land-110m.json";
-import {globeCases,hainaC40Manifest,hainaForestManifest,type C40City,type C40Manifest,type HainaForestManifest,type RegionalId,type RegionalData,type XY} from "../domain/regional-cases";
+import {globeCases,hainaForestManifest,type HainaForestManifest,type RegionalId,type RegionalData,type XY} from "../domain/regional-cases";
 const radians=Math.PI/180;
 const land=feature(atlas as any,(atlas as any).objects.land);
 export const palettes={
@@ -28,27 +28,11 @@ function basemap(){
 }
 
 export type ForestImage={pixels:Uint8ClampedArray;width:number;height:number;bounds:[number,number,number,number]};
-export type FieldData={rain:RainTiles|null;data:RegionalData|null;forest?:{manifest:HainaForestManifest;images:ForestImage[]};raster?:{manifest:C40Manifest;images:{city:C40City;image:ForestImage}[]}};
-export async function fetchField(id:RegionalId,signal:AbortSignal,year?:number,catalog?:RainCatalog):Promise<FieldData>{
+export type FieldData={rain:RainTiles|null;data:RegionalData|null;forest?:{manifest:HainaForestManifest;images:ForestImage[]}};
+export async function fetchField(id:Exclude<RegionalId,"c40">,signal:AbortSignal,year?:number,catalog?:RainCatalog):Promise<FieldData>{
   if(id==="rain"){
     if(!catalog || year===undefined)throw Error("降水发布年月未确定");
     return {rain:await loadRainTiles(signal,year,catalog),data:null};
-  }
-  if(id==="c40"){
-    const manifest=hainaC40Manifest as unknown as C40Manifest;
-    const images=await Promise.all(manifest.cities.map(async city=>{
-      const response=await fetch(city.image,{signal});
-      if(!response.ok)throw Error("C40 嵌入切片暂时无法读取");
-      const bitmap=await createImageBitmap(await response.blob());
-      const canvas=document.createElement("canvas");
-      canvas.width=bitmap.width;canvas.height=bitmap.height;
-      const context=canvas.getContext("2d")!;
-      context.drawImage(bitmap,0,0);bitmap.close();
-      const data=context.getImageData(0,0,canvas.width,canvas.height);
-      return {city,image:{pixels:data.data,width:data.width,height:data.height,bounds:city.bounds}};
-    }));
-    signal.throwIfAborted();
-    return {rain:null,data:null,raster:{manifest,images}};
   }
   if(id==="forest"){
     const manifest=hainaForestManifest as HainaForestManifest;

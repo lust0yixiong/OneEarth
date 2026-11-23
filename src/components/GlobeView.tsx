@@ -8,8 +8,9 @@ import {rainCoverageLabel, refreshRainCatalog, useRainCatalog} from "./use-rain-
 import {useCatalogRevision} from "./use-catalog-revision";
 import {answerEvidence} from "../domain/answer-map";
 import {useFieldData} from "./use-field-data";
-import {datasetLayers,globeCases,layerFrameCount} from "../domain/regional-cases";
-import type {WorkspaceViewAction, WorkspaceViewChoice, WorkspaceViewContext} from "../domain/workspace-view-context";
+import {useC40Layer} from "./use-c40-layer";
+import {datasetLayers,globeCases,layerFrameCount,type C40City} from "../domain/regional-cases";
+import type {WorkspaceViewAction, WorkspaceViewChoice, WorkspaceViewContext, WorkspaceViewPublication} from "../domain/workspace-view-context";
 import {sampleField,palettes} from "../globe/regional-layer";
 import { GridDataPopover } from "./GridDataPopover";
 import {GridHoverOverview} from "./GridHoverOverview";
@@ -60,6 +61,7 @@ import {
 import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Globe,
+  RefreshCw,
   MapPin,
   LocateFixed,
   Plus,
@@ -92,6 +94,15 @@ import {countBand} from "../domain/distribution-heat";
 function layerControl(id: string, label: string, options: WorkspaceViewChoice[], value: string, ordered: boolean) {
   const current = options.find(option => option.id === value);
   return current ? [{id, label, options, current, ordered}] : [];
+}
+
+function c40CameraKey(city:C40City) {
+  return [city.id, ...city.center, city.zoom].join("/");
+}
+
+function c40Flight(city:C40City) {
+  return {id:"c40-"+city.id+"-"+Date.now(), kind:"layer-control" as const,
+    camera:{center:city.center,zoom:city.zoom,reason:"C40 · "+city.name}};
 }
 
 export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; toolsHost?: HTMLElement | null }) {
@@ -161,10 +172,24 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   const forest=forestLayer ? fieldData.field?.forest : undefined;
   const forestMode=!!(forestLayer && forest);
   const c40Layer=layer?.id==="c40" ? layer : null;
-  const c40=c40Layer ? fieldData.field?.raster : undefined;
-  const c40Frame=c40Layer ? c40?.images[c40Layer.frame] : undefined;
-  const c40Mode=!!(c40Layer && c40Frame);
-  const fieldImage=forest?.images[forestLayer?.frame ?? 0] ?? c40Frame?.image ?? null;
+  const c40=useC40Layer(c40Layer);
+  const c40Mode=!!c40Layer;
+  const cameraCity = useRef<string|null>(null);
+  useEffect(()=>{
+    if (!c40Layer) {cameraCity.current=null;return;}
+    const city=c40.city;
+    if (!city) return;
+    const key=c40CameraKey(city);
+    const fly=key!==cameraCity.current;
+    const normalize=(c40Layer.city!==undefined && c40Layer.city!==city.id) ||
+      (c40Layer.city===undefined && c40Layer.frame!==0);
+    cameraCity.current=key;
+    if (fly || normalize) patch({
+      ...(fly?{flight:c40Flight(city)}:{}),
+      ...(normalize?{fieldLayer:{...c40Layer,city:city.id}}:{}),
+    });
+  },[c40Layer,c40.city,patch]);
+  const fieldImage=forest?.images[forestLayer?.frame ?? 0] ?? c40.image;
   const probe=layer && fieldData.field && (fieldData.field.rain || fieldData.field.data) && s.selection ? sampleField(layer.id,layer.frame,fieldData.field,s.selection.point,s.camera.zoom):null;
   const [basemapId,setBasemapId]=useState<BasemapId|null>(()=>{
     try{const stored=localStorage.getItem("oneearth.basemap.v1");return BASEMAPS.some(style=>style.id===stored)?stored as BasemapId:null;}catch{return null;}
@@ -488,13 +513,19 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   };
   const inspectForest = () => inspectDatasetLayer("haina:1846764", "大兴安岭", ["实体数据", "检索词「大兴安岭」"]);
   const inspectC40 = () => inspectDatasetLayer("haina:1846639", "C40", ["实体数据", "检索词「C40」"]);
-  const switchC40City = (index: number) => {
-    if (!c40Layer || !c40) return false;
-    const city = c40.manifest.cities[index];
-    if (!city) return false;
-    patch({fieldLayer: {...c40Layer, frame: index},
-      flight: {id: "c40-" + city.id + "-" + Date.now(), kind:"layer-control", camera: {center: city.center, zoom: city.zoom, reason: "C40 · " + city.name}}});
+  const switchC40City = (id: string) => {
+    const city = c40.cities.get(id);
+    if (!c40Layer || !city) return false;
+    if (c40.city?.id === id) return true;
+    cameraCity.current=c40CameraKey(city);
+    patch({fieldLayer:{...c40Layer,frame:0,city:id},flight:c40Flight(city)});
     return true;
+  };
+  const resolvePublishedChoice = (publication:WorkspaceViewPublication, id:string) => {
+    if (!c40Layer || !c40.revision || publication.revision!==c40.revision ||
+        publication.total!==c40.cities.size) return;
+    const city=c40.cities.get(id);
+    return city ? {id:city.id,label:city.name} : undefined;
   };
   const chooseForestFrame = (frame: number) => {
     if (!forestLayer || !forest?.manifest.frames[frame]) return false;
@@ -530,7 +561,7 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   const applyControl = (action: WorkspaceViewAction) => {
     const {layerId, controlId, valueId} = action;
     if (layerId === "c40" && controlId === "city")
-      return switchC40City(c40?.manifest.cities.findIndex(city => city.id === valueId) ?? -1);
+      return switchC40City(valueId);
     if (layerId === "forest" && controlId === "time")
       return chooseForestFrame(forest?.manifest.frames.findIndex(frame => frame.date === valueId) ?? -1);
     if (layerId === "rain" && controlId === "year") return chooseRainYear(Number(valueId));
@@ -565,19 +596,29 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
           ...layerControl("forecast-hour", "预报时效", time, String(view.forecastHour), true),
         ] : []};
     } else if (layer) {
-      const status = fieldData.field ? "ready" : fieldData.error ||
-        (layer.id === "rain" && (publication.status === "unavailable" || publication.status === "ready" && !rainPeriod))
-        ? "unavailable" : "loading";
+      const status = layer.id === "c40"
+        ? c40.catalogError ? "unavailable" : c40.manifest ? "ready" : "loading"
+        : fieldData.field ? "ready" : fieldData.error ||
+          (layer.id === "rain" && (publication.status === "unavailable" || publication.status === "ready" && !rainPeriod))
+          ? "unavailable" : "loading";
       activeLayer = {id: layer.id, title: globeCases[layer.id].title, datasetId: datasetLayers[layer.id], status, controls: []};
-      if (c40Frame && c40) {
+      if (c40Layer && c40.city && c40.manifest) {
+        const {city,manifest,revision} = c40;
+        const selected=manifest.cities.findIndex(option=>option.id===city.id);
+        const current={id:city.id,label:city.name};
+        const total=manifest.cities.length;
+        const choices=revision ? manifest.cities.slice(Math.max(0,selected-2),selected+3)
+          : total<=36 ? manifest.cities : [];
+        const options=status==="ready" ? choices.map(option=>({id:option.id,label:option.name})) : [];
         activeLayer.display = [
-          {label: "快照日期", value: c40.manifest.snapshot},
+          {label: "快照日期", value: manifest.snapshot},
           ...(matchMedia("(max-width: 600px)").matches ? [] :
-            [{label: "当前城市的多边形中心", value: c40Frame.city.samples.toLocaleString()}]),
+            [{label: "当前城市的多边形中心", value: city.samples.toLocaleString()}]),
+          {label: "城市图层", value: c40.image ? "已显示" : c40.frameError ? "切片载入失败" : "正在加载"},
           {label: "颜色图例", value: "R · PC1，G · PC2，B · PC3"},
         ];
-        activeLayer.controls = layerControl("city", "C40 城市",
-          c40.manifest.cities.map(city => ({id: city.id, label: city.name})), c40Frame.city.id, true);
+        activeLayer.controls = [{id:"city",label:"C40 城市",current,options,ordered:true,
+          ...(revision && options.length ? {publication:{kind:"c40-cities",revision,total}} : {})}];
       } else if (forestLayer && forest) {
         const stages = forest.manifest.frames;
         activeLayer.display = [
@@ -623,7 +664,7 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
         controls: [{id: "content", label: "当前内容", current: {id: detail.kind, label: summary}, options: [], ordered: false}]};
     }
     return {
-      surface: "earth", camera: renderer.current?.currentCamera(), activeLayer, applyControl,
+      surface: "earth", camera: renderer.current?.currentCamera(), activeLayer, applyControl, resolvePublishedChoice,
       display: [{label: "视野中心的界面标注", value: orientation.label},
         ...(!activeLayer && catalogMode ? [{label: "分布方式", value: distributionModes[distributionStyle].label}] : [])],
       ...(gridList && !s.evidence ? {focus:{kind:"batch",title:"网格候选"}, candidates:{count:gridList.ids.length,title:"网格候选"}} : {}),
@@ -673,21 +714,29 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
           <span><i className="forest-channel" style={{background:"#4f9e6d"}}/>G · PC2 {(forest.manifest.embedding.variance[1]*100).toFixed(1)}%</span>
           <span><i className="forest-channel" style={{background:"#4f7fc4"}}/>B · PC3 {(forest.manifest.embedding.variance[2]*100).toFixed(1)}%</span>
           <button className="forest-info-toggle" onClick={inspectForest}><Info size={13}/>数据速览</button>
-        </div> : c40Mode && c40 && c40Frame ? <div className="map-legend forest-legend-bar c40-legend-bar">
+        </div> : c40Mode && c40.manifest && c40.city ? <div className="map-legend forest-legend-bar c40-legend-bar">
           <label className="c40-space c40-city-switch" title={"数据快照 " + c40.manifest.snapshot}>
             <MapPin size={13}/>
-            <select aria-label="C40 城市" value={c40Layer?.frame ?? 0} onChange={e=>switchC40City(Number(e.target.value))}>
-              {c40.manifest.cities.map((city,index)=><option key={city.id} value={index}>{city.name}</option>)}
+            <select aria-label="C40 城市" value={c40.city.id} onChange={e=>switchC40City(e.target.value)}>
+              {c40.manifest.cities.map(city=><option key={city.id} value={city.id}>{city.name}</option>)}
             </select>
             <ChevronDown size={12} className="c40-caret" aria-hidden="true"/>
           </label>
           <span className="c40-space-meta c40-snapshot">{c40.manifest.snapshot}</span>
-          <span className="c40-space-meta c40-count">{c40Frame.city.samples.toLocaleString()} 个多边形中心</span>
+          <span className="c40-space-meta c40-count">{c40.city.samples.toLocaleString()} 个多边形中心</span>
+          <button className="forest-info-toggle" aria-label="刷新 C40 城市目录" title="刷新 C40 城市目录"
+            onClick={c40.refreshCatalog} disabled={c40.catalogLoading}><RefreshCw size={13}/></button>
+          {c40.catalogError && <span className="c40-space-meta" role="status">目录暂未更新</span>}
+          {c40.frameError ? <button className="forest-info-toggle" onClick={c40.retryFrame}>图层载入失败 · 重试</button>
+            : !c40.image && <span className="c40-space-meta" role="status">正在加载城市图层…</span>}
           <span className="c40-separator" aria-hidden="true"/>
           <span><i className="forest-channel" style={{background:"#d64572"}}/>R · PC1</span>
           <span><i className="forest-channel" style={{background:"#4f9e6d"}}/>G · PC2</span>
           <span><i className="forest-channel" style={{background:"#4f7fc4"}}/>B · PC3</span>
           <button className="forest-info-toggle" onClick={inspectC40}><Info size={13}/>数据速览</button>
+        </div> : c40Mode ? <div className="map-legend c40-legend-bar">
+          {c40.catalogError ? <button className="forest-info-toggle" onClick={c40.refreshCatalog}>城市目录载入失败 · 重试</button>
+            : <span className="c40-space-meta" role="status">正在加载 C40 城市目录…</span>}
         </div> : !layer && <div className={"map-legend"+(smoothedMode?" heatmap-legend":"")}>
           {!catalogMode && <span className="legend-color" />}
           <span>

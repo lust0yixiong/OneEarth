@@ -2,47 +2,57 @@ import assert from "node:assert/strict";
 import {chromium} from "playwright-core";
 
 const base=process.env.ONEEARTH_URL||"http://127.0.0.1:5274";
+const manifest=await fetch(base+"/visualizations/haina/1846639/manifest.json").then(r=>{assert.ok(r.ok);return r.json();});
+const cities=new Map(manifest.cities.map(city=>[city.id,city]));
+const initial=cities.get(manifest.defaultCity)||manifest.cities[0];
+const beijing=cities.get("beijing-chn"), guangzhou=cities.get("guangzhou-chn");
+assert.ok(initial&&beijing&&guangzhou,"目录保留已验收的北京、广州");
+const count=city=>city.samples.toLocaleString("en-US")+" 个多边形中心";
 const browser=await chromium.launch({
   executablePath:process.env.CHROME_PATH||"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   headless:true,
   args:["--enable-unsafe-swiftshader"],
 });
 try{
-  const page=await browser.newPage({viewport:{width:1440,height:900}});
+  const page=await browser.newPage({viewport:{width:1440,height:900},locale:"en-US"});
   const errors=[];const loaded=new Set();
   page.on("pageerror",e=>errors.push(e.message));
   page.on("console",m=>{if(m.type()==="error")errors.push(m.text())});
   page.on("response",r=>{
-    if(/\/visualizations\/haina\/1846639\/[a-z]+\.webp$/.test(r.url())&&r.ok())loaded.add(r.url().split("/").at(-1));
+    if(/\/visualizations\/haina\/1846639\/.*\.webp$/.test(r.url())&&r.ok())loaded.add(new URL(r.url()).pathname);
   });
   await page.goto(base+"/?viz=c40",{waitUntil:"networkidle",timeout:90000});
   await page.locator(".c40-legend-bar").waitFor();
   await page.locator("canvas[data-painted]").waitFor();
   await page.waitForTimeout(1500);
-  assert.deepEqual([...loaded].sort(),["beijing.webp","guangzhou.webp","shanghai.webp"],"三个城市 WebP 已读取");
+  assert.deepEqual([...loaded],[initial.image],"首屏只加载默认城市 WebP");
 
-  const city=page.getByLabel("C40 城市");
-  assert.equal(await city.locator("option").count(),3,"城市下拉有三个选项");
-  assert.equal(await city.locator("option:checked").innerText(),"上海");
+  const city=page.getByLabel("C40 城市",{exact:true});
+  assert.equal(await city.locator("option").count(),manifest.cities.length,"城市下拉与发布清单一致");
+  assert.equal(await city.locator("option:checked").innerText(),initial.name);
   const meta=page.locator(".c40-space-meta");
-  assert.match(await meta.nth(0).innerText(),/2026-10-13/);
-  assert.match(await meta.nth(1).innerText(),/162,604 个多边形中心/);
+  assert.equal(await meta.nth(0).innerText(),manifest.snapshot);
+  assert.equal(await meta.nth(1).innerText(),count(initial));
   assert.equal(await page.locator(".globe-timeline").count(),0,"C40 不占一行假时间轴");
   const legend=page.locator(".c40-legend-bar");
   assert.match(await legend.innerText(),/R · PC1/);
   assert.match(await legend.innerText(),/B · PC3/);
 
-  await city.selectOption("1");
-  await page.waitForFunction(()=>document.querySelectorAll(".c40-space-meta")[1]?.textContent?.includes("121,404"));
+  await city.selectOption(beijing.id);
+  await page.waitForFunction(uri=>performance.getEntriesByName(location.origin+uri).length>0,beijing.image);
+  assert.deepEqual([...loaded],[...new Set([initial.image,beijing.image])],"切北京只新增北京图层");
+  await page.waitForFunction(text=>document.querySelector(".c40-count")?.textContent===text,count(beijing));
   assert.equal(await city.locator("option:checked").innerText(),"北京");
-  assert.match(await meta.nth(1).innerText(),/121,404 个多边形中心/);
+  assert.equal(await meta.nth(1).innerText(),count(beijing));
   await page.waitForTimeout(800);
   assert.match(await page.locator(".geographic-context").innerText(),/39\.9[0-9]°N/);
 
-  await city.selectOption("2");
-  await page.waitForFunction(()=>document.querySelectorAll(".c40-space-meta")[1]?.textContent?.includes("95,709"));
+  await city.selectOption(guangzhou.id);
+  await page.waitForFunction(uri=>performance.getEntriesByName(location.origin+uri).length>0,guangzhou.image);
+  assert.deepEqual([...loaded],[...new Set([initial.image,beijing.image,guangzhou.image])],"切广州只新增广州图层");
+  await page.waitForFunction(text=>document.querySelector(".c40-count")?.textContent===text,count(guangzhou));
   assert.equal(await city.locator("option:checked").innerText(),"广州");
-  assert.match(await meta.nth(1).innerText(),/95,709 个多边形中心/);
+  assert.equal(await meta.nth(1).innerText(),count(guangzhou));
 
   assert.equal(await page.locator(".chat-panel").count(),1);
   assert(await page.getByLabel("向 OneEarth 提问",{exact:true}).isVisible(),"Chat 保持展开");
@@ -63,18 +73,18 @@ try{
   const canvas=page.locator("canvas[data-painted]");
   assert.ok(Number(await canvas.getAttribute("data-focus-width"))>100,"相机定位到城市");
   assert.equal(errors.length,0,errors.join("；"));
-  assert.match(page.url(),/\?viz=c40$/);
+  assert.equal(new URL(page.url()).searchParams.get("city"),guangzhou.id);
 
-  const mobile=await browser.newPage({viewport:{width:430,height:900}});
+  const mobile=await browser.newPage({viewport:{width:430,height:900},locale:"en-US"});
   await mobile.goto(base+"/?viz=c40",{waitUntil:"networkidle",timeout:90000});
   await mobile.locator(".c40-legend-bar").waitFor();
   const box=await mobile.locator(".c40-legend-bar").boundingBox();
   assert.ok(box.width<=430,"窄屏图例行不超出视口");
-  assert.equal(await mobile.getByLabel("C40 城市").locator("option").count(),3);
+  assert.equal(await mobile.getByLabel("C40 城市",{exact:true}).locator("option").count(),manifest.cities.length);
   assert.equal(await mobile.locator(".c40-count").isVisible(),false,"窄屏收起计数");
   assert.equal(await mobile.locator(".c40-snapshot").isVisible(),true,"窄屏保留快照日期");
   await mobile.close();
-  console.log("PASS C40 三城市图层：真实下拉切换、图例、数据速览、默认引用、Chat 保持、窄屏");
+  console.log("PASS C40 按城市加载：真实下拉切换、图例、数据速览、默认引用、Chat 保持、窄屏");
 }finally{
   await browser.close();
 }

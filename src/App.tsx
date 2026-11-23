@@ -1,7 +1,7 @@
 import { useState, useEffect, lazy, Suspense } from "react";
 import { SettingsPage } from "./components/SettingsPage";
 import { useDataAccessNavigation } from "./components/use-data-access-navigation";
-import { Globe, Rows3, BookOpen, Settings, X, Info } from "lucide-react";
+import { ArrowLeft, Globe, Rows3, BookOpen, Settings, X, Info } from "lucide-react";
 import { useWorkspace, WorkspaceProvider } from "./domain/store";
 const GlobeView = lazy(() =>
   import("./components/GlobeView").then((m) => ({ default: m.GlobeView })),
@@ -23,6 +23,9 @@ import { EvidenceReader } from "./components/EvidenceReader";
 import { SourcePreviewProvider } from "./components/SourcePreviewHost";
 
 import type { View } from "./domain/types";
+const promoHome = new URL(`http://${location.hostname}:5176/`);
+const fromPromo = Boolean(document.referrer) && new URL(document.referrer).origin === promoHome.origin;
+
 const nav: { id: View; label: string; icon: typeof Globe }[] = [
   { id: "earth", label: "数据地球", icon: Globe },
   { id: "discover", label: "数据触达", icon: Rows3 },
@@ -98,6 +101,10 @@ function Workspace() {
           {resultLink.notice && <small role="status">{resultLink.notice}
             {!resultLink.notice.startsWith("正在") && <button onClick={resultLink.retry}>重试保存链接</button>}
           </small>}
+          {fromPromo && <a className="promo-home-link" href={promoHome.href}>
+            <ArrowLeft size={14} aria-hidden="true" />
+            返回主页
+          </a>}
           <button className="build-info" onClick={() => setAbout(!about)}>
             <span />
             关于 OneEarth

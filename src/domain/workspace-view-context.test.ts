@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { authorizesWorkspaceViewAction, validWorkspaceViewContext, workspaceViewActionAllowed, type WorkspaceViewContext } from "./workspace-view-context";
+import { authorizesWorkspaceViewAction, c40CityPublicationRevision, validWorkspaceViewContext, workspaceViewActionAllowed, type WorkspaceViewContext } from "./workspace-view-context";
 
 const current = {id:"2023-01-15",label:"2023-01-15"};
 const august = {id:"2023-08-15",label:"2023-08-15"};
@@ -42,4 +42,24 @@ test("permission requires a direct UI request independently of a valid target", 
     assert.equal(authorizesWorkspaceViewAction(query),true,query);
   for(const query of ["我现在看的这期是哪年哪月？","把时效改成 F012 和当前有什么区别？","不要切换到上海","我刚才切到上海了","把城市改成上海会怎样","切换到上海，但不要执行"])
     assert.equal(authorizesWorkspaceViewAction(query),false,query);
+});
+
+
+test("published city actions require the same revision and an exact declared choice", () => {
+  const revision="a".repeat(64);
+  const snapshot: WorkspaceViewContext = {
+    version:1,surface:"earth",activeLayer:{id:"c40",title:"C40 城市",status:"ready",
+      controls:[{id:"city",label:"城市",current:{id:"beijing-chn",label:"北京"},
+        options:[{id:"beijing-chn",label:"北京"}],ordered:true,publication:{kind:"c40-cities",revision,total:95}}]},
+  };
+  const move = {kind:"set-control",layerId:"c40",controlId:"city",valueId:"late-city",publicationRevision:revision};
+  const fromDirectory = (source:{revision:string},id:string)=>source.revision===revision&&id==="late-city";
+  assert.equal(c40CityPublicationRevision('"'+revision+'"'),revision);
+  assert.equal(c40CityPublicationRevision('W/"'+revision+'"'),undefined);
+  assert.equal(validWorkspaceViewContext(snapshot),true);
+  assert.equal(workspaceViewActionAllowed(snapshot,move),false);
+  assert.equal(workspaceViewActionAllowed(snapshot,move,fromDirectory),true);
+  assert.equal(workspaceViewActionAllowed(snapshot,{...move,publicationRevision:"b".repeat(64)},fromDirectory),false);
+  assert.equal(workspaceViewActionAllowed(snapshot,{...move,publicationRevision:undefined},fromDirectory),false);
+  assert.equal(workspaceViewActionAllowed(snapshot,{...move,valueId:"not-published"},fromDirectory),false);
 });

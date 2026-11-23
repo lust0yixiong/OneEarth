@@ -36,8 +36,8 @@ export const regionalCases = {
   },
   c40: {
     title:"C40 城市 · landuse 嵌入",dataset:"C40 landuse 嵌入数据集 · 1024 维",period:"2026-10 数据集快照",
-    unit:"嵌入通道",variable:"1024 维 polygon embedding（PCA 三通道）",intro:"上海、北京、广州三个城市的 379,717 个多边形中心，切换城市查看不同的城市嵌入。",
-    method:"海纳数据集 1846639 的上海、北京、广州分片（10+8+6 个 geom2ind 分片），共 379,717 个多边形中心（上海 162,604 / 北京 121,404 / 广州 95,709）。每个 1024 维 int16 向量逐行 L2 归一化，三城市共用一套约 12,000 样本拟合的前三个主成分，并映射为 R/G/B；点为多边形投影中心，不表示完整轮廓，颜色不是土地利用类别。",
+    unit:"嵌入通道",variable:"1024 维 polygon embedding（PCA 三通道）",intro:"用城市下拉框切换已发布的 C40 多边形中心图层。",
+    method:"海纳数据集 1846639 的 1024 维嵌入向量逐行 L2 归一化，所有已发布城市共用同一套 PCA，前三个主成分映射为 R/G/B。点是多边形投影中心，颜色表示嵌入的相对位置。",
     source:"https://cn.zero2x.org/data-hub/portal/dataset?id=1846639",reference:"",
     extent:[112.88442874917307,22.479279145720177,121.82036240493447,40.20231070471998],ceiling:1,initial:0
   }
@@ -61,7 +61,7 @@ export const globeCases={
   rivers:{title:"巴西河网 · 丰枯交替",dataset:"GloFAS · 巴西 55 个代表河段",effect:"河段流量着色 × 逐日回放",unit:"m³/s",max:240000,center:[-53,-12] as XY,month:105,zoom:1},
   lightning:{title:"美国地闪 · 雷暴足迹",dataset:"NOAA NCEI · 美国本土 0.5° 网格",effect:"累计地闪着色 × 逐日回放",unit:"次",max:18000,center:[-96,36] as XY,month:195,zoom:1},
   forest:{title:"大兴安岭森林 · 时空嵌入",dataset:"海纳 1846764 · 64 维森林时空嵌入",effect:"PCA 三通道着色 × 2023 年 12 个月",unit:"嵌入通道",max:1,center:[123.06,49.95] as XY,month:forestMonth,zoom:8},
-  c40:{title:"C40 城市 · landuse 嵌入",dataset:"海纳 1846639 · 1024 维 polygon embedding",effect:"PCA 三通道着色 × 上海/北京/广州点云",unit:"嵌入通道",max:1,center:[121.427283,31.195936] as XY,month:0,zoom:110}
+  c40:{title:"C40 城市 · landuse 嵌入",dataset:"海纳 1846639 · 1024 维 polygon embedding",effect:"PCA 三通道着色 × 城市多边形中心",unit:"嵌入通道",max:1,center:[121.427283,31.195936] as XY,month:0,zoom:110}
 };
 
 export const datasetLayers={rain:"nasa:imerg-monthly",rivers:"glofas:brazil-55-2024",lightning:"noaa:nldn-conus-2024",forest:"haina:1846764",c40:"haina:1846639"} as const;

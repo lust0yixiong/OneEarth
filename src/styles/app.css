@@ -131,6 +131,20 @@ select {
   align-items: center;
   gap: 20px;
 }
+.promo-home-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  color: #405d50;
+  font-size: 12px;
+  text-decoration: none;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+.promo-home-link:hover, .promo-home-link:focus-visible {
+  text-decoration: underline;
+}
 .build-info {
   display: flex;
   align-items: center;
@@ -3186,7 +3200,7 @@ html[data-panel-interaction="move"] * {
 }
 
 .c40-city-switch {position:relative;cursor:pointer}
-.c40-city-switch select {appearance:none;border:0;background:transparent;color:#216c55;font:inherit;font-weight:550;padding:0 14px 0 0;margin:0;cursor:pointer}
+.c40-city-switch select {appearance:none;border:0;background:transparent;color:#216c55;font:inherit;font-weight:550;padding:0 14px 0 0;margin:0;max-width:155px;text-overflow:ellipsis;cursor:pointer}
 .c40-city-switch .c40-caret {position:absolute;right:5px;pointer-events:none;color:#4c7b69}
 
 /* Basemap switcher floats beside the zoom controls. */
