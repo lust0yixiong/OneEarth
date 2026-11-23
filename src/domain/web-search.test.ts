@@ -1,3 +1,4 @@
+import {readPdfPage} from "../../server/read-pdf-page";
 import https from 'node:https';
 import dns from 'node:dns/promises';
 import {syncBuiltinESMExports} from 'node:module';
@@ -259,7 +260,8 @@ test('official named PDF attachment with /content URL is actually parsed through
     throw Error('Unexpected search/Fetch request '+url.href);
   };
   const runs=await searchSources([{web:'archive appendix fields',dataset:'10.5281/zenodo.'+id}],new AbortController().signal,()=>{},
-    {fetchImpl,archiveRead:readArchiveIndex,originRead:false,archiveQuestion:'请读取 https://zenodo.org/records/'+id+' 的 '+file+'，核对字段和单位。',deepseekTools:{search:false,fetch:true}});
+    {fetchImpl,archiveRead:readArchiveIndex,originRead:false,
+      pdfRead:(hit,url,signal,focus,question)=>readPdfPage(hit,url,signal,undefined,focus,question),archiveQuestion:'请读取 https://zenodo.org/records/'+id+' 的 '+file+'，核对字段和单位。',deepseekTools:{search:false,fetch:true}});
   const list=runs.find(r=>r.engine==='原站读取'&&r.query===api);
   assert.equal(list?.status,'done');assert.match(list!.hits[0].pageExcerpt!,/Appendix field guide.pdf/);
   assert.doesNotMatch(list!.hits[0].pageExcerpt!,/ARCHIVE_PDF_ACTUAL_TEXT/,'manifest itself must not claim attachment content');

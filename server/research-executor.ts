@@ -8,6 +8,7 @@ import {paperId} from "../src/domain/paper-record";
 import type {TurnPlan} from "./turn-planning";
 import type {SearchRun,ToolCall} from "../src/domain/types";
 import type {SourceReadInput,SourceReadResult} from "./discovery-materials-contract";
+import {webGrantInput,type RuntimeWebToolContext} from "./runtime-web-tool-authority";
 
 type ReadDependencies={stage:(text:string,searches?:SearchRun[])=>void;report:(call:ToolCall)=>void;callPrefix?:string;
   options?:DiscoveryA2AOptions;onResult?:(result:SourceReadResult)=>Promise<void>};
@@ -19,21 +20,34 @@ export function discoveryProtocol():"a2a"|"v1"{
 }
 
 /** Bind the turn's authorized model and channel configuration once. */
-export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|undefined,signal:AbortSignal){
+export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|undefined,signal:AbortSignal,webTools?:RuntimeWebToolContext){
   const protocol=discoveryProtocol();
   const cancellation=protocol==="v1"?discoveryCancellation(signal):undefined;
   const a2aCancellation=discoveryA2ACancellation(signal);
+  const granted=new Set<string>();
+  async function reserve(messageId:string,scope:Parameters<typeof webGrantInput>[4]){
+    if(!webTools)return;
+    signal.throwIfAborted();const input=webGrantInput(webTools.researchTaskId,messageId,config,deepseekTools,scope);if(!input)return;
+    const token=await webTools.authority.reserve(input);granted.add(token);return token;
+  }
+  async function revoke(token:string|undefined){if(token&&webTools){try{await webTools.authority.revoke(token);granted.delete(token);}
+    catch{console.error("OneEarth web tool grant revocation unconfirmed; parent state and expiry remain authoritative");}}}
   return {
     name:config.executor,
     model:(prompt:string,options?:ExecutorOptions,modelSignal=signal)=>runExecutor(config,prompt,modelSignal,options),
-    discover:(id:string,input:Omit<DiscoveryBusinessInput,"deepseekTools">|DiscoveryClarificationInput,emit:(event:DiscoveryEvent)=>void,options?:DiscoveryA2AOptions)=>{
+    discover:async(id:string,input:Omit<DiscoveryBusinessInput,"deepseekTools">|DiscoveryClarificationInput,emit:(event:DiscoveryEvent)=>void,options:DiscoveryA2AOptions&{webToolQuestion?:string}={})=>{
+      if(protocol==="v1"&&("clarificationReply" in input||options.target))throw Error("该研究记录需要原发现服务的 A2A 续行接口。");
+      const question="clarificationReply" in input?options.webToolQuestion:input.decision?.dataQuestion??input.query;
+      const grant=question?await reserve(id,{kind:"discovery",question}):undefined;
+      const bind=async(taskId:string)=>{if(grant)await webTools!.authority.bind(grant,taskId);};
+      const boundOptions:DiscoveryA2AOptions={...options,onAccepted:async binding=>{await options.onAccepted?.(binding);await bind(binding.discoveryId);}};
+      try{
       if("clarificationReply" in input){
-        if(protocol!=="a2a")throw Error("该受托澄清需要原发现服务的 A2A 续行接口。");
-        return discoverThroughA2A(id,input,signal,emit,options,a2aCancellation);
+        return await discoverThroughA2A(id,{...input,runtimeWebToolGrant:grant},signal,emit,boundOptions,a2aCancellation);
       }
-      if(protocol==="v1"&&options?.target)throw Error("该研究记录需要原发现服务的 A2A 续行接口。");
-      return protocol==="a2a"?discoverThroughA2A(id,{...input,deepseekTools},signal,emit,options,a2aCancellation):
-        discoverThroughService(id,{...input,config,deepseekTools},signal,emit,cancellation);
+      return protocol==="a2a"?await discoverThroughA2A(id,{...input,deepseekTools,runtimeWebToolGrant:grant},signal,emit,boundOptions,a2aCancellation):
+        await discoverThroughService(id,{...input,config,deepseekTools,runtimeWebToolGrant:grant},signal,emit,cancellation,bind);
+      }finally{await revoke(grant);}
     },
     read:async(plan:TurnPlan,question:string,deps:ReadDependencies):Promise<SearchRun[]>=>{
       if(plan.action!=="read")return [];
@@ -44,10 +58,11 @@ export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|un
       const messageId=randomUUID(),call={id:(deps.callPrefix||"read-source-")+messageId,kind:"tool" as const,name:"委托发现服务读取指定来源",
         input:JSON.stringify({messageId,targets})};
       deps.stage("正在委托发现服务读取指定来源");deps.report({...call,status:"running"});
+      const grant=await reserve(messageId,{kind:"source-read",question,urls:targets.flatMap(t=>t.kind==="web"?[t.url]:[])});
       try{
-        const result=await readSourcesThroughA2A(messageId,{question,targets,deepseekFetch:deepseekTools?.fetch===true},signal,
+        const result=await readSourcesThroughA2A(messageId,{question,targets,deepseekFetch:deepseekTools?.fetch===true,runtimeWebToolGrant:grant},signal,
           update=>{if(update.stage)deps.stage(update.stage,update.searches);if(update.call)deps.report({...update.call,id:call.id+":"+update.call.id});},
-          {...deps.options,onEvent:async event=>{
+          {...deps.options,onAccepted:async binding=>{await deps.options?.onAccepted?.(binding);if(grant)await webTools!.authority.bind(grant,binding.discoveryId);},onEvent:async event=>{
             await deps.options?.onEvent?.(event);
             const value=event.sourceReadResult||event.sourceReadProgress;
             const completed=event.searches?.filter(run=>run.status==="done"&&run.hits.some(hit=>
@@ -63,8 +78,8 @@ export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|un
         const message=error instanceof Error?error.message:"发现服务未完成精确补读。";
         deps.report({...call,status:"failed",error:message});
         deps.stage("发现服务尚未交付本轮精确读取材料");return [];
-      }
+      }finally{await revoke(grant);}
     },
-    close:async()=>{await cancellation?.close();await a2aCancellation?.close();},
+    close:async()=>{try{await cancellation?.close();await a2aCancellation?.close();}finally{await Promise.all([...granted].map(revoke));}},
   };
 }

@@ -145,6 +145,11 @@ export async function discoveryA2aStore(pool: Pool) {
       submit(skillMessageId(messageId),fingerprint,{observationResearch}),
     acceptObservationResult: (messageId:string, fingerprint:string, taskId:string, receipt:SkillResultSubmission) =>
       submit(skillMessageId(messageId),fingerprint,{taskId,receipt}),
+    async jobDelegation(id:string) {
+      const {rows} = await pool.query<{taskId:string;messageId:string}>(
+        'SELECT task_id AS "taskId", message_id AS "messageId" FROM discovery_a2a_delegations WHERE job_id=$1',[id]);
+      return rows[0];
+    },
     async hasJob(id: string) {
       const result = await pool.query("SELECT 1 FROM discovery_a2a_delegations WHERE job_id=$1",[id]);
       return !!result.rowCount;

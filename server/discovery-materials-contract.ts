@@ -67,6 +67,7 @@ export type SourceReadTarget =
   | { kind: "paper"; id: string };
 
 export interface SourceReadInput {
+  runtimeWebToolGrant?:string;
   question: string;
   targets: SourceReadTarget[];
   deepseekFetch?: boolean;

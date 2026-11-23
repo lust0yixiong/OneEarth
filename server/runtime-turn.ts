@@ -5,6 +5,7 @@ import type { TaskStore } from "./task-store";
 import type { researchRegions } from "./research-region";
 import type { spatialCoverageClient } from "./spatial-coverage-client";
 import {runtimeTurnPapers} from "./runtime-turn-papers";
+import type {RuntimeWebToolAuthority} from "./runtime-web-tool-store";
 import {runtimeMaterialHistory,archivedReadEvidence,type RuntimeMaterialReceipt} from "./runtime-material-history";
 import {runtimeTurnHaina,type RuntimeHainaMaterials} from "./runtime-turn-haina";
 import type {CurrentAssertionReading} from "./runtime-assertion-evidence";
@@ -43,6 +44,7 @@ import { resolveSceneQuery } from "./earth-search";
 import { discover } from "../src/domain/discovery";
 
 export interface RuntimeServices {
+  webTools?:RuntimeWebToolAuthority;
   tasks: TaskStore;
   push: ReturnType<typeof constellationService>;
   coverage: ReturnType<typeof spatialCoverageClient>;
@@ -96,7 +98,8 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     let history=clarification?.original.history??body.history;
     const decision=clarification?.original.questionDecision??body.questionDecision;
     if(clarification)context=clarification.context;
-    const executor=activeExecutor=researchExecutor(body.config,clarification?clarification.original.deepseekTools:body.deepseekTools,signal);
+    const executor=activeExecutor=researchExecutor(body.config,clarification?clarification.original.deepseekTools:body.deepseekTools,signal,
+      services.webTools?{researchTaskId:taskId,authority:services.webTools}:undefined);
     event({conversationId:body.conversationId,turnId:body.turnId, ...(decision ? {continuedFrom:decision.checkMessageId} : {})});
     stage("正在理解问题");
     const gridCoverage=await readCoverage(context);
@@ -264,7 +267,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
             runTrace.findings=findings;
             event({finding,traceStarted:runTrace.started});
           }
-        },{onAccepted:saveBinding,onCheckpoint:saveBinding,onEvent:async update=>{
+        },{onAccepted:saveBinding,onCheckpoint:saveBinding,webToolQuestion:clarification?.delegation.query,onEvent:async update=>{
           if(update.result)await retainDiscoveryMaterials(update.result);
         },...(!continuation?confirmation?.options:{})});
         if(!a2a)await retainDiscoveryMaterials(result);

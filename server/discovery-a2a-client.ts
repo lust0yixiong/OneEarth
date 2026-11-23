@@ -7,11 +7,12 @@ import {paperId,validPaperRecord} from "../src/domain/paper-record";
 import {paperQueryKind,paperResultKind,sourceReadKind,hainaCatalogQueryKind,hainaCatalogResultKind,sceneCatalogQueryKind,sceneCatalogResultKind,
   type HainaCatalogPage,type PaperQuery,type PaperQueryOutput,type SceneCatalogQuery,type SceneCatalogResult,type SourceReadInput,type SourceReadResult} from "./discovery-materials-contract";
 import {validHainaRecord} from "../src/domain/haina-record";
+import {webToolGrantPattern} from "./web-tool-contract";
 
 export type MaterialEvent=DiscoveryEvent&{sourceReadResult?:SourceReadResult;sourceReadProgress?:Partial<SourceReadResult>};
 
 export type DiscoveryBusinessInput = Omit<DiscoveryInput, "config"|"initialPlan"|"clarificationReply">;
-export type DiscoveryClarificationInput={continuedFrom:string;clarificationReply:{text:string;afterSeq:number}};
+export type DiscoveryClarificationInput={continuedFrom:string;clarificationReply:{text:string;afterSeq:number};runtimeWebToolGrant?:string};
 export type DiscoveryA2AInput=DiscoveryBusinessInput|DiscoveryClarificationInput;
 export type DiscoveryBinding = {
   transport:"a2a"; messageId:string; discoveryId:string; contextId?:string; state:string; lastSeq?:number;
@@ -37,14 +38,15 @@ export class DiscoveryA2AError extends Error {
 
 /** Only the authorized business envelope crosses the independent service boundary. */
 export function discoveryBusinessInput(input:DiscoveryA2AInput):DiscoveryA2AInput {
+  if(input.runtimeWebToolGrant!==undefined&&!webToolGrantPattern.test(input.runtimeWebToolGrant))throw new DiscoveryA2AError("运行时工具委托授权无效。");
   if("clarificationReply" in input){
     const reply=input.clarificationReply;
     if(!identifier(input.continuedFrom)||!reply||typeof reply.text!=="string"||!reply.text.trim()||reply.text.length>4000||
       !Number.isSafeInteger(reply.afterSeq)||reply.afterSeq<0)throw new DiscoveryA2AError("澄清续行缺少原委托或有效等待水位。");
-    return {continuedFrom:input.continuedFrom,clarificationReply:{text:reply.text,afterSeq:reply.afterSeq}};
+    return {continuedFrom:input.continuedFrom,clarificationReply:{text:reply.text,afterSeq:reply.afterSeq},...(input.runtimeWebToolGrant?{runtimeWebToolGrant:input.runtimeWebToolGrant}:{})};
   }
   const clean:Record<string,unknown>={};
-  for(const key of ["query","decision","continuedFrom","continuation","researchGoal","evidenceGap",
+  for(const key of ["query","decision","continuedFrom","continuation","researchGoal","evidenceGap","runtimeWebToolGrant",
     "conversationContext","previousResearchIntent","history","references","scope","currentDatasets","conversationEvidence"] as const)
     if(input[key]!==undefined)clean[key]=input[key];
   if(input.deepseekTools!==undefined){
@@ -401,7 +403,9 @@ export async function readSourcesThroughA2A(messageId:string,input:SourceReadInp
     throw new DiscoveryA2AError("精确补读的来源身份无效。");
   });
   if(options.target||options.afterSeq!==undefined)throw new DiscoveryA2AError("新的精确补读不能冒用其他受托任务。");
+  if(input.runtimeWebToolGrant!==undefined&&!webToolGrantPattern.test(input.runtimeWebToolGrant))throw new DiscoveryA2AError("运行时补读授权无效。");
   return taskThroughA2A(messageId,{kind:sourceReadKind,input:{question:input.question,targets,
+    ...(input.runtimeWebToolGrant?{runtimeWebToolGrant:input.runtimeWebToolGrant}:{}),
     ...(input.deepseekFetch!==undefined?{deepseekFetch:input.deepseekFetch}:{})}},event=>{
     if(event.result)throw new DiscoveryA2AError("精确补读不能使用开放发现结果冒充材料。");
     const urls=new Set(targets.flatMap(t=>t.kind==="web"?[t.url]:[])),ids=new Set(targets.flatMap(t=>t.kind==="paper"?[t.id]:[]));

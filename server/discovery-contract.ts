@@ -11,6 +11,7 @@ export interface DiscoveryInput {
   query: string;
   config: ChatModel;
   deepseekTools?: DeepSeekTools;
+  runtimeWebToolGrant?:string;
   decision?: QuestionDecision;
   clarificationReply?: {text:string;afterSeq:number};
   continuedFrom?: string;
@@ -88,7 +89,7 @@ export function discoveryCancellation(signal: AbortSignal) {
 }
 
 export async function discoverThroughService(taskId: string, input: DiscoveryInput, signal: AbortSignal, emit: (event: DiscoveryEvent) => void,
-  cancellation?: ReturnType<typeof discoveryCancellation>) {
+  cancellation?: ReturnType<typeof discoveryCancellation>,onAccepted?:(taskId:string)=>Promise<void>) {
   signal.throwIfAborted();
   const base = process.env.ONEEARTH_DISCOVERY_URL || "http://127.0.0.1:5275";
   const url = new URL("/v1/discoveries", base);
@@ -106,6 +107,7 @@ export async function discoverThroughService(taskId: string, input: DiscoveryInp
       typeof receipt.created !== "number" || !Number.isFinite(receipt.created))
       throw Error("数据发现服务没有返回有效的任务受理确认。");
     submission.acknowledge();
+    await onAccepted?.(receipt.id);
     if (!["queued","running"].includes(receipt.status)) submission.terminal();
     let after = 0;
     // Preserve the task and cursor across transport failures.

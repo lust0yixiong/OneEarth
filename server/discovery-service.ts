@@ -14,7 +14,8 @@ import { productDatabase } from "./product-database";
 import {postgresPaperCatalog} from "./postgres-paper-catalog";
 import { hainaService } from "./haina-search";
 import { searchSources } from "./web-search";
-import { nativeWebSearch } from "./native-web-search";
+import {discoveryWebTools} from "./discovery-web-tools";
+import {readTurnSource} from "./turn-reading";
 import { webComplementInstructions, complementSchema } from "./web-complement";
 import type { DiscoveryInput } from "./discovery-contract";
 import {discoveryConfiguration} from "./discovery-config";
@@ -55,7 +56,10 @@ app.post("/v1/discoveries", (_req,res,next) => {
 });
 taskRoutes(app, "/v1/discoveries", discoveryLegacyStore(store,delegations,configuration,prepare), prepare.legacy);
 await workTasks(store, async ({id,body}: {id:string;body:DiscoveryInput|SourceReadJob|ObservationCheckJob|ObservationResearchJob}, signal, emit) => {
-  const a2a = await delegations.hasJob(id);
+  const a2a = await delegations.jobDelegation(id);
+  const identity = a2a || {taskId:id,messageId:id};
+  const webTools = (grant:string|undefined,nativeAllowed=false) =>
+    discoveryWebTools(process.env.ONEEARTH_RUNTIME_URL,identity,grant,nativeAllowed);
   if (a2a && "kind" in body) {
     if (body.kind === observationResearchKind) {
       if (configuration.kind !== "configured") {
@@ -68,7 +72,11 @@ await workTasks(store, async ({id,body}: {id:string;body:DiscoveryInput|SourceRe
     if (body.kind === skillResultKind && body.research)
       return resumeObservationResearch(body.demand,body.receipt.afterSeq,body.receipt.result,signal,emit);
     if (body.kind === skillRequestKind || body.kind === skillResultKind) return runObservationCheckJob(body,signal);
-    if (body.kind === sourceReadKind) return runSourceRead(body,signal,emit,catalog,fetchAllowed());
+    if (body.kind === sourceReadKind) {
+      const tools = webTools(body.input.runtimeWebToolGrant);
+      return runSourceRead(body,signal,emit,catalog,fetchAllowed(),(target,question,readSignal,configuredFetch) =>
+        readTurnSource(target,question,readSignal,configuredFetch,tools));
+    }
   }
   const input = body as DiscoveryInput;
   if (configuration.kind !== "configured" && (a2a || configuration.kind === "invalid"))
@@ -103,6 +111,7 @@ await workTasks(store, async ({id,body}: {id:string;body:DiscoveryInput|SourceRe
       web:[...new Set(previous.searches.flatMap(run=>run.hits.map(hit=>hit.url)))].slice(0,18)},
   }:undefined;
   const stage = (message: string) => emit({stage:message});
+  const tools = webTools(input.runtimeWebToolGrant,(!config.provider || config.provider === "native") && config.executor === "codex");
   const result = await requiredDataSearch(query, signal, {
     initialPlan, conversationContext, previousResearchIntent, history, references, lockedSourcePolicy,
     lockQuestion:!!continuation && !clarificationReply, resumingClarification:!!clarificationReply,
@@ -144,9 +153,7 @@ await workTasks(store, async ({id,body}: {id:string;body:DiscoveryInput|SourceRe
         throw Error("验收故障注入：网页检索渠道不可用。");
       }
       return searchSources(queries, signal, searches => emit({stage:"正在检索公开网络来源", searches}), {
-      ...options, deepseekTools, archiveQuestion:query, priorArchiveTargets:conversationEvidence,
-      ...((!config.provider || config.provider === "native") && config.executor === "codex"
-        ? {nativeSearch:(terms:string[], searchSignal:AbortSignal) => nativeWebSearch(config, terms, searchSignal)} : {}),
+        ...options, deepseekTools, archiveQuestion:query, priorArchiveTargets:conversationEvidence, tools,
       });
     },
   }, decision);

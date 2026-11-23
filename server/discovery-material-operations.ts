@@ -4,8 +4,9 @@ import {paperResultKind, sourceReadKind, type PaperQueryOutput, type SourceReadI
   type SourceReadResult, type SourceReadTarget} from "./discovery-materials-contract";
 import {publicPage} from "./fetch-pages";
 import {PaperCatalogError, type PaperCatalogAccess} from "./paper-catalog-access";
-import {readPlannedSources, type readTurnSource} from "./turn-reading";
+import {readPlannedSources, type TurnSourceReader} from "./turn-reading";
 import type {Payload} from "./task-store";
+import {webToolGrantPattern} from "./web-tool-contract";
 
 const only = (value: Record<string,unknown>, keys: string[]) => Object.keys(value).every(key => keys.includes(key));
 const text = (value: unknown, limit: number): value is string =>
@@ -50,8 +51,10 @@ export type SourceReadJob = {kind:typeof sourceReadKind;input:SourceReadInput};
 
 export function prepareSourceRead(input: Record<string,unknown>, fetchAllowed: boolean): {body:SourceReadJob} | {issue:string} {
   const invalid = {issue:"精确读取须指定问题和 1–3 项有效的稳定来源，且只接受读取所需的工具许可。"};
-  if (!only(input,["question","targets","deepseekFetch"]) || !text(input.question,4000) ||
+  const grant = input.runtimeWebToolGrant;
+  if (!only(input,["question","targets","deepseekFetch","runtimeWebToolGrant"]) || !text(input.question,4000) ||
     !Array.isArray(input.targets) || !input.targets.length || input.targets.length > 3 ||
+    (grant !== undefined && (typeof grant !== "string" || !webToolGrantPattern.test(grant))) ||
     (input.deepseekFetch !== undefined && typeof input.deepseekFetch !== "boolean")) return invalid;
   const targets: SourceReadTarget[] = [];
   for (const target of input.targets) {
@@ -67,11 +70,12 @@ export function prepareSourceRead(input: Record<string,unknown>, fetchAllowed: b
     if (!targets.some(t => t.kind === "web" && t.url === target.url))
       targets.push({kind:"web",url:target.url,title:target.title,discoveredBy:target.discoveredBy});
   }
-  return {body:{kind:sourceReadKind,input:{question:input.question,targets,deepseekFetch:input.deepseekFetch === true && fetchAllowed}}};
+  return {body:{kind:sourceReadKind,input:{question:input.question,targets,deepseekFetch:input.deepseekFetch === true && fetchAllowed,
+    ...(grant !== undefined ? {runtimeWebToolGrant:grant} : {})}}};
 }
 
 export async function runSourceRead(job: SourceReadJob, signal: AbortSignal, emit: (event:Payload) => void,
-  catalog: Pick<PaperCatalogAccess,"detail"|"evidence">, fetchAllowed: boolean, read?:typeof readTurnSource): Promise<Payload> {
+  catalog: Pick<PaperCatalogAccess,"detail"|"evidence">, fetchAllowed: boolean, read:TurnSourceReader): Promise<Payload> {
   const {question,targets,deepseekFetch} = job.input;
   const papers: PaperRecord[] = [], issues:string[] = [];
   const paperEvidence: NonNullable<SourceReadResult["paperEvidence"]> = [];

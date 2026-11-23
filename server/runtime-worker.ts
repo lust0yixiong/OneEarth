@@ -5,6 +5,7 @@ import { postgresTaskStore } from "./postgres-task-store";
 import { type RuntimeServices } from "./runtime-turn";
 import {observationExecution} from "./observation-execution";
 import {runtimeWorkerRunner} from "./runtime-worker-runner";
+import {runtimeWebToolStore} from "./runtime-web-tool-store";
 import { requestPerformance, type ExecutorTiming } from "./request-performance";
 import { constellationService, parseSources } from "./constellations";
 import { spatialCoverageClient } from "./spatial-coverage-client";
@@ -23,6 +24,8 @@ const services:RuntimeServices = {
   adminBoundaryDir,
   canonicalCache:new Map(),
 };
+const webTools=await runtimeWebToolStore();
+services.webTools=webTools;
 registerObservations(services.push.latest().records,true);
 const engine=process.env.ONEEARTH_SKILL_REGISTRY&&(process.env.ONEEARTH_SKILL_SERVICE_TOKEN?.length??0)>=32?await observationExecution():undefined;
 const runner=runtimeWorkerRunner(services,engine);
@@ -31,6 +34,6 @@ const stop=await workTasks(services.tasks, (task, signal, emit) => {
   return requestPerformance.run(timings, () => runner.run(task,signal,emit));
 },{maintenance:runner.maintenance});
 let stopping=false;
-const shutdown=()=>{if(stopping)return;stopping=true;void stop().then(()=>engine?.close()).then(()=>services.tasks.close()).then(()=>process.exit(0),()=>process.exit(1));};
+const shutdown=()=>{if(stopping)return;stopping=true;void stop().then(()=>engine?.close()).then(()=>webTools.close()).then(()=>services.tasks.close()).then(()=>process.exit(0),()=>process.exit(1));};
 process.once("SIGTERM",shutdown);process.once("SIGINT",shutdown);
 console.log("OneEarth runtime worker started");

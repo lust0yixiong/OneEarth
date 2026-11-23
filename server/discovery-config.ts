@@ -25,7 +25,7 @@ export function discoveryConfiguration(env = process.env): DiscoveryConfiguratio
     return {
       kind:"configured",
       model:{executor:model.executor, model:model.model, provider:model.provider ?? "native"},
-      tools:{search:env.ONEEARTH_DEEPSEEK_SEARCH === "true" && !!env.DEEPSEEK_API_KEY?.trim(),
+      tools:{search:env.ONEEARTH_DEEPSEEK_SEARCH === "true",
         fetch:env.ONEEARTH_DEEPSEEK_FETCH === "true"},
     };
   } catch {

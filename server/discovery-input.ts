@@ -13,10 +13,11 @@ import {allowedDiscoveryTools, type DiscoveryConfiguration} from "./discovery-co
 import type {DiscoveryInput} from "./discovery-contract";
 import type {DiscoveryA2aStore, DiscoveryContinuation} from "./discovery-a2a-store";
 import type {DataSearchResult} from "./data-search";
+import {webToolGrantPattern} from "./web-tool-contract";
 
 const businessFields = new Set([
   "query","deepseekTools","decision","clarificationReply","continuedFrom","continuation","researchGoal","evidenceGap",
-  "conversationContext","previousResearchIntent","history","references","scope","currentDatasets","conversationEvidence",
+  "conversationContext","previousResearchIntent","history","references","scope","currentDatasets","conversationEvidence","runtimeWebToolGrant",
 ]);
 const shortText = (value: unknown, limit: number): value is string =>
   typeof value === "string" && !!value.trim() && value.length <= limit;
@@ -42,6 +43,8 @@ export function discoveryInput(store: Pick<TaskStore,"get"|"terminal">, configur
   async function validate(value: unknown, a2a: boolean, confirmingA2a = false) {
     const input = value as Partial<DiscoveryInput> | null;
     if (!input || !shortText(input.query,4000) || !validChatModel(input.config) || !validHistory(input.history) ||
+      (input.runtimeWebToolGrant !== undefined &&
+        (typeof input.runtimeWebToolGrant !== "string" || !webToolGrantPattern.test(input.runtimeWebToolGrant))) ||
       (input.deepseekTools !== undefined && !validDeepSeekTools(input.deepseekTools)) ||
       (input.decision !== undefined && !validQuestionDecision(input.decision,input.query)) ||
       input.clarificationReply !== undefined ||
@@ -106,11 +109,14 @@ export function discoveryInput(store: Pick<TaskStore,"get"|"terminal">, configur
     async a2a(input: Record<string,unknown>, confirmation?: DiscoveryContinuation) {
       if (Object.keys(input).some(key => !businessFields.has(key)))
         return {issue:"发现委托仅接受业务输入，模型及渠道计划由发现服务配置。"};
+      const grant = input.runtimeWebToolGrant;
+      if (grant !== undefined && (typeof grant !== "string" || !webToolGrantPattern.test(grant)))
+        return {issue:"公开网络工具授权格式无效。"};
       if (configuration.kind !== "configured") return {issue:configuration.issue,unavailable:true};
       if ("clarificationReply" in input) {
         const reply = input.clarificationReply;
         if (!confirmation || input.continuedFrom !== confirmation.id || !validClarificationReply(reply) ||
-          Object.keys(input).some(key => key !== "continuedFrom" && key !== "clarificationReply"))
+          Object.keys(input).some(key => !["continuedFrom","clarificationReply","runtimeWebToolGrant"].includes(key)))
           return {issue:"澄清续行只接受原 taskId、continuedFrom 及有效的澄清回复。"};
         if (reply.afterSeq !== confirmation.waitingSeq)
           return {issue:"该澄清回复对应的等待阶段已变更，请查看最新研究进展。"};
@@ -122,7 +128,9 @@ export function discoveryInput(store: Pick<TaskStore,"get"|"terminal">, configur
         const authorized = effective(prior);
         if (!sameModel(prior.config,authorized.config) || !isDeepStrictEqual(prior.deepseekTools,authorized.deepseekTools))
           return {issue:"发现服务模型或工具授权已经改变，请重新委托。"};
-        return {body:{...authorized,continuedFrom:confirmation.jobId,clarificationReply:reply}};
+        const {runtimeWebToolGrant: _priorGrant,...context} = authorized;
+        return {body:{...context,continuedFrom:confirmation.jobId,clarificationReply:reply,
+          ...(grant !== undefined ? {runtimeWebToolGrant:grant} : {})}};
       }
 
       const body = {...input,config:configuration.model} as DiscoveryInput;
