@@ -68,6 +68,7 @@ export const dataSearchSchema={type:'object',additionalProperties:false,
     clarification:{type:['string','null'],minLength:1,maxLength:500},hainaQueries:{type:'array',items:{type:'string',minLength:1,maxLength:160},maxItems:4},
     sourcePolicy:{anyOf:[{type:"null"},{type:"object",additionalProperties:false,required:["mode","sources"],properties:{
       mode:{type:"string",enum:["restricted","preferred"]},sources:{type:"array",minItems:1,maxItems:4,items:{type:"string",enum:discoverySources}},
+      fallback:{type:"null"},
     }},{type:"object",additionalProperties:false,required:["mode","sources","fallback"],properties:{
       mode:{type:"string",enum:["restricted"]},sources:{type:"array",minItems:2,maxItems:4,items:{type:"string",enum:discoverySources}},
       fallback:{type:"string",enum:["no_match"]},

@@ -12,7 +12,7 @@ export function parseDiscoverySourcePolicy(value:unknown):DiscoverySourcePolicy|
       !Array.isArray(sources) || !sources.length || sources.length>discoverySources.length ||
       !sources.every((source):source is DiscoverySource=>discoverySources.some(allowed=>source===allowed)) ||
       new Set(sources).size!==sources.length) return;
-  if(fallback!==undefined){
+  if(fallback!==undefined&&fallback!==null){
     if(mode!=="restricted" || fallback!=="no_match" || sources.length<2)return;
     return {mode,sources,fallback};
   }

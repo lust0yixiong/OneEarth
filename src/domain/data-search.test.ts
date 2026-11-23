@@ -245,6 +245,29 @@ test("restricted plans need no paper or web terms and repair cannot broaden a re
   assert.deepEqual(continuation.executed,["haina"]);
 });
 
+test("nullable planning fallback keeps the selected channel and validates meaningful fallback conditions",async()=>{
+  const question="请先找 USGS 官方说明并读取地表温度换算依据";
+  for(const source of ["web","haina"] as const){
+    const fixture=fakeDeps(JSON.stringify({...plan,dataQuestion:question,
+      sourcePolicy:{mode:"restricted",sources:[source],fallback:null}}));
+    const result=await requiredDataSearch(question,new AbortController().signal,fixture.deps);
+    assert.deepEqual(result.plan.sourcePolicy,{mode:"restricted",sources:[source]});
+    assert.deepEqual(fixture.executed,[source]);
+    assert.ok(fixture.calls.some(c=>c.id==="data-question-initial"&&c.status==="done"));
+    assert.ok(!fixture.calls.some(c=>c.id==="data-question-repair"));
+  }
+  const conditional={mode:"restricted",sources:["haina","paper"],fallback:"no_match"};
+  const controlled=fakeDeps(JSON.stringify({...plan,sourcePolicy:conditional}));
+  const result=await requiredDataSearch(question,new AbortController().signal,controlled.deps);
+  assert.deepEqual(result.plan.sourcePolicy,conditional);
+  assert.deepEqual(controlled.executed,["haina","paper"]);
+  for(const sourcePolicy of [
+    {...conditional,sources:["web"]},{...conditional,mode:"preferred"},{...conditional,fallback:"always"},
+    {...conditional,fallback:null,sources:[]},{...conditional,fallback:null,sources:["unknown"]},
+    {...conditional,fallback:null,sources:["web","web"]},{...conditional,fallback:null,extra:true},
+  ])assert.throws(()=>parseDataSearch(JSON.stringify({...plan,sourcePolicy}),question),/发现来源范围格式无效/);
+});
+
 test("a named fallback waits for confirmed zero hits, including when web is the leading source",async()=>{
   for(const status of ["hit","zero","failed"] as const){
     let start!:()=>void,finish!:(value:typeof emptyHaina)=>void,fail!:(reason:Error)=>void;
