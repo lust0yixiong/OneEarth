@@ -17,7 +17,7 @@ import {CitationIcon} from "./CitationIcon";
 import {citationTypeLabels} from "../domain/citation-types";
 import {useSourcePreviewHost,usePreviewPosition} from "./SourcePreviewHost";
 import {savedWebDocument} from "../domain/web-preview";
-import {observationAttachment,useObservationCatalogue} from "./ObservationMaterialPicker";
+import {observationAttachment,useObservationCatalogue} from "./observation-catalogue";
 import {ObservationFileEvidence} from "./ObservationFileEvidence";
 
 function safeUrl(raw:string|undefined) {

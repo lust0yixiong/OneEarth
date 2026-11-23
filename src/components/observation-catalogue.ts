@@ -1,13 +1,12 @@
 import {createContext,useContext,useEffect,useState} from "react";
-import type {ScopeItem} from "../domain/question-scope";
 import {validObservationMaterial,type ObservationAttachment,type ObservationMaterial} from "../domain/observation-material";
 import {observationSourceUrl,validObservationSourceBinding} from "../domain/observation-source";
 
 const identity=(item:Pick<ObservationMaterial,"artifactId"|"version">)=>JSON.stringify([item.artifactId,item.version]);
 
 type LinkedObservationFile = {material:ObservationMaterial;dataUrl:string;catalogUrl:string;versionLabel:string};
-type ObservationCatalogue = {materials:ObservationMaterial[];byReferenceUrl:Map<string,Map<string,LinkedObservationFile>>};
-const emptyCatalogue:ObservationCatalogue={materials:[],byReferenceUrl:new Map()};
+type ObservationCatalogue = {byReferenceUrl:Map<string,Map<string,LinkedObservationFile>>};
+const emptyCatalogue:ObservationCatalogue={byReferenceUrl:new Map()};
 export const ObservationCatalogueContext=createContext(emptyCatalogue);
 export const useObservationCatalogue=()=>useContext(ObservationCatalogueContext);
 
@@ -27,7 +26,7 @@ function parseCatalogue(value:{materials?:unknown;sourceBindings?:unknown}|null)
       byReferenceUrl.set(reference,matches);
     }
   }
-  return {materials:[...byId.values()],byReferenceUrl};
+  return {byReferenceUrl};
 }
 
 export function usePublishedObservationCatalogue(active:boolean) {
@@ -49,26 +48,4 @@ export function usePublishedObservationCatalogue(active:boolean) {
 
 export function observationAttachment({artifactId,version,title}:ObservationMaterial):ObservationAttachment {
   return {kind:"observation",artifactId,version,title};
-}
-
-export function ObservationMaterialPicker({attached,disabled,onAttach}:{
-  attached:ScopeItem[];
-  disabled:boolean;
-  onAttach:(item:ObservationAttachment)=>void;
-}){
-  const {materials}=useObservationCatalogue();
-  if (!materials.length) return null;
-
-  const selected=new Set(attached.flatMap(item=>item.kind==="observation"?[identity(item)]:[]));
-  return <select className="observation-material-picker" aria-label="选择观测资料" value="" disabled={disabled}
-    onChange={event=>{
-      const material=materials.find(item=>identity(item)===event.currentTarget.value);
-      if (!material || selected.has(identity(material))) return;
-      onAttach(observationAttachment(material));
-    }}>
-    <option value="" disabled>选择观测资料</option>
-    {materials.map(item=><option key={identity(item)} value={identity(item)} disabled={selected.has(identity(item))}>
-      {item.title} · {item.version}{item.variables.length?" · "+item.variables.join("、"):""}
-    </option>)}
-  </select>;
 }
