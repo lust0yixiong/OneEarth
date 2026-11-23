@@ -1,5 +1,21 @@
 # Mac mini 产品验收
 
+## Mac mini 数据触达浏览入口静态发布
+
+2026-11-23 09:42:28（上海时间），[常驻 5474](http://127.0.0.1:5474/) 完成数据触达静态发布。前端 `744649488d22f5edc3b3ad8106cee67c8ccfc33c`，基线 `9af7033fe268a3cf5645198a465d841b572f5308`。3,424 项构建清单 SHA-256 为 `bb796f2bbcf06370a4baaad83c2f17f82df7b5c8d1f94cce8dfefc22dff16e67`，在线首页 SHA-256 为 `ad0417c24ea70ba750a57e642eb22090c4f4136796397532d3b488665929e752`。应用角色仍运行 `a5b7d8d`，发布目录为 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.9-a5b7d8d`。应用、PostgreSQL、Garage 进程的 PID 和正式数据样本均与切换前一致。
+
+设置 → 地球与工作区 →「在主导航显示『数据触达』」控制主导航项，浏览器默认关闭，开启后同源刷新和新页记住偏好。资料页提供实体、线索、及时三类浏览及筛选、分页和详情。其独立文本框已移除，找资料可转到同一 Chat。旧直链、结果和地图带入的限制仍可读取。清除链接带入的 `q` 只解除该词，保留原来源、候选 ID、时段和可视化等条件。关闭主导航同时保留明确的目录直链和既有详情跳转。
+
+[7144 隔离候选](http://127.0.0.1:7144/) 通过独立 Chrome 和总体复核，核对桌面、窄屏、原上下文指向和延迟到达的已保存结果。隔离使用实际网关与上一版运行时，只读复用已发布目录。延迟对照的两次结果 PUT 由浏览器内存应答，未保存到服务器。类型检查与构建通过，815 项测试中 810 通过、5 项既有环境门控跳过。
+
+静态切换增加 24 项内容哈希资源，再原子置换首页。84 项旧页面兼容资源仍在线，两组共 108 项逐件核实原字节及压缩传输。旧首页 ETag 请求返回新版首页。隔离回退演练在同一份切换前静态目录副本中完成，切换前、新版及恢复后各核对 3,424 项。上版首页和计划位于 `static-rollback/`。
+
+5474 独立正式复验与总体签收通过。Chrome 1440 和 390 宽度共 18 次数据触达查询均返回 200，默认隐藏、设置开关及刷新、旧词解除、数据详情和两种海纳图层、同一 Chat 均通过。研究与结果写入路由已拦截，正式复验零触发。另复核 Chat 已移除观测资料下拉，来源卡仍可附加原 KEO 版本且旧归档可打开。独立报告 `~/Library/Application Support/OneEarth Next/iterations/data-access-visibility-independent/primary-7446494/checks.json` 的 SHA-256 为 `b41e31f12e227046c27c23e4c569f57def11b80db9484de6ae6417123724492d`。观测资料独立回归 `~/Library/Application Support/OneEarth Next/iterations/observation-picker-independent/primary-7446494-strict/checks.json` 的 SHA-256 为 `e7862835cc2794f655f514d1b102f4b087df4273857047bb511bd3c80f92f2e2`。
+
+[数据触达现行架构梳理](../../docs/架构与接口现状.md#数据触达现行架构梳理)记录资料归属、目录筛选、地图范围、时效及模型触发条件。本轮保留既有运行时目录与查询。已发现的年份误命中、跨源故障、旧资料混入、地图范围分岔、DOI 聚合和海纳标注及快照问题按实证与条件分别列在梳理中。首次生产地图审计意外触发既有自动保存，留下结果链接快照 `e79c1c6f-adde-4d79-a100-5deeb109c364` 和 `bcb103ad-bfba-427c-baea-c84abb11f2bd`。复跑已拦截结果写入，两轮均未提交研究。
+
+从 `~/Library/Application Support/OneEarth Next/iterations/data-access-visibility/` 运行 `shasum -a 256 -c evidence/release-proof.sha256` 可核对主程构建、发布、回退、Chrome 及审计证据。
+
 ## Mac mini Chat 观测资料入口静态发布
 
 2026-11-23 09:29:55（上海时间），[常驻 5474](http://127.0.0.1:5474/) 完成 Chat 静态发布。前端 `db9c05aced0e40d72591850fd7b1df5ea62615f0`，基线 `653836b9bc7f237fc2e51108ac89a766193b186d`，3,424 文件构建 SHA-256 为 `cfc0bd196b0e8c268dcc42fccf6b1a986b4856a437cb22ae32ccccf3fb718a54`，在线首页 SHA-256 为 `e47d28fcc1ab16c3024a2d1b3e98b5e372cd9dcbaf2a4dd2cfd50d3804193036`。应用角色继续运行 `a5b7d8d`，同一发布目录提供静态资源，应用、PostgreSQL 与 Garage PID 与切前一致。
