@@ -1,0 +1,45 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { authorizesWorkspaceViewAction, validWorkspaceViewContext, workspaceViewActionAllowed, type WorkspaceViewContext } from "./workspace-view-context";
+
+const current = {id:"2023-01-15",label:"2023-01-15"};
+const august = {id:"2023-08-15",label:"2023-08-15"};
+const view: WorkspaceViewContext = {
+  version:1,surface:"earth",
+  map:{mode:"catalog",camera:{center:[123.06,49.95],zoom:8},gridSystem:"h3",layer:"all",mesh:false,
+    filters:{type:"",source:"",place:"",period:null,utcWindow:null,depth:null,maxDem:null}},
+  activeLayer:{id:"forest",title:"森林图层",datasetId:"haina:1846764",status:"ready",
+    display:[{label:"图例",value:"RGB 分别显示前三个主成分"}],
+    controls:[{id:"time",label:"当前日期",current,options:[current,august],ordered:true}]},
+};
+const action = {kind:"set-control",layerId:"forest",controlId:"time",valueId:august.id};
+
+test("workspace view validates only bounded visible facts and available choices", () => {
+  assert.equal(validWorkspaceViewContext(view),true);
+  assert.equal(validWorkspaceViewContext({...view,authorization:{read:true}}),false);
+  assert.equal(validWorkspaceViewContext({...view,focus:{kind:"evidence",title:"资料",body:"原件正文"}}),false);
+  assert.equal(validWorkspaceViewContext({...view,display:[{label:"当前页面",value:"在看图层",body:"未展示的来源正文"}]}),false);
+  assert.equal(validWorkspaceViewContext({...view,map:{...view.map,camera:{center:[225,10],zoom:8}}}),false);
+  const activeLayer = view.activeLayer!;
+  assert.equal(validWorkspaceViewContext({...view,activeLayer:{...activeLayer,status:"loading"}}),false);
+  const choice = activeLayer.controls[0];
+  for(const options of [[august],[current,current],Array.from({length:37},(_,i)=>({id:"month-"+i,label:"月份 "+i}))])
+    assert.equal(validWorkspaceViewContext({...view,activeLayer:{...activeLayer,controls:[{...choice,options}]}}),false);
+});
+
+test("workspace actions bind only to a choice currently offered by the active control", () => {
+  assert.equal(workspaceViewActionAllowed(view,action),true);
+  assert.equal(workspaceViewActionAllowed(undefined,action),false);
+  assert.equal(workspaceViewActionAllowed(view,{...action,valueId:"2022-08-15"}),false);
+  assert.equal(workspaceViewActionAllowed(view,{...action,controlId:"city"}),false);
+  assert.equal(workspaceViewActionAllowed(view,{...action,camera:{center:[0,0]}}),false);
+  assert.equal(workspaceViewActionAllowed({...view,activeLayer:{...view.activeLayer!,id:"rain"}},action),false);
+});
+
+
+test("permission requires a direct UI request independently of a valid target", () => {
+  for(const query of ["切换到上海看看","切到下一个。","请把时效改成 F012","下一期"])
+    assert.equal(authorizesWorkspaceViewAction(query),true,query);
+  for(const query of ["我现在看的这期是哪年哪月？","把时效改成 F012 和当前有什么区别？","不要切换到上海","我刚才切到上海了","把城市改成上海会怎样","切换到上海，但不要执行"])
+    assert.equal(authorizesWorkspaceViewAction(query),false,query);
+});

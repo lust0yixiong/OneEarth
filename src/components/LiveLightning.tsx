@@ -1,4 +1,4 @@
-import {useEffect,useRef,useState} from "react";
+import {useEffect,useLayoutEffect,useRef,useState} from "react";
 import {ArrowLeft, Volume2, VolumeX, X} from "lucide-react";
 import {createRenderer,type Scene} from "../globe/renderer";
 import {emptyFilters} from "../domain/spatial";
@@ -30,7 +30,7 @@ function chime(ac:AudioContext,lon:number,lat:number,interval:number){
 }
 
 export function LiveLightning({back}:{back:()=>void}){
-  const {patch}=useWorkspace();
+  const {patch,registerWorkspaceSurface}=useWorkspace();
   const [paused,setPaused]=useState(false),[sound,setSound]=useState(false);
   const {stations,east,west}=useWeatherObservations(paused);
   const [selected,setSelected]=useState<WeatherStation|null>(null);
@@ -74,6 +74,24 @@ export function LiveLightning({back}:{back:()=>void}){
     if(!time)return failed?"暂不可用，正在重试":"读取中…";
     return utc(time)+(failed?" · 更新失败":!paused && Date.now()-time>age?" · 延迟":"");
   };
+  useLayoutEffect(() => registerWorkspaceSurface(() => {
+    const feeds = [stations, east, west];
+    const status = feeds.some(feed => feed.data) ? "ready" : feeds.every(feed => feed.failed) ? "unavailable" : "loading";
+    return {
+      surface: "cases", case: {id: "live-lightning", title: weatherCaseTitle},
+      activeLayer: {
+        id: "live-lightning", title: weatherCaseTitle, status, controls: [],
+        display: [
+          {label: "播放状态", value: paused ? "已暂停" : "持续更新"},
+          {label: "观测范围", value: weatherCaseCoverage},
+          {label: "最新站点观测", value: feedTime(stations.data?.latest, stations.failed, 7200000)},
+          {label: "GOES-19", value: feedTime(east.data?.end, east.failed, 120000)},
+          {label: "GOES-18", value: feedTime(west.data?.end, west.failed, 120000)},
+        ],
+      },
+      ...(station ? {display: [{label: "已选气象站", value: (station.id + " · " + station.name).replace(/[\u0000-\u001f\u007f]/g, " ").slice(0,240)}]} : {}),
+    };
+  }));
   return <section className="strike-case"><div className="strike-globe" ref={root}>
     <canvas className="strike-base" ref={base} aria-label={weatherCaseTitle+"地球"}/>
     <canvas className="strike-overlay" ref={dots} aria-hidden="true"/>

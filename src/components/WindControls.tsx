@@ -12,6 +12,7 @@ import {
   Moon,
 } from "lucide-react";
 import { useWorkspace } from "../domain/store";
+import type {VisualizationState} from "../domain/types";
 import { windForecastHours, windFrame, windManifest, windReferenceLabel, windTimeLabel } from "../domain/wind";
 import { windLegendGradient, type WindTheme } from "../globe/wind-layer";
 export function WindControls({
@@ -20,12 +21,16 @@ export function WindControls({
   retry,
   theme,
   onThemeChange,
+  chooseLevel,
+  chooseForecast,
 }: {
   ready: boolean;
   error: string;
   retry: () => void;
   theme: WindTheme;
   onThemeChange: (theme: WindTheme) => void;
+  chooseLevel: (level: VisualizationState["level"]) => void;
+  chooseForecast: (hour: VisualizationState["forecastHour"]) => void;
 }) {
   const [collapsed, setCollapsed] = useState(() => innerWidth <= 760);
   useEffect(() => {
@@ -82,14 +87,7 @@ export function WindControls({
             <button
               key={level.id}
               aria-pressed={view.level === level.id}
-              onClick={() =>
-                patch({
-                  visualization: {
-                    ...view,
-                    level: level.id as typeof view.level,
-                  },
-                })
-              }
+              onClick={() => chooseLevel(level.id as VisualizationState["level"])}
             >
               {level.label}
             </button>
@@ -102,11 +100,7 @@ export function WindControls({
               key={hour}
               aria-pressed={view.forecastHour === hour}
               aria-label={`预报 ${hour} 小时`}
-              onClick={() =>
-                patch({
-                  visualization: { ...view, forecastHour: hour as 0 | 6 | 12 },
-                })
-              }
+              onClick={() => chooseForecast(hour as VisualizationState["forecastHour"])}
             >
               <strong>+{hour} h</strong>
               <small>F{String(hour).padStart(3, "0")}</small>

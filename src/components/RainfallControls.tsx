@@ -3,14 +3,13 @@ import {Pause,Play} from "lucide-react";
 import type {XY} from "../domain/regional-cases";
 import {rainBreaks,rainCell,rainGrid,rainColor,rainColors,rainFactors} from "../domain/rainfall";
 import type {RainTiles} from "../globe/rain-tiles";
-import {publishedRainPeriod} from "../domain/rain-catalog";
 import {globeCases} from "../domain/regional-cases";
 import {rainCoverageLabel} from "./use-rain-catalog";
 import "../styles/rainfall.css";
 
 type Props={
   grid:RainTiles;month:number;playing:boolean;point?:XY;
-  choose:(month:number)=>void;chooseYear:(year:number,month:number)=>void;toggle:()=>void;
+  choose:(month:number)=>void;chooseYear:(year:number)=>void;toggle:()=>void;
 };
 const fmt=(n:number)=>n.toLocaleString("zh-CN",{maximumFractionDigits:2});
 const latName=(lat:number)=>fmt(Math.abs(lat))+"°"+(lat>0?"N":lat<0?"S":"");
@@ -23,10 +22,6 @@ export function RainfallControls({grid,month,playing,point,choose,chooseYear,tog
   const cell=point && rainCell(point),centerLon=cell?cell.west+rainGrid.step/2:0;
   const high=peak>=0?values![peak]!:0;
   const describe=(m:number,value:number|null|undefined)=>!months[m]?"暂无数据":value===undefined?"载入中":value===null?"此格缺测":fmt(value)+" mm/天";
-  function changeYear(year:number){
-    const period=publishedRainPeriod(grid.catalog,year,month);
-    if(period)chooseYear(period.year,period.frame);
-  }
   return <section className="rain-panel" aria-label="全球降水">
     <div className="rain-head">
       <div><small>GPM IMERG {source?(source.run==="Derived"?"· NASA "+source.version:source.run+" · "+source.version):""} · 0.1°</small><h2>{globeCases.rain.title}</h2>
@@ -34,7 +29,7 @@ export function RainfallControls({grid,month,playing,point,choose,chooseYear,tog
       <button aria-label={playing?"暂停图层":"播放图层"} onClick={toggle}>{playing?<Pause size={15}/>:<Play size={15}/>} {month+1} 月</button>
     </div>
     <div className="rain-band-title">
-      <label className="rain-year">年份 <select aria-label="降水年份" value={year} onChange={event=>changeYear(+event.target.value)}>
+      <label className="rain-year">年份 <select aria-label="降水年份" value={year} onChange={event=>chooseYear(+event.target.value)}>
         {[...grid.catalog.years].reverse().map(entry=><option key={entry.year} value={entry.year}>
           {entry.year} 年{entry.months.length<12?" · "+entry.months.length+" 个月":""}
         </option>)}

@@ -8,7 +8,8 @@ import {rainCoverageLabel, refreshRainCatalog, useRainCatalog} from "./use-rain-
 import {useCatalogRevision} from "./use-catalog-revision";
 import {answerEvidence} from "../domain/answer-map";
 import {useFieldData} from "./use-field-data";
-import {globeCases,layerFrameCount} from "../domain/regional-cases";
+import {datasetLayers,globeCases,layerFrameCount} from "../domain/regional-cases";
+import type {WorkspaceViewAction, WorkspaceViewChoice, WorkspaceViewContext} from "../domain/workspace-view-context";
 import {sampleField,palettes} from "../globe/regional-layer";
 import { GridDataPopover } from "./GridDataPopover";
 import {GridHoverOverview} from "./GridHoverOverview";
@@ -42,7 +43,10 @@ import type { GeoImageFrame } from "../globe/geo-image-layer";
 import {
   getWindData,
   loadWindData,
+  windForecastHours,
   windFrame,
+  windManifest,
+  windTimeLabel,
   windVector,
 } from "../domain/wind";
 import { DatasetActions } from "./DatasetActions";
@@ -53,7 +57,7 @@ import {
   selectedStation,
   ctdSamples,
 } from "../domain/visualization";
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Globe,
   MapPin,
@@ -77,13 +81,18 @@ import {
   localEntries,
 } from "../domain/spatial";
 import { useGeoOrientation } from "./use-geo-orientation";
-import type { CandidateSet, MapLayer } from "../domain/types";
+import type { CandidateSet, MapLayer, VisualizationState } from "../domain/types";
 import { useWindTheme } from "../domain/wind-theme";
 import {DistributionModePicker} from "./DistributionModePicker";
 import {DistributionLegend} from "./DistributionLegend";
 import {useDistributionMode} from "./use-distribution-mode";
 import {distributionModes,resolveDistributionMode,type DistributionContext} from "../domain/distribution-modes";
 import {countBand} from "../domain/distribution-heat";
+
+function layerControl(id: string, label: string, options: WorkspaceViewChoice[], value: string, ordered: boolean) {
+  const current = options.find(option => option.id === value);
+  return current ? [{id, label, options, current, ordered}] : [];
+}
 
 export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; toolsHost?: HTMLElement | null }) {
   const {
@@ -92,7 +101,7 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
     setFilters,
     attachScope,
     openVisualization,inspectAsset,inspectCandidates,flyToGrid,focusAnswerEvidence,flyToEvidence,flyToResearchRegion,
-    leaveDetail,
+    leaveDetail, registerWorkspaceSurface, noteManualNavigation,
   } = useWorkspace();
   const orientation=useGeoOrientation(s.camera.center,s.camera.zoom);
   const locationBar=useRef<HTMLDivElement>(null);
@@ -257,6 +266,7 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
         windCanvas.current || undefined,
         (error) => patch({ error: error?.message || null }),
         setHover,
+        noteManualNavigation,
       );
       renderer.current = engine;
       return () => {
@@ -268,7 +278,7 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
         error: e instanceof Error ? e.message : "数据地球暂时无法绘制。",
       });
     }
-  }, [patch]);
+  }, [patch,noteManualNavigation]);
   useEffect(()=>{if(s.flight)renderer.current?.flyTo(s.flight.camera);else renderer.current?.stopFlight();},[s.flight?.id]);
   // A place flight only moves the camera; keep a labeled, pulsing pin on the target
   // so the destination is visible without changing the research region layer.
@@ -479,12 +489,147 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   const inspectForest = () => inspectDatasetLayer("haina:1846764", "大兴安岭", ["实体数据", "检索词「大兴安岭」"]);
   const inspectC40 = () => inspectDatasetLayer("haina:1846639", "C40", ["实体数据", "检索词「C40」"]);
   const switchC40City = (index: number) => {
-    if (!c40Layer || !c40) return;
+    if (!c40Layer || !c40) return false;
     const city = c40.manifest.cities[index];
-    if (!city) return;
+    if (!city) return false;
     patch({fieldLayer: {...c40Layer, frame: index},
-      flight: {id: "c40-" + city.id + "-" + Date.now(), camera: {center: city.center, zoom: city.zoom, reason: "C40 · " + city.name}}});
+      flight: {id: "c40-" + city.id + "-" + Date.now(), kind:"layer-control", camera: {center: city.center, zoom: city.zoom, reason: "C40 · " + city.name}}});
+    return true;
   };
+  const chooseForestFrame = (frame: number) => {
+    if (!forestLayer || !forest?.manifest.frames[frame]) return false;
+    setAnimate(false);
+    patch({fieldLayer: {...forestLayer, frame}});
+    return true;
+  };
+  const rain = layer?.id === "rain" ? fieldData.field?.rain : undefined;
+  const chooseRainFrame = (frame: number) => {
+    if (layer?.id !== "rain" || !rain?.available(frame)) return false;
+    setAnimate(false);
+    patch({fieldLayer: {...layer, frame}});
+    return true;
+  };
+  const chooseRainYear = (year: number) => {
+    if (layer?.id !== "rain" || !rain?.catalog.years.some(entry => entry.year === year)) return false;
+    const period = publishedRainPeriod(rain.catalog, year, layer.frame);
+    if (!period) return false;
+    setAnimate(false);
+    patch({fieldLayer: {...layer, ...period}});
+    return true;
+  };
+  const chooseWindLevel = (level: VisualizationState["level"]) => {
+    if (!s.visualization || !windManifest.levels.some(option => option.id === level)) return false;
+    patch({visualization: {...s.visualization, level}});
+    return true;
+  };
+  const chooseWindForecast = (forecastHour: VisualizationState["forecastHour"]) => {
+    if (!s.visualization || !windForecastHours.includes(forecastHour)) return false;
+    patch({visualization: {...s.visualization, forecastHour}});
+    return true;
+  };
+  const applyControl = (action: WorkspaceViewAction) => {
+    const {layerId, controlId, valueId} = action;
+    if (layerId === "c40" && controlId === "city")
+      return switchC40City(c40?.manifest.cities.findIndex(city => city.id === valueId) ?? -1);
+    if (layerId === "forest" && controlId === "time")
+      return chooseForestFrame(forest?.manifest.frames.findIndex(frame => frame.date === valueId) ?? -1);
+    if (layerId === "rain" && controlId === "year") return chooseRainYear(Number(valueId));
+    if (layerId === "rain" && controlId === "time")
+      return chooseRainFrame(rain?.manifest.months.findIndex(month => month && rainDate(rain.manifest.year, month.month) === valueId) ?? -1);
+    if (layerId === "gfs-wind" && controlId === "level") return chooseWindLevel(valueId as VisualizationState["level"]);
+    if (layerId === "gfs-wind" && controlId === "forecast-hour") return chooseWindForecast(Number(valueId) as VisualizationState["forecastHour"]);
+    return false;
+  };
+  function rainDate(year: number, month: number) {
+    return year + "-" + String(month).padStart(2, "0");
+  }
+  useLayoutEffect(() => registerWorkspaceSurface(() => {
+    let activeLayer: WorkspaceViewContext["activeLayer"];
+    if (s.visualization) {
+      const view = s.visualization;
+      const status = windLoad.error ? "unavailable" : windLoad.ready ? "ready" : "loading";
+      const level = windManifest.levels.map(({id,label}) => ({id,label}));
+      const time = windForecastHours.map(hour => ({
+        id: String(hour), label: "F" + String(hour).padStart(3, "0") + " · " +
+          windTimeLabel(windFrame({...view, forecastHour: hour as VisualizationState["forecastHour"]})),
+      }));
+      activeLayer = {id: view.id, title: "全球风场 · NCEP GFS", datasetId: view.id, status,
+        display: [
+          {label: "有效时间", value: windTimeLabel(windFrame(view))},
+          {label: "风场变量", value: "风速与风向 · m/s"},
+          {label: "原网格", value: "全球 1°"},
+          {label: "风场流线", value: view.playing ? "播放中" : "已暂停"},
+        ],
+        controls: status === "ready" ? [
+          ...layerControl("level", "风场垂直层次", level, view.level, false),
+          ...layerControl("forecast-hour", "预报时效", time, String(view.forecastHour), true),
+        ] : []};
+    } else if (layer) {
+      const status = fieldData.field ? "ready" : fieldData.error ||
+        (layer.id === "rain" && (publication.status === "unavailable" || publication.status === "ready" && !rainPeriod))
+        ? "unavailable" : "loading";
+      activeLayer = {id: layer.id, title: globeCases[layer.id].title, datasetId: datasetLayers[layer.id], status, controls: []};
+      if (c40Frame && c40) {
+        activeLayer.display = [
+          {label: "快照日期", value: c40.manifest.snapshot},
+          ...(matchMedia("(max-width: 600px)").matches ? [] :
+            [{label: "当前城市的多边形中心", value: c40Frame.city.samples.toLocaleString()}]),
+          {label: "颜色图例", value: "R · PC1，G · PC2，B · PC3"},
+        ];
+        activeLayer.controls = layerControl("city", "C40 城市",
+          c40.manifest.cities.map(city => ({id: city.id, label: city.name})), c40Frame.city.id, true);
+      } else if (forestLayer && forest) {
+        const stages = forest.manifest.frames;
+        activeLayer.display = [
+          {label: "图例", value: "大兴安岭森林 · 嵌入 PCA"},
+          {label: "原网格", value: forest.manifest.grid.resolution + "°"},
+          {label: "时间轴粒度", value: "月度时相 · 每月一帧"},
+          {label: "颜色图例", value: ["R", "G", "B"].map((channel, index) =>
+            channel + " · PC" + (index + 1) + " " + (forest.manifest.embedding.variance[index]*100).toFixed(1) + "%").join("，")},
+          {label: "播放状态", value: animate ? "播放中" : "已暂停"},
+        ];
+        activeLayer.controls = layerControl("time", "森林嵌入时相", stages.map(frame => ({id: frame.date, label: frame.date})),
+          stages[forestLayer.frame]?.date ?? "", true);
+      } else if (rain) {
+        const {year, months} = rain.manifest;
+        const month = months[layer.frame];
+        activeLayer.display = [
+          {label: "图例", value: "月平均日降水量 · mm/天"},
+          {label: "原网格", value: "全球海陆 0.1°"},
+          ...(month ? [{label: "当月资料", value: "GPM IMERG · " + month.source.run + " · " + month.source.version}] : []),
+          {label: "播放状态", value: animate ? "播放中" : "已暂停"},
+        ];
+        const published = rain.catalog.years;
+        const selectedYear = published.findIndex(entry => entry.year === year);
+        const offset = Math.min(Math.max(0, selectedYear - 17), Math.max(0, published.length - 36));
+        activeLayer.controls = [
+          ...layerControl("year", "降水年份", published.slice(offset, offset + 36)
+            .map(entry => ({id: String(entry.year), label: entry.year + " 年"})), String(year), true),
+          ...layerControl("time", "降水月份", months.flatMap(month => {
+            if (!month) return [];
+            const date = rainDate(year, month.month);
+            const through = !month.complete && /^\d{4}-\d{2}-\d{2}$/.test(month.through) ? " · 截至 " + month.through : "";
+            return [{id: date, label: date + through}];
+          }), rainDate(year, layer.frame + 1), true),
+        ];
+      }
+    } else if (s.dataView) {
+      const detail = s.dataView;
+      const isCtd = detail.kind === "ctd";
+      const summary = isCtd
+        ? [detail.stationId, variableInfo(detail.variable).label, detail.depth + " m"].join(" · ")
+        : [detail.glacier, detail.epoch === "compare" ? "首末时相对照" : detail.epoch === "first" ? "首期前缘" : "末期前缘"].join(" · ");
+      activeLayer = {id: detail.kind, title: isCtd ? "CTD 剖面" : "冰川前缘", status: "ready",
+        controls: [{id: "content", label: "当前内容", current: {id: detail.kind, label: summary}, options: [], ordered: false}]};
+    }
+    return {
+      surface: "earth", camera: renderer.current?.currentCamera(), activeLayer, applyControl,
+      display: [{label: "视野中心的界面标注", value: orientation.label},
+        ...(!activeLayer && catalogMode ? [{label: "分布方式", value: distributionModes[distributionStyle].label}] : [])],
+      ...(gridList && !s.evidence ? {focus:{kind:"batch",title:"网格候选"}, candidates:{count:gridList.ids.length,title:"网格候选"}} : {}),
+    };
+  }));
+
   const openGridList = () => {
     const batch = { ...(selectedBatch || snapshot()) };
     if (s.visualization) batch.ids = windProbe ? ["wind-0"] : [];
@@ -495,12 +640,12 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   const footer = <div className={toolsHost && (catalogMode||forestMode||c40Mode) ? "catalog-distribution" : undefined}>
       <div className="map-footer">
         {forestLayer && forest ? <ForestTimeline manifest={forest.manifest} frame={forestLayer.frame} playing={animate}
-          choose={frame=>{setAnimate(false);patch({fieldLayer:{...forestLayer,frame}});}}
-          shift={delta=>{setAnimate(false);patch({fieldLayer:{...forestLayer,frame:Math.max(0,Math.min(forest.manifest.frames.length-1,forestLayer.frame+delta))}});}}
+          choose={chooseForestFrame}
+          shift={delta=>chooseForestFrame(Math.max(0,Math.min(forest.manifest.frames.length-1,forestLayer.frame+delta)))}
           toggle={()=>setAnimate(!animate)}/> :
           (catalogMode||c) && !s.visualization && !s.dataView && <GlobeTimeline onAskTime={()=>attachScope(...timeScope(s.filters))} key={pushMode?"scene":c?.id||"catalog"} filters={s.filters} years={years} mode={pushMode?"scene":c?"year":"month"} records={axisRecords} onChange={changes=>setFilters(changes)}/>}
-        {layer?.id==="rain" && (fieldData.field?.rain ? <RainfallControls grid={fieldData.field.rain} month={layer.frame} playing={animate} chooseYear={(year,frame)=>{setAnimate(false);patch({fieldLayer:{...layer,year,frame}});}} point={s.selection?.point}
-          toggle={()=>setAnimate(!animate)} choose={frame=>{setAnimate(false);patch({fieldLayer:{...layer,frame}});}}/> :
+        {layer?.id==="rain" && (rain ? <RainfallControls grid={rain} month={layer.frame} playing={animate} chooseYear={chooseRainYear} point={s.selection?.point}
+          toggle={()=>setAnimate(!animate)} choose={chooseRainFrame}/> :
           <div className="field-controls">
             <strong>{globeCases.rain.title}</strong>
             <small role="status">{rainCoverageLabel(publication)}</small>
@@ -698,6 +843,8 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
           <WindControls
             theme={windTheme}
             onThemeChange={changeWindTheme}
+            chooseLevel={chooseWindLevel}
+            chooseForecast={chooseWindForecast}
             ready={windLoad.ready}
             error={windLoad.error}
             retry={() => setWindRetry((value) => value + 1)}

@@ -7,6 +7,7 @@ import { isValidCell, getResolution } from "h3-js";
 import type { DiscoveryContext } from "./types";
 import { caseById } from "./catalog";
 import {validObservationAttachment} from "./observation-material";
+import {validWorkspaceViewContext} from "./workspace-view-context";
 function pair(v: unknown): v is [number, number] {
   return (
     Array.isArray(v) &&
@@ -27,6 +28,7 @@ function grid(v: any) {
   );
 }
 export function validContext(v: any): v is DiscoveryContext {
+  if(v?.workspaceView!==undefined&&!validWorkspaceViewContext(v.workspaceView))return false;
   if (
     !v ||
     !(

@@ -1,3 +1,5 @@
+import {projectWorkspaceView, workspaceActionState, type WorkspaceSurfaceReading} from "./workspace-view-projection";
+import {authorizesWorkspaceViewAction, workspaceViewActionAllowed} from "./workspace-view-context";
 import { canReplyToDiscoveryClarification, discoveryClarificationResult, loadResearchRecord, openTaskEvents } from "./runtime-client";
 import {datasetScope,mergeScope,scopedQuestionContext,scopeDetail,scopeLabel,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
@@ -103,7 +105,7 @@ export interface State {
   draftScope: ScopeItem[] | null;
   clarificationReply?: ClarificationReply | null;
   attachingMapScope?: boolean;
-  flight?: {id:string;camera:Camera;kind?:"research-region"|"place"|"grid";label?:string}|null;
+  flight?: {id:string;camera:Camera;kind?:"research-region"|"place"|"grid"|"layer-control";label?:string}|null;
   mapFocus?: {answerId:string;assetId:string;locked:boolean}|null;
   sessionId: string;
   resumeLinkedWorkspace: boolean;
@@ -259,8 +261,11 @@ function focusedMaterial(s: State, batch: CandidateSet | null) {
   };
 }
 function requestWorkspaceKey(s: State) {
-  return JSON.stringify([s.view, s.caseId, s.filters, s.gridSystem, s.layer, s.selection, s.camera,
-    s.dataView, s.visualization, s.fieldLayer, s.overview, s.mapResult, s.search, s.inspector]);
+  // A city selection may still be flying when the question is sent. Keep its target stable on settle.
+  const camera = s.flight?.kind === "layer-control" ? [s.flight.id, s.flight.camera] : s.camera;
+  return JSON.stringify([s.view, s.caseId, s.filters, s.gridSystem, s.layer, s.selection, camera,
+    s.dataView, s.visualization, s.fieldLayer, s.overview, s.mapResult, s.search, s.inspector,
+    s.mapFocus, s.evidence?.id, s.previewKind, s.readerPosition]);
 }
 type Action =
   | { type: "patch"; value: Partial<State> }
@@ -556,13 +561,21 @@ function useWorkspaceValue(initialState: State) {
   const historyIds=useMemo(()=>new Set(state.messages.map(m=>m.id)),[state.sessionId]);
   const latest = useRef(state);
   latest.current = state;
+  const surfaceReading = useRef<(() => WorkspaceSurfaceReading) | null>(null);
+  const registerWorkspaceSurface = useCallback((read: () => WorkspaceSurfaceReading) => {
+    surfaceReading.current = read;
+    return () => { if (surfaceReading.current === read) surfaceReading.current = null; };
+  }, []);
+  const workspaceViewAt = useCallback((s: State) => projectWorkspaceView(s, surfaceReading.current?.()), []);
   const request = useRef<AbortController | null>(null);
   const serial = useRef(0);
   const patch = useCallback((value: Partial<State>) => {
     const scopeChange=["caseId","view","mapResult","filters","selection","gridSystem"].some(key=>Object.hasOwn(value,key));
     if(scopeChange && !Object.hasOwn(value,"flight"))value={...value,flight:null};
     if(["caseId","mapResult","filters"].some(key=>Object.hasOwn(value,key)) && !Object.hasOwn(value,"mapFocus"))value={...value,mapFocus:null};
-    if (scopeChange) serial.current++;
+    const controlChange = (["fieldLayer", "visualization", "dataView", "inspector", "evidence", "readerPosition", "mapFocus"] as const)
+      .some(key => Object.hasOwn(value, key) && value[key] !== latest.current[key]);
+    if (scopeChange || controlChange) serial.current++;
     if (Object.hasOwn(value, "caseId") && !Object.hasOwn(value, "dataView"))
       value = { ...value, dataView: null };
     if (
@@ -671,6 +684,10 @@ function useWorkspaceValue(initialState: State) {
     void poll();
     return ()=>{active=false;controller.abort();clearTimeout(timer);};
   },[patch]);
+  const noteManualNavigation = useCallback(() => {
+    serial.current++;
+    if (latest.current.flight?.kind === "layer-control") patch({flight:null});
+  }, [patch]);
   const paperCatalogLoaded=useRef(false);
   useEffect(() => {
     const controller=new AbortController();
@@ -1327,6 +1344,32 @@ function useWorkspaceValue(initialState: State) {
           r = await receive();
         }
         if (!isCurrent()) return;
+        if (r.workspaceAction !== undefined) {
+          const action = r.workspaceAction;
+          const original = attempt.context.workspaceView;
+          const latestState = latest.current;
+          const surface = surfaceReading.current?.();
+          const currentView = projectWorkspaceView(latestState, surface);
+          const lastQuestion = latestState.messages.slice().reverse().find(message => message.role === "user");
+          const stale = !workspaceCurrent() || workspaceActionState(original) !== workspaceActionState(currentView)
+            || (!!lastQuestion && lastQuestion.id !== attempt.userMessageId);
+          const allowed = authorizesWorkspaceViewAction(q) && workspaceViewActionAllowed(original, action)
+            && workspaceViewActionAllowed(currentView, action);
+          const applied = !stale && allowed && surface?.surface === latestState.view && !!surface.applyControl?.(action);
+          const control = applied ? currentView.activeLayer?.controls.find(item => item.id === action.controlId) : undefined;
+          const target = control?.options.find(item => item.id === action.valueId);
+          const message = control && target ? "已将" + control.label + "切换到「" + target.label + "」。"
+            : stale ? "工作台已变化，本轮操作未应用。"
+            : "当前视图无法应用这项操作。";
+          patch({pending:false});
+          await add("assistant", message, {id:delivery.id, replyTo:attempt.userMessageId,
+            runTrace:r.runTrace, ...(stale ? {historicalReply:true} : {}),
+            researchIntent:r.researchIntent, conversationContext:r.conversationContext,
+            conversationEvidence:r.conversationEvidence, conversationAssertionEvidence:r.conversationAssertionEvidence});
+          if (!failedMessages.current.has(delivery.id))
+            await removeChatDelivery(session, delivery.id).catch(()=>patch({sessionError:sessionFailure}));
+          return;
+        }
         if(r.researchRegion===null || validResearchRegion(r.researchRegion))receiveRegion(r.researchRegion);
         if(r.clarification){
           patch({pending:false});
@@ -1786,6 +1829,7 @@ function useWorkspaceValue(initialState: State) {
       const q = query.trim(),
         s = latest.current;
       if (!q || s.pending || s.attachingMapScope || request.current) return;
+      const workspaceView = workspaceViewAt(s);
       if (clarificationReply) {
         const {parentTaskId}=clarificationReply;
         const parent=s.messages.find(m=>m.id===parentTaskId);
@@ -1793,7 +1837,7 @@ function useWorkspaceValue(initialState: State) {
           m.clarificationReply?.parentTaskId===parentTaskId);
         if (!canReplyToDiscoveryClarification(parent) || alreadySent) return;
         const attempt:DiscoveryAttempt={query:q,userMessageId:randomId(),workspaceKey:requestWorkspaceKey(s),
-          view:s.view,context:scopedQuestionContext([],null),clarificationReply};
+          view:s.view,context:{...scopedQuestionContext([],null),workspaceView},clarificationReply};
         add("user",q,{id:attempt.userMessageId,clarificationReply});
         patch({clarificationReply:null,unansweredQuestionId:null});
         await executeDiscovery(attempt,false);
@@ -1807,7 +1851,7 @@ function useWorkspaceValue(initialState: State) {
       if(useComposerScope){
         const items=s.draftScope || [];
         const citation=s.citation ? (({excerpt,...ref})=>ref)(s.citation):null;
-        const context=scopedQuestionContext(items,citation);
+        const context={...scopedQuestionContext(items,citation),workspaceView};
         const attempt:DiscoveryAttempt={query:q,userMessageId:randomId(),workspaceKey:requestWorkspaceKey(s),view:s.view,context};
         add("user",q,{id:attempt.userMessageId,attachedScope:items,...(s.citation?{citation:s.citation}:{})});
         patch({draftScope:null});
@@ -1892,6 +1936,7 @@ function useWorkspaceValue(initialState: State) {
             caseId: s.caseId, filters, gridSystem: s.gridSystem, layer: s.layer,
             selection: s.selection, camera: s.camera, citation, dataView: s.dataView,
             visualization: s.visualization,
+            workspaceView,
             ...(observationQuery && activeObservations ? {observationSource: true} : {}),
             ...(observationParent ? {observationBatch: {
               catalogConditions: observationParent.catalogConditions, selection: observationParent.selection,
@@ -1973,7 +2018,7 @@ function useWorkspaceValue(initialState: State) {
         add("assistant",materialAnswer(chosen),{candidates:chosen});
         return;
       }
-      if(!s.citation && s.view==="earth" && !s.visualization && !s.dataView && !s.caseId && !activeObservations){
+      if(!s.citation && s.view==="earth" && !s.visualization && !s.fieldLayer && !s.dataView && !s.caseId && !activeObservations){
         const match=q.match(/^(?:只看|限定|切换到|时间轴(?:切换到)?)\s*(\d{4})年(?:(\d{1,2})月)?[。？！?]?$/);
         if(match && (!match[2] || (+match[2]>=1 && +match[2]<=12))){
           const y=+match[1],m=Number(match[2])||1;
@@ -2462,7 +2507,7 @@ function useWorkspaceValue(initialState: State) {
       }
       await sendDiscovery(batch);
     },
-    [add, patch, preview, inspectCandidates, showCandidates, leaveDetail, executeDiscovery, openVisualization],
+    [add, patch, preview, inspectCandidates, showCandidates, leaveDetail, executeDiscovery, openVisualization, workspaceViewAt],
   );
   const toggleSaved = useCallback(
     (id: string) => {
@@ -2490,6 +2535,7 @@ function useWorkspaceValue(initialState: State) {
     add,
     send,
     attachScope,confirmQuestion,
+    registerWorkspaceSurface, noteManualNavigation,
     retry: (attempt: DiscoveryAttempt) => executeDiscovery(attempt, true),
     openCase,
     inspectAsset,

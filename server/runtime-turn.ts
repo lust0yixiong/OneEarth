@@ -42,6 +42,7 @@ import type { AnswerReference, DiscoveryResponse, RunTrace, ToolCall, SearchRun 
 import { discoverObservations } from "./observation-query";
 import { resolveSceneQuery } from "./earth-search";
 import { discover } from "../src/domain/discovery";
+import {authorizesWorkspaceViewAction,workspaceViewActionAllowed} from "../src/domain/workspace-view-context";
 
 export interface RuntimeServices {
   webTools?:RuntimeWebToolAuthority;
@@ -97,7 +98,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     const query=clarification?.original.query??body.query;
     let history=clarification?.original.history??body.history;
     const decision=clarification?.original.questionDecision??body.questionDecision;
-    if(clarification)context=clarification.context;
+    if(clarification)context={...clarification.context,workspaceView:body.context.workspaceView};
     const executor=activeExecutor=researchExecutor(body.config,clarification?clarification.original.deepseekTools:body.deepseekTools,signal,
       services.webTools?{researchTaskId:taskId,authority:services.webTools}:undefined);
     event({conversationId:body.conversationId,turnId:body.turnId, ...(decision ? {continuedFrom:decision.checkMessageId} : {})});
@@ -203,7 +204,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         output:JSON.stringify({action:"workspace",goal,reason:plan.reason})});
       return {plan,retrieval:undefined};
     }
-    const navigation = clarification?undefined:navigationTarget(query);
+    const navigation = clarification||context.workspaceView?undefined:navigationTarget(query);
     const selected=navigation?undefined:numberedReference(query,prior);
     const ref=selected?.reference;
     if(selected){
@@ -293,7 +294,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       numberedRead:ref?.kind==="web"?savedReadings.find(read=>read.url===ref.url):undefined,
       numberedAssertion:ref?.kind==="asset"?prior?.conversationAssertionEvidence?.find(read=>read.assetId===ref.id):undefined,
     }, signal, {
-      run: prompt => executor.model(prompt, {outputSchema:turnPlanningSchema({gridCoverage,observationUnavailable:internal.observationUnavailable?true:undefined})}),
+      run: prompt => executor.model(prompt, {outputSchema:turnPlanningSchema({gridCoverage,workspaceView:context.workspaceView,observationUnavailable:internal.observationUnavailable?true:undefined})}),
       stage, report,
       search:p=>scopeUnverified||p.gridIntent==="count"||p.gridIntent==="catalogue"||gridLimits?.currentCoverageOnly||gridLimits?.noDiscovery?Promise.resolve(undefined):find(p),
     });
@@ -396,9 +397,17 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       if(turn.action==="clarify"){
         return complete({message:turn.clarification!,clarification:true,...continuity});
       }
+      if(turn.action==="workspace"&&turn.workspaceAction){
+        if(!authorizesWorkspaceViewAction(decision?.dataQuestion||query)||!workspaceViewActionAllowed(context.workspaceView,turn.workspaceAction))throw new TurnPlanningFailure();
+        const action=turn.workspaceAction,layer=context.workspaceView!.activeLayer!,control=layer.controls.find(c=>c.id===action.controlId)!;
+        const choice=control.options.find(c=>c.id===action.valueId)!;
+        report({id:"workspace-action",kind:"tool",name:"确认当前界面控件目标",input:JSON.stringify(action),status:"done",
+          output:JSON.stringify({validated:true,application:"交由网页核对发问时状态后应用"})});
+        return complete({message:"将「"+layer.title+"」的「"+control.label+"」切换为「"+choice.label+"」。",workspaceAction:action,...continuity});
+      }
       const targetQuery=decision?.dataQuestion||query;
       const pinnedIds=turn.targets.flatMap(t=>t.id?[t.id]:[]);
-      const pinnedPapers=turn.action==="workspace"?await loadPapers(pinnedIds.length?pinnedIds:context.candidateIds||[]):
+      const pinnedPapers=turn.action==="workspace"?await loadPapers(pinnedIds.length?pinnedIds:context.workspaceView?[]:context.candidateIds||[]):
         pinnedIds.flatMap(id=>cachedPapers.get(id)||[]);
       if(pinnedPapers.length)registerPapers(pinnedPapers,false);
       const chinaBoundaryDirectory=path.join(adminBoundaryDir,"datav");
@@ -477,7 +486,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         const isActionable=()=>operationKeys.some(key=>Object.hasOwn(operation,key));
         let actionable=isActionable(),navigationHandled=false;
         if(!actionable){
-          const navigation=navigationTarget(targetQuery);
+          const navigation=navigationTarget(targetQuery,!!context.workspaceView);
           if(navigation){
             navigationHandled=true;
             try{

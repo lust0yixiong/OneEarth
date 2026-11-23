@@ -315,7 +315,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         throw new SourceReadClaimError("本轮根据已保存材料作答，请对实际采用的证据添加相应引用 "+
           parentCitations.map(ref=>ref.token).join("、")+"。同名材料可能是不同对象，不能把文献记录当作文件或目录原页。");
     }
-    const prompt=synthesisInstructions+(sourceReadComparisons.length?"\n"+sourceChangeInstructions:"")+"\n"+JSON.stringify({question:query,questionMode:retrieval?.plan.questionMode,
+    const prompt=synthesisInstructions+(context.workspaceView?"\nworkspace.workspaceView 是发问当刻的工作台可见状态。可据此回答当前图层、选择、期次和显示信息；与用户研究附件分开，不把显示标签或图例冒充来源原文、科学观测或QC结论，不声称执行了未记录的切换或外查。\n":"")+(sourceReadComparisons.length?"\n"+sourceChangeInstructions:"")+"\n"+JSON.stringify({question:query,questionMode:retrieval?.plan.questionMode,
       turnAction:turn&&{action:turn.plan.action,goal:turn.plan.goal,evidenceNeed:turn.plan.evidenceNeed,targets:turn.plan.targets.map(({excerpt,...t})=>t),
         rule:"本轮没有执行数据发现检索。只围绕指定对象、已提供摘录和相关历史证据回答；通用原理可解释，但不能伪称本轮查获。未读来源不能说已读，缺少具体事实时明确边界，不补造数据集、论文事实或观测数。不要把本轮问题重新改成找数据。"},
       sourceConstraint:restricted||source?{sources:restricted||[source],rule:"用户明确限定本轮的来源范围。正文、引用和结论只能依据本轮提供的各指定渠道记录。没有匹配材料时说明缺项；如需要扩大来源，询问用户是否同意。"}:undefined,
@@ -330,7 +330,8 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       materialSelection:{considered:papers.length+(retrieval?.haina.length||0),included:rows.length,
         notice:"身份行与有界节选分别标记；未装入原文不代表来源不存在，候选有论文记录不等于与本题相关。"},workspace:{
       userAttachments:context.attachedScope,case:caseById(context.caseId)?.title,selection:context.selection,filters:context.filters,center:context.attachedScope?context.selection?.point:context.camera.center,
-      citation:context.citation,expectedVersions:context.candidateVersions,dataView:context.dataView,visualization:context.visualization
+      citation:context.citation,expectedVersions:context.candidateVersions,dataView:context.dataView,visualization:context.visualization,
+      ...(context.workspaceView?{workspaceView:context.workspaceView}:{})
     },catalogue:rows.map((r,i)=>({...r,ref:"S"+(i+1)})),
     webResults:webHits.map((h,i)=>({...h,linkMaterial:webMaterial(h.url),ref:"S"+(rows.length+i+1)})),
     documentedDataAccessLinks:[...accessLinks].filter(([url])=>publicMaterialUrl(url)).map(([url,kinds])=>({url,kinds:[...kinds]})),

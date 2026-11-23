@@ -59,7 +59,7 @@ import type {
   Coordinate,
 } from "../domain/types";
 export interface Scene {
-  flight?:{kind?:"research-region"|"place"|"grid"}|null;
+  flight?:{kind?:"research-region"|"place"|"grid"|"layer-control"}|null;
   researchRegion?:import("../domain/research-region").ResearchRegionLayer|null;
   observationGlobe?:boolean;
   onObservationPick?:(x:number,y:number)=>void;
@@ -112,6 +112,7 @@ export function createRenderer(
   windCanvas?: HTMLCanvasElement,
   onError?: (error: Error | null) => void,
   onHover?: (hover:GridHover|null) => void,
+  onManualNavigation?: () => void,
 ) {
   const ctx = canvas.getContext("2d");
   if (!ctx) throw Error("浏览器未提供 Canvas 绘图环境");
@@ -163,8 +164,9 @@ export function createRenderer(
     changed:()=>{markInteraction();schedule();},
     canFly:()=>{
       const {pending,flight}=getScene();
-      // A pending answer must not interrupt an explicit grid navigation.
-      return !disposed && (!pending || flight?.kind==="grid" || flight?.kind==="research-region" || flight?.kind==="place");
+      // A pending answer must not interrupt an explicit navigation already underway.
+      return !disposed && (!pending || flight?.kind==="grid" || flight?.kind==="research-region" ||
+        flight?.kind==="place" || flight?.kind==="layer-control");
     },
     flightChanged:flying=>{canvas.dataset.flying=String(flying);if(flying)hoverIntent?.cancel();}});
   const stopFlight=motion.stopFlight,flyTo=motion.flyTo;
@@ -820,6 +822,7 @@ export function createRenderer(
     getOrigin: () => projection.translate(),
     pick,
     setCamera: (zoom: number, center: Coordinate) => {
+      onManualNavigation?.();
       motion.move({
         center,
         zoom,
@@ -879,13 +882,14 @@ export function createRenderer(
     },
     clearHover:cancelHover,
     get observationRevision(){return observationRevision;},
+    currentCamera: () => motion.camera(),
     projectVisible(point:Coordinate){
       if(!width || geoDistance(motion.camera().center,point)>=Math.PI/2)return null;
       return projection(point);
     },
     flyTo,stopFlight,
     zoom: (sign: number) => nav.step(sign),
-    reset: () => {stopFlight();motion.move({ center: [105, 25], zoom: 1, reason: "全球总览" });motion.settle();},
+    reset: () => {onManualNavigation?.();stopFlight();motion.move({ center: [105, 25], zoom: 1, reason: "全球总览" });motion.settle();},
     dispose() {
       disposed = true;
       cancelHover();

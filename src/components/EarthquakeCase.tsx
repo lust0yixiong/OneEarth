@@ -1,4 +1,4 @@
-import {useEffect,useRef,useState} from "react";
+import {useEffect,useLayoutEffect,useRef,useState} from "react";
 import {ArrowLeft,Pause,Play,RotateCcw,X} from "lucide-react";
 import {createRenderer,type Scene} from "../globe/renderer";
 import {emptyFilters} from "../domain/spatial";
@@ -58,7 +58,7 @@ function paint(canvas:HTMLCanvasElement,globe:Globe,view:MapState):Hit[]{
 }
 
 export function EarthquakeCase({back}:{back:()=>void}){
-  const {patch}=useWorkspace();
+  const {patch,registerWorkspaceSurface}=useWorkspace();
   const quakes=useFeed<Quakes>("/api/earthquakes/day",60000,false,feedKey);
   const network=useFeed<Stations>("/api/earthquakes/stations",3600000,false,stationKey);
   const [mode,setMode]=useState<Mode>("play"),[cursor,setCursor]=useState<number|null>(null);
@@ -125,6 +125,20 @@ export function EarthquakeCase({back}:{back:()=>void}){
     globe.current?.flyTo({center:latest.point,zoom:3.2,reason:"定位最新震中"});
   }
   function replay(){select(null);setCursor(start);setMode("play");}
+  useLayoutEffect(() => registerWorkspaceSurface(() => ({
+    surface: "cases", case: {id: "earthquakes", title: "全球地震"},
+    activeLayer: {
+      id: "earthquakes", title: "全球地震", status: quakes.data ? "ready" : quakes.failed ? "unavailable" : "loading",
+      controls: [],
+      display: [
+        {label: "播放状态", value: mode === "live" ? "实时更新" : mode === "pause" ? "回放已暂停" : "过去 24 小时回放"},
+        ...(end > 0 ? [{label: "当前时刻", value: utc(time)}] : []),
+        {label: "地震台站", value: showStations ? "显示" : "隐藏"},
+      ],
+    },
+    ...(quake || station ? {display: [{label: quake ? "已选震中" : "已选地震台站",
+      value: (quake?.place || station?.name || "已选记录").slice(0,240)}]} : {}),
+  })));
   return <section className="strike-case quake-case"><div className="strike-globe" ref={root}>
     <canvas className="strike-base" ref={base} aria-label="全球地震地球"/>
     <canvas className="strike-overlay" ref={overlay} aria-hidden="true"/>

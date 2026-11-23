@@ -337,6 +337,7 @@ export interface DiscoveryAttempt {
   view?: View;
 }
 export interface DiscoveryContext {
+  workspaceView?: import("./workspace-view-context").WorkspaceViewContext;
   attachedScope?:import("./question-scope").ScopeItem[];
   inCandidateScope?: boolean;
   observationSource?: boolean;
@@ -367,6 +368,7 @@ export interface CapabilityGap {
   verification: string;
 }
 export interface DiscoveryResponse {
+  workspaceAction?: import("./workspace-view-context").WorkspaceViewAction;
   discoveryClarification?: boolean;
   gridCoverage?: import("./grid-coverage").GridCoverageEvidence;
   researchRegion?:import("./research-region").ResearchRegion|null;
