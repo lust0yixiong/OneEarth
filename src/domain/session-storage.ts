@@ -52,11 +52,16 @@ function result<T>(request: IDBRequest<T>) {
 }
 
 export function mergeMessages(existing: Message[], incoming: Message[]) {
-  const ids = new Set(existing.map((m) => m.id));
-  const additions = incoming.filter((m) => !ids.has(m.id));
-  return additions.length
-    ? [...existing, ...additions].sort((a, b) => a.time - b.time || a.id.localeCompare(b.id))
-    : existing;
+  const messages = new Map(existing.map(message => [message.id, message]));
+  let changed = false;
+  for (const message of incoming) {
+    const previous = messages.get(message.id);
+    if (!previous || (previous.failed && !message.failed)) {
+      messages.set(message.id, message);
+      changed = true;
+    }
+  }
+  return changed ? [...messages.values()].sort((a, b) => a.time - b.time || a.id.localeCompare(b.id)) : existing;
 }
 export async function sessionSummaries(): Promise<SessionSummary[]> {
   const db = await database();
@@ -128,6 +133,7 @@ export async function writeFavorite(id: string, selected: boolean) {
 // key so simultaneous tabs cannot overwrite each other's requests.
 export interface ChatDelivery {
   id: string;
+  route?: "chat";
   attempt: import("./types").DiscoveryAttempt;
   body: string;
 }

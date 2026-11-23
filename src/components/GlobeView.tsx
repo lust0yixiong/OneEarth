@@ -437,7 +437,7 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
     !!s.mapResult && outsideMappedSelection(s.mapResult, s.selection);
   async function askSelectedScope() {
     const selection=s.selection;
-    if (!selection || scopeRequest.current || s.pending) return;
+    if (!selection || scopeRequest.current) return;
     const place=geoOrientation(selection.point).split("（")[0];
     if (!indexedScope) {
       attachScope(gridScope(selection,place),...timeScope(s.filters));
@@ -1370,7 +1370,7 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
               查看数据
             </button>
             <button
-              disabled={s.attachingMapScope || s.pending || (indexedScope && outsideFrozen)}
+              disabled={s.attachingMapScope || (indexedScope && outsideFrozen)}
               onClick={() => void askSelectedScope()}
             >
               {s.attachingMapScope ? "正在附加范围…" : indexedScope ? "用此范围提问" : "引用位置提问"}

@@ -18,7 +18,7 @@ import path from "node:path";
 import {gridCoverageSummary,questionGridEvidence,verifiedGridContext} from "./question-grid";
 import {gridQueryLimits,gridCataloguePaperIds,gridCatalogueAnswer} from "./grid-catalogue-answer";
 import {ExecutorFailure} from "./executor-failure";
-import {prepareTurn,turnMetadata,turnPlanningSchema,TurnPlanningFailure,type TurnPlan} from "./turn-planning";
+import {prepareTurn,parseTurnPlan,turnPlanningTargets,turnMetadata,turnPlanningSchema,TurnPlanningFailure,type TurnPlan,type TurnInput} from "./turn-planning";
 import {randomUUID} from "node:crypto";
 import {researchExecutor,discoveryProtocol} from "./research-executor";
 import {discoveryConfirmation} from "./discovery-bindings";
@@ -44,6 +44,9 @@ import { resolveSceneQuery } from "./earth-search";
 import { discover } from "../src/domain/discovery";
 import {authorizesWorkspaceViewAction,workspaceViewActionAllowed} from "../src/domain/workspace-view-context";
 import {resolveWorkspaceC40Publication} from "./workspace-c40-publication";
+import {runtimeTurnFingerprint,runtimeTurnHandoff,validRuntimeTurnHandoff,type RuntimeTurnInput,type RuntimeTurnHandoff,type RuntimeTurnOptions,type ForegroundTurnOutcome} from "./runtime-turn-handoff";
+export {validRuntimeTurnHandoff} from "./runtime-turn-handoff";
+export type {RuntimeTurnInput,RuntimeTurnHandoff,RuntimeTurnOptions,ForegroundTurnOutcome} from "./runtime-turn-handoff";
 
 export interface RuntimeServices {
   webTools?:RuntimeWebToolAuthority;
@@ -55,18 +58,26 @@ export interface RuntimeServices {
   canonicalCache: Map<string,{at:number;names:string[]}>;
 }
 
-export async function executeTurn(services: RuntimeServices, taskId: string, body: {
-  query: string;
-  conversationId: string;
-  turnId: string;
-  previousTaskId?: string;
-  context: import("../src/domain/types").DiscoveryContext;
-  history: import("./turn-planning").TurnHistory;
-  config: import("../src/domain/chat-model").ChatModel;
-  questionDecision?: import("../src/domain/types").QuestionDecision;
-  deepseekTools?: import("../src/domain/deepseek-tools").DeepSeekTools;
-  clarificationReply?:ClarificationReply;
-}, signal: AbortSignal, publish: (payload:Record<string, unknown>) => void, internal:{observationUnavailable?:boolean}={}): Promise<Record<string, unknown>> {
+export async function runForegroundTurn(services:RuntimeServices,taskId:string,body:RuntimeTurnInput,signal:AbortSignal,
+  emit:(payload:Record<string,unknown>)=>void,options:RuntimeTurnOptions={}):Promise<ForegroundTurnOutcome>{
+  const payload=await executeTurn(services,taskId,body,signal,emit,{...options,foreground:true,semanticDecision:true});
+  return validRuntimeTurnHandoff(payload.runtimeTurnHandoff)?{kind:"research",checkpoint:payload.runtimeTurnHandoff}:{kind:"reply",payload};
+}
+export async function resumePlannedTurn(services:RuntimeServices,taskId:string,body:RuntimeTurnInput,checkpoint:RuntimeTurnHandoff,
+  signal:AbortSignal,emit:(payload:Record<string,unknown>)=>void,options:RuntimeTurnOptions={}):Promise<Record<string,unknown>>{
+  signal.throwIfAborted();
+  if(!validRuntimeTurnHandoff(checkpoint)||runtimeTurnFingerprint(body)!==checkpoint.inputFingerprint)
+    return {error:"后台交接与已核验的前台输入不一致，未执行研究。",code:"TURN_HANDOFF_INVALID"};
+  const task=await services.tasks.get(taskId);
+  if(task&&!["queued","running"].includes(task.status))return {error:"任务已结束，未继续执行研究。",code:"TURN_HANDOFF_TERMINAL"};
+  if(checkpoint.plan.observationUse==="selected")return {error:"本次决定须由已授权的观测资料流程继续。",code:"OBSERVATION_HANDOFF_REQUIRED"};
+  return executeTurn(services,taskId,body,signal,emit,{...options,
+    ...(checkpoint.priorOverride&&!Object.hasOwn(options,"priorResult")?{priorResult:null}:{}),observationUnavailable:checkpoint.observationUnavailable,
+    observationAvailable:checkpoint.observationAvailable,observationMaterials:checkpoint.observationMaterials,semanticDecision:true,handoff:checkpoint});
+}
+
+export async function executeTurn(services:RuntimeServices,taskId:string,body:RuntimeTurnInput,signal:AbortSignal,
+  publish:(payload:Record<string,unknown>)=>void,internal:RuntimeTurnOptions&{foreground?:boolean;semanticDecision?:boolean;handoff?:RuntimeTurnHandoff}={}):Promise<Record<string,unknown>>{
   const {tasks, push, coverage, researchRegionService, adminBoundaryDir, canonicalCache} = services;
   const cachedPapers=runtimeTurnPapers();
   const haina=runtimeTurnHaina();
@@ -74,7 +85,10 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
   let context=body.context;
   const controller = {signal};
   let activeExecutor:ReturnType<typeof researchExecutor>|undefined;
-  const runTrace:RunTrace = {started:Date.now(),stages:[],calls:[],timings:requestPerformance.getStore()};
+  const runTrace:RunTrace = internal.handoff?structuredClone(internal.handoff.runTrace):{started:Date.now(),stages:[],calls:[],timings:requestPerformance.getStore()};
+  if(internal.handoff&&requestPerformance.getStore()){
+    requestPerformance.getStore()!.unshift(...(runTrace.timings||[]));runTrace.timings=requestPerformance.getStore();
+  }
   let researchRegion:ResearchRegion|null|undefined;
   let regionTask:Promise<void>|undefined;
   function event(value:Record<string, unknown>) { publish(literatureDisplay(value)); }
@@ -130,13 +144,15 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       if(checked.action==="clarify")return {result:{message:checked.clarification!,clarification:true,runTrace}};
     }
     const gridLimits=gridCoverage&&!clarification&&!decision?gridQueryLimits(query):undefined;
-    const prior = await priorResult(tasks,body.conversationId,body.previousTaskId);
+    const prior = Object.hasOwn(internal,"priorResult")?internal.priorResult??undefined:await priorResult(tasks,body.conversationId,body.previousTaskId);
     const candidatePaperIds=[...(context.candidateIds||[]),...(context.attachedScope?.flatMap(s=>s.kind==="dataset"?[s.id]:[])||[]),
       ...(gridCoverage?gridCataloguePaperIds(gridCoverage):[]),
       ...(prior?.answerNotes?.references?.flatMap(r=>r.kind==="asset"?[r.id]:[])||[])];
-    const archived=await runtimeMaterialHistory(tasks,body.conversationId,[body.previousTaskId,decision?.checkMessageId,body.clarificationReply?.parentTaskId],
-      {paperIds:candidatePaperIds.filter(paperId),includeSources:!prior});
+    const priorOverridden=Object.hasOwn(internal,"priorResult");
+    const archived=await runtimeMaterialHistory(tasks,body.conversationId,[priorOverridden?undefined:body.previousTaskId,decision?.checkMessageId,body.clarificationReply?.parentTaskId],
+      {paperIds:candidatePaperIds.filter(paperId),includeSources:!prior&&!priorOverridden});
     cachedPapers.remember(archived.papers);
+    if(priorOverridden)cachedPapers.remember(prior?.paperRecords||[]);
     haina.remember(archived);
     const savedReadings=prior?.conversationEvidence?.length?prior.conversationEvidence:archivedReadEvidence(archived);
     if(savedReadings.length||prior?.conversationAssertionEvidence?.length){
@@ -149,7 +165,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     }
     async function retainMaterials(material:RuntimeMaterialReceipt){
       // Persist full acquired content before synthesis; call logs contain identities only.
-      await tasks.append(taskId,{researchMaterials:material});
+      if(internal.foreground)event({researchMaterials:material});else await tasks.append(taskId,{researchMaterials:material});
       cachedPapers.remember(material.papers);
       haina.remember(material);
       for(const reading of material.paperEvidence||[])if(!currentAssertionReadings.some(old=>isDeepStrictEqual(old,reading)))currentAssertionReadings.push(reading);
@@ -205,7 +221,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         output:JSON.stringify({action:"workspace",goal,reason:plan.reason})});
       return {plan,retrieval:undefined};
     }
-    const navigation = clarification||context.workspaceView?undefined:navigationTarget(query);
+    const navigation = internal.semanticDecision||clarification||context.workspaceView?undefined:navigationTarget(query);
     const selected=navigation?undefined:numberedReference(query,prior);
     const ref=selected?.reference;
     if(selected){
@@ -288,7 +304,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
     const c40View=context.workspaceView?.activeLayer?.id==="c40";
     const c40PublicationRequested=c40View&&
       context.workspaceView?.activeLayer?.controls.some(control=>control.publication?.kind==="c40-cities");
-    const workspaceResolution=clarification?undefined:await resolveWorkspaceC40Publication(context.workspaceView,decision?.dataQuestion||query,signal);
+    const workspaceResolution=clarification?undefined:await resolveWorkspaceC40Publication(context.workspaceView,decision?.dataQuestion||query,signal,{semanticDecision:internal.semanticDecision});
     if(workspaceResolution){
       context={...context,workspaceView:workspaceResolution.view};
       if(c40PublicationRequested)report({id:"workspace-c40-publication",kind:"tool",name:"核对当前已发布城市选项",status:workspaceResolution.issue?"partial":"done",
@@ -296,22 +312,36 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         output:JSON.stringify({revision:workspaceResolution.proof?.revision,shortlist:workspaceResolution.proof?.ids,
           matched:workspaceResolution.matches,read:workspaceResolution.read,issue:workspaceResolution.issue})});
     }
-    const prepared = clarification?{plan:{action:"search",evidenceNeed:"discover",goal:clarification.goal,targets:[],
-      reason:"研究者明确补充原委托，沿已受理发现身份和等待水位继续。",clarification:null,
-      ...turnMetadata(query,{previousResearchIntent:planningIntent,history,conversationContext})} as TurnPlan,retrieval:undefined as import("./data-search").DataSearchResult|undefined}:
-      navigation ? navigationTurn(navigation) : await prepareTurn({
-      question:decision?.dataQuestion||query, context, history, conversationContext,gridCoverage,
-      workspacePublication:workspaceResolution?.proof,
-      ...(internal.observationUnavailable?{observationUnavailable:true as const}:{}),
+    const planningInput:TurnInput={
+      question:decision?.dataQuestion||query,context,history,conversationContext,gridCoverage,workspacePublication:workspaceResolution?.proof,
+      ...(internal.semanticDecision?{semanticDecision:true,pending:internal.pending??internal.handoff?.pending}:{}),...(internal.observationUnavailable?{observationUnavailable:true}:{}),
+      ...(internal.observationAvailable?{observationAvailable:true,observationMaterials:internal.observationMaterials}:{}),
       previousResearchIntent:planningIntent,confirmedQuestion:decision?.dataQuestion,numbered:selected,
       numberedRead:ref?.kind==="web"?savedReadings.find(read=>read.url===ref.url):undefined,
       numberedAssertion:ref?.kind==="asset"?prior?.conversationAssertionEvidence?.find(read=>read.assetId===ref.id):undefined,
-    }, signal, {
-      run: prompt => executor.model(prompt, {outputSchema:turnPlanningSchema({gridCoverage,workspaceView:context.workspaceView,observationUnavailable:internal.observationUnavailable?true:undefined})}),
+    };
+    function resumedPlan():TurnPlan{
+      const saved=internal.handoff!.plan,available=turnPlanningTargets(planningInput);
+      for(const target of saved.targets){
+        const current=available.find(item=>item.key===target.key);
+        if(!current||["kind","id","url","basis"].some(key=>current[key as keyof typeof current]!==target[key as keyof typeof target]))
+          throw Error("原计划的确切来源已无法核对，未执行研究。 ");
+      }
+      return parseTurnPlan(JSON.stringify({...saved,targets:saved.targets.map(target=>target.key),evidenceGap:saved.evidenceGap??null}),planningInput,available);
+    }
+    const prepared = internal.handoff?{plan:resumedPlan(),retrieval:undefined as import("./data-search").DataSearchResult|undefined}:clarification?{plan:{action:"search",evidenceNeed:"discover",goal:clarification.goal,targets:[],
+      reason:"研究者明确补充原委托，沿已受理发现身份和等待水位继续。",clarification:null,
+      ...turnMetadata(query,{previousResearchIntent:planningIntent,history,conversationContext})} as TurnPlan,retrieval:undefined as import("./data-search").DataSearchResult|undefined}:
+      navigation ? navigationTurn(navigation) : await prepareTurn(planningInput, signal, {
+      run: prompt => executor.model(prompt, {outputSchema:turnPlanningSchema({...planningInput,workspaceView:context.workspaceView})}),
       stage, report,
-      search:p=>scopeUnverified||p.gridIntent==="count"||p.gridIntent==="catalogue"||gridLimits?.currentCoverageOnly||gridLimits?.noDiscovery?Promise.resolve(undefined):find(p),
+      search:p=>internal.foreground||scopeUnverified||p.gridIntent==="count"||p.gridIntent==="catalogue"||gridLimits?.currentCoverageOnly||gridLimits?.noDiscovery?Promise.resolve(undefined):find(p),
     });
-    if(clarification)prepared.retrieval=await find(prepared.plan);
+    if(internal.foreground&&(["read","search"].includes(prepared.plan.action)||prepared.plan.observationUse==="selected")){
+      signal.throwIfAborted();return {runtimeTurnHandoff:runtimeTurnHandoff(body,prepared.plan,runTrace,internal)};
+    }
+    if(clarification||internal.handoff&&prepared.plan.action==="search")prepared.retrieval=scopeUnverified||
+      prepared.plan.gridIntent==="count"||prepared.plan.gridIntent==="catalogue"||gridLimits?.currentCoverageOnly||gridLimits?.noDiscovery?undefined:await find(prepared.plan);
     const turn=prepared.plan;
     if(turn.observationUse==="unavailable")return {result:{message:turn.clarification!,clarification:true,runTrace,
       ...turnMetadata(query,{history,conversationContext}),observationMaterialsUnavailable:true}};
@@ -408,10 +438,30 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       };
       const continuity={researchIntent:turn.researchIntent,conversationContext:turn.conversationContext,conversationEvidence,conversationAssertionEvidence};
       if(turn.action==="clarify"){
-        return complete({message:turn.clarification!,clarification:true,...continuity});
+        const reply={message:turn.clarification!,clarification:true,...continuity,
+          ...(turn.workspacePending?{workspacePending:{question:turn.clarification!,originalQuestion:body.query}}:{})};
+        return complete(reply);
+      }
+      const hasSourceMaterial=turn.targets.length||context.citation||context.attachedScope?.some(item=>item.kind==="dataset"||item.kind==="reference")||
+        conversationEvidence?.length||conversationAssertionEvidence?.length||prior?.answerNotes?.references?.length;
+      if(internal.foreground&&turn.action==="respond"&&turn.foregroundReply&&!hasSourceMaterial)
+        return complete({message:turn.foregroundReply,...continuity});
+      if(turn.workspaceOperation){
+        const reply={message:"已确定当前工作台操作。",workspaceOperation:{kind:turn.workspaceOperation},...continuity};
+        report({id:"workspace-action",kind:"tool",name:"确认当前工作台操作",input:JSON.stringify(reply.workspaceOperation),status:"done",output:"交由网页按原工作台状态核验后执行。"});
+        return complete(reply);
+      }
+      if(turn.workspaceLookup){
+        const resolved=workspaceResolution?.lookup?.(turn.workspaceLookup.query);
+        report({id:"workspace-city-lookup",kind:"tool",name:"核对模型所指城市的发布身份",input:JSON.stringify(turn.workspaceLookup),
+          status:resolved?.choice?"done":"partial",output:JSON.stringify(resolved||{issue:"当前城市目录不可用"})});
+        if(!resolved?.choice||!workspaceResolution?.proof)return complete({message:resolved?.issue||"当前城市目录不可用，本轮未切换城市。",clarification:true,...continuity});
+        const layer=context.workspaceView!.activeLayer!,control=layer.controls.find(control=>control.id==="city")!;
+        if(!control.options.some(option=>option.id===resolved.choice!.id))control.options=[...control.options,resolved.choice];
+        turn.workspaceAction={kind:"set-control",layerId:"c40",controlId:"city",valueId:resolved.choice.id,publicationRevision:workspaceResolution.proof.revision};
       }
       if(turn.action==="workspace"&&turn.workspaceAction){
-        if(!authorizesWorkspaceViewAction(decision?.dataQuestion||query)||!workspaceViewActionAllowed(context.workspaceView,turn.workspaceAction))throw new TurnPlanningFailure();
+        if(!internal.semanticDecision&&!authorizesWorkspaceViewAction(decision?.dataQuestion||query)||!workspaceViewActionAllowed(context.workspaceView,turn.workspaceAction))throw new TurnPlanningFailure();
         const action=turn.workspaceAction,layer=context.workspaceView!.activeLayer!,control=layer.controls.find(c=>c.id===action.controlId)!;
         if(action.publicationRevision&&!await workspaceResolution?.revalidate?.(signal)){
           report({id:"workspace-c40-publication-final",kind:"tool",name:"重验城市选择的发布修订",input:action.publicationRevision,status:"partial",output:"目录已变化或暂不可用，未交付切换动作。"});
@@ -424,9 +474,10 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
       }
       const targetQuery=decision?.dataQuestion||query;
       const pinnedIds=turn.targets.flatMap(t=>t.id?[t.id]:[]);
-      const pinnedPapers=turn.action==="workspace"?await loadPapers(pinnedIds.length?pinnedIds:context.workspaceView?[]:context.candidateIds||[]):
+      const pinnedPapers=turn.action==="workspace"?await loadPapers(pinnedIds.length?pinnedIds:context.workspaceView||internal.semanticDecision?[]:context.candidateIds||[]):
         pinnedIds.flatMap(id=>cachedPapers.get(id)||[]);
       if(pinnedPapers.length)registerPapers(pinnedPapers,false);
+      if(turn.workspaceReply)return complete({...turn.workspaceReply,...continuity,...(pinnedPapers.length?{paperRecords:pinnedPapers}:{})});
       const chinaBoundaryDirectory=path.join(adminBoundaryDir,"datav");
       const administrativeLevel=(place:string,photon?:PlaceHit):"city"|"district"|null=>{
         // Towns and villages have no boundary in the dataset; never borrow the county's.
@@ -481,6 +532,7 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
           const reply=await placeReplyFor(name);
           if(reply)return reply;
         }
+        if(internal.semanticDecision)return {message:"没有找到「"+navigation.place+"」的权威定位，尚未移动地图。可补充更确切的地名或坐标。",clarification:true};
         // Last resort: the model only standardizes the name; coordinates still come from a geocoder.
         const canonical=canonicalCache.get(navigation.place);
         const names=canonical&&Date.now()-canonical.at<3600000?canonical.names:await canonicalPlaceNames(navigation.place,
@@ -495,14 +547,20 @@ export async function executeTurn(services: RuntimeServices, taskId: string, bod
         return {message:"没有找到「"+navigation.place+"」的位置。可以补充更完整的具体名称（例如所在市、县或全称），或直接给出经纬度（例如 120.2E, 30.3N）。"};
       }
       if(turn.action==="workspace"){
+        if(internal.semanticDecision&&!turn.workspaceNavigation){
+          const target=turn.targets.length===1?turn.targets[0]:undefined;
+          if(target?.kind==="asset"&&target.id)return complete({message:"将打开「"+target.title+"」的数据速览。",inspectId:target.id,...continuity});
+          return complete({message:"还没有确定可执行的界面目标。请明确要打开的对象或当前可用控件。",clarification:true,...continuity});
+        }
         const operationContext={...context,...(pinnedIds.length?{candidateIds:pinnedIds,inCandidateScope:true}:{})};
-        let operation=discoverConversation(targetQuery,operationContext);
+        let operation=internal.semanticDecision?{message:"正在核对模型所指位置。"} as DiscoveryResponse:discoverConversation(targetQuery,operationContext);
         if(pinnedIds.length===1 && (assetById.has(pinnedIds[0])||/^haina:\d+$/.test(pinnedIds[0])) && /^(?:请|帮我)?(?:打开|预览|查看)/.test(targetQuery))
           operation={message:"已打开「"+(assetById.get(pinnedIds[0])?.title||turn.targets.find(t=>t.id===pinnedIds[0])?.title||pinnedIds[0])+"」的数据速览。",inspectId:pinnedIds[0]};
         const operationKeys=["camera","gridSystem","filters","clearSelection","view","selectCenter","previewNeed","inspectId","dataView","visualization","catalogQuery","mesh","layer","researchRegion"];
         const isActionable=()=>operationKeys.some(key=>Object.hasOwn(operation,key));
         let actionable=isActionable(),navigationHandled=false;
-        const requestedNavigation=navigationTarget(targetQuery,!!context.workspaceView);
+        const requestedNavigation=turn.workspaceNavigation?{verb:"model",place:turn.workspaceNavigation.place}:navigationTarget(targetQuery,!!context.workspaceView);
+        if(turn.workspaceNavigation){operation={message:"正在核对模型所指位置。"};actionable=false;}
         const menuTarget=requestedNavigation&&["切换到","切到"].includes(requestedNavigation.verb);
         const explicitCameraNavigation=requestedNavigation&&!menuTarget;
         const localCameraOperation=operation.camera?.reason==="按对话调整视野"||operation.view||operation.gridSystem||operation.visualization||operation.dataView;

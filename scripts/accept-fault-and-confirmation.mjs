@@ -14,7 +14,7 @@ const browser=await chromium.launch({headless:true,executablePath:process.env.CH
 const page=await browser.newPage({viewport:{width:1512,height:859},deviceScaleFactor:1});
 const tasks=new Set();
 page.on("request",r=>{
-  if(new URL(r.url()).pathname==="/api/tasks" && r.method()==="POST")tasks.add(r.postDataJSON().id);
+  if(["/api/chat/messages","/api/tasks"].includes(new URL(r.url()).pathname) && r.method()==="POST")tasks.add(r.postDataJSON().id);
 });
 const events=async(id)=>{
   const r=await fetch(new URL("/api/tasks/"+id+"/events",base),{signal:AbortSignal.timeout(420000)});

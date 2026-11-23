@@ -7,6 +7,7 @@ type Publication={revision:string;cities:City[]};
 export type WorkspacePublicationProof={revision:string;ids:string[]};
 type Resolution={view:WorkspaceViewContext|undefined;proof?:WorkspacePublicationProof;issue?:string;matches?:string[];
   read?:{status:number;bytes:number};
+  lookup?:(query:string)=>{choice?:{id:string;label:string};issue?:string};
   revalidate?:(signal:AbortSignal)=>Promise<boolean>};
 const maxBytes=2*1024*1024,maxCities=10000;
 const identifier=(v:unknown):v is string=>typeof v==="string"&&/^[a-z0-9][a-z0-9:_.-]{0,159}$/i.test(v);
@@ -81,7 +82,7 @@ export function workspaceC40Publications(options:{origin?:string;fetchImpl?:type
     cache.delete(key);cache.set(key,publication);
     return {...publication,read:{status:response.status,bytes:readBytes}};
   }
-  return async function resolve(view:WorkspaceViewContext|undefined,question:string,signal:AbortSignal):Promise<Resolution>{
+  return async function resolve(view:WorkspaceViewContext|undefined,question:string,signal:AbortSignal,options:{semanticDecision?:boolean}={}):Promise<Resolution>{
     const layer=view?.activeLayer,control=layer?.controls.find(control=>control.id==="city"&&control.publication?.kind==="c40-cities");
     if(layer?.id!=="c40"||!control?.publication)return {view};
     const expected=control.publication;
@@ -91,14 +92,22 @@ export function workspaceC40Publications(options:{origin?:string;fetchImpl?:type
       const current=entries.findIndex(city=>city.id===control.current.id);
       if(current<0)throw Error("当前城市已不在发布目录中，请刷新后再选择");
       const matched=namedCities(question,entries);
-      if(matched.ambiguous)throw Error("城市名称对应多个发布条目，请明确城市名称或稳定编号");
-      const wanted=new Set([...entries.slice(Math.max(0,current-2),current+3).map(city=>city.id),...matched.ids]);
+      if(matched.ambiguous&&!options.semanticDecision)throw Error("城市名称对应多个发布条目，请明确城市名称或稳定编号");
+      const wanted=new Set([...entries.slice(Math.max(0,current-2),current+3).map(city=>city.id),...(matched.ambiguous?[]:matched.ids)]);
       const choices=entries.filter(city=>wanted.has(city.id)).map(({id,label})=>({id,label}));
       const resolved:WorkspaceViewContext={...view!,activeLayer:{...layer,controls:layer.controls.map(item=>item!==control?item:{...control,
         current:{id:entries[current].id,label:entries[current].label},options:choices}),
         display:[{label:"城市选项来源",value:"已核对同一发布修订；窗口含当前邻项及本轮原话精确命中项"},
           ...(layer.display||[])].slice(0,16)}};
       return {view:resolved,proof:{revision:expected.revision,ids:choices.map(choice=>choice.id)},matches:matched.ids,read:publication.read,
+        lookup:query=>{
+          if(!text(query))return {issue:"城市名称无效，本轮未切换城市。"};
+          const normalized=normalize(query),matches=entries.filter(city=>city.aliases.some(alias=>{
+            const name=normalize(alias);return name===normalized||name.startsWith(normalized+" ");
+          }));
+          return matches.length===1?{choice:{id:matches[0].id,label:matches[0].label}}:
+            {issue:matches.length?"该名称对应多个已发布城市，请明确城市名称或稳定编号。":"当前发布目录没有与该名称唯一对应的城市，本轮未切换城市。"};
+        },
         revalidate:async nextSignal=>{try{await load(expected,nextSignal);return true;}catch{nextSignal.throwIfAborted();return false;}}};
     }catch(error){
       signal.throwIfAborted();const issue=(error instanceof Error?error.message:"当前城市目录不可用").replace(/[\u0000-\u001f\u007f]/gu," ").slice(0,220);

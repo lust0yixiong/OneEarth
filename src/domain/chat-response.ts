@@ -3,7 +3,8 @@ import {validResearchRegion,type ResearchRegion} from "./research-region";
 export class ChatResponseError extends Error {
   constructor(message:string,readonly code?:string,readonly runTrace?:RunTrace){super(message);this.name="ChatResponseError";}
 }
-export async function readChatResponse(response:Response,onStage:(text:string,searches?:SearchRun[],trace?:RunTrace)=>void,onRegion?:(region:ResearchRegion|null)=>void):Promise<DiscoveryResponse> {
+export type ChatPhase = "foreground" | "research";
+export async function readChatResponse(response:Response,onStage:(text:string,searches?:SearchRun[],trace?:RunTrace,phase?:ChatPhase)=>void,onRegion?:(region:ResearchRegion|null)=>void):Promise<DiscoveryResponse> {
   if(!response.headers.get("content-type")?.includes("application/x-ndjson")){
     const data=await response.json();
     if(!response.ok) throw new ChatResponseError(data.error || "数据发现请求失败。",data.code);
@@ -39,7 +40,9 @@ export async function readChatResponse(response:Response,onStage:(text:string,se
         }
         if(trace && event.searches)trace={...trace,searches:event.searches};
         if(event.error)throw new ChatResponseError(event.error,event.code,trace);
-        if(event.stage || event.call || event.finding || event.runTrace)onStage(stageText,event.searches,trace);
+        const phase = event.chatPhase === "research" || event.queued === true ? "research"
+          : event.chatPhase === "foreground" ? "foreground" : undefined;
+        if(event.stage || event.call || event.finding || event.runTrace || phase)onStage(stageText,event.searches,trace,phase);
         if(event.result)return event.result;
       }
       if(done)throw Error("连接在回复完成前中断，请重试。");

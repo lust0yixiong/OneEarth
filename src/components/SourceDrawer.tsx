@@ -153,7 +153,7 @@ export function SourceDrawer({refs,title,message,archived,question,close}:{refs:
           {Array.from(byReferenceUrl.get(r.url) ?? [],([key,{material,dataUrl,catalogUrl,versionLabel}])=>{
             const attached=s.draftScope?.some(item=>item.kind==="observation" &&
               item.artifactId===material.artifactId && item.version===material.version);
-            const disabled=s.pending || s.attachingMapScope || !!s.clarificationReply || attached;
+            const disabled=s.attachingMapScope || !!s.clarificationReply || attached;
             return <div className="oe-observation-source-actions" key={key}>
               <small>{material.title} · {versionLabel}（{material.version}）</small>
               <button type="button" disabled={disabled} onClick={()=>{

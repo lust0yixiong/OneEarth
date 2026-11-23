@@ -13,6 +13,7 @@ export type WorkspaceSurfaceReading = {
   case?: WorkspaceViewContext["case"];
   focus?: WorkspaceViewContext["focus"];
   candidates?: WorkspaceViewContext["candidates"];
+  candidateItems?: WorkspaceViewContext["candidateItems"];
   display?: WorkspaceViewContext["display"];
   applyControl?: (action: WorkspaceViewAction) => boolean;
   resolvePublishedChoice?: (publication:WorkspaceViewPublication, valueId:string) => WorkspaceViewChoice | undefined;

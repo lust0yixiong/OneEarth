@@ -58,8 +58,9 @@ test("derived strict schema adds nullable typed action only for new clients",()=
   const schema=turnPlanningSchema({workspaceView:view()});assert.ok(schema.required.includes("workspaceAction"));
   assert.ok(Object.keys(schema.properties).every(key=>schema.required.includes(key)));
   assert.ok("workspaceAction" in schema.properties);
-  assert.equal(schema.properties.workspaceAction.anyOf[1].additionalProperties,false);
-  assert.deepEqual(schema.properties.workspaceAction.anyOf[1].required,["kind","layerId","controlId","valueId"]);
+  const actionSchema=schema.properties.workspaceAction as {anyOf:Array<{additionalProperties?:boolean;required?:string[]}>};
+  assert.equal(actionSchema.anyOf[1].additionalProperties,false);
+  assert.deepEqual(actionSchema.anyOf[1].required,["kind","layerId","controlId","valueId"]);
 });
 
 test("plain model output can omit the neutral field without granting a workspace action",()=>{

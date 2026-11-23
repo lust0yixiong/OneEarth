@@ -1,12 +1,27 @@
 import type {DiscoveryResponse,Message} from "./types";
 
-export async function openTaskEvents(id: string, body: string, signal: AbortSignal) {
+export const chatMessagesPath = "/api/chat/messages";
+export async function openTaskEvents(id: string, body: string, signal: AbortSignal, legacy = false, onAccepted?:()=>void) {
   const input: unknown = JSON.parse(body);
-  const created = await fetch("/api/tasks", {
+  const created = await fetch(legacy ? "/api/tasks" : chatMessagesPath, {
     method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id, input}), signal,
   });
-  if (!created.ok) return created;
-  return fetch("/api/tasks/" + encodeURIComponent(id) + "/events", {signal, cache:"no-store"});
+  if (!created.ok) return chatTransportResponse(created);
+  onAccepted?.();
+  const events=await fetch("/api/tasks/" + encodeURIComponent(id) + "/events", {signal, cache:"no-store"});
+  return chatTransportResponse(events);
+}
+
+function chatTransportResponse(response:Response) {
+  if (response.status===408 || response.status===429 || response.status>=500)
+    throw Error("连接暂不可用，可接回本轮请求。");
+  return response;
+}
+
+export async function cancelChatRequest(id:string,signal:AbortSignal) {
+  const response=await fetch("/api/tasks/"+encodeURIComponent(id),{method:"DELETE",signal});
+  if (response.status!==204 && response.status!==409) throw Error("暂时无法取消本轮，请重试。");
+  return response.status===204;
 }
 
 export const researchRecordId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;

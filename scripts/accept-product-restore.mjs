@@ -74,7 +74,7 @@ try{
     await page.locator(".message.user").getByText(data.question,{exact:true}).waitFor({timeout:25000});
     const question="For source #2 in your previous answer, which observations did the authors use? Please stay with that source.";
     await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(question);
-    const submitted=page.waitForRequest(request=>request.method()==="POST"&&new URL(request.url()).pathname==="/api/tasks");
+    const submitted=page.waitForRequest(request=>request.method()==="POST"&&["/api/chat/messages","/api/tasks"].includes(new URL(request.url()).pathname));
     await page.getByLabel("发送消息",{exact:true}).click();
     const {id,input:{previousTaskId}}=(await submitted).postDataJSON();
     assert.equal(previousTaskId,followUpRecord);

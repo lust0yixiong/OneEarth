@@ -156,7 +156,7 @@ export type TaskStore = {
 
 export type TaskPreparation={checkpoint?:Payload;error?:string};
 export function taskRoutes(router: Router, base: string, store: TaskStore, validate: (body: unknown) => string | undefined | Promise<string | undefined>, options:{researchRecords?:boolean;initialCheckpoint?:(id:string,input:unknown)=>Payload|undefined;recoverRecord?:(task:Task)=>Promise<unknown>;
-  prepareWhen?:(input:unknown)=>boolean|Promise<boolean>;prepare?:(id:string,input:unknown)=>Promise<TaskPreparation>}={}) {
+  prepareWhen?:(input:unknown)=>boolean|Promise<boolean>;prepare?:(id:string,input:unknown)=>Promise<TaskPreparation>;onCancelled?:(id:string)=>void}={}) {
   router.param("taskId", (_req, res, next, id) => {
     if (!taskIdPattern.test(id)) { res.status(400).json({error:"无效的任务编号。"}); return; }
     next();
@@ -197,8 +197,10 @@ export function taskRoutes(router: Router, base: string, store: TaskStore, valid
     res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,result});
   });
   router.delete(base + "/:taskId", async (req, res) => {
-    if (!await store.get(String(req.params.taskId))) { res.status(404).json({error:"任务不存在。"}); return; }
-    const cancelled = await store.finish(String(req.params.taskId), "cancelled", {error:"任务已取消。", code:"cancelled"});
+    const id=String(req.params.taskId);
+    if (!await store.get(id)) { res.status(404).json({error:"任务不存在。"}); return; }
+    const cancelled = await store.finish(id, "cancelled", {error:"任务已取消。", code:"cancelled"});
+    if(cancelled)options.onCancelled?.(id);
     res.sendStatus(cancelled ? 204 : 409);
   });
   router.get(base + "/:taskId/events", async (req, res) => {

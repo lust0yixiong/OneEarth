@@ -37,7 +37,7 @@ try{
       await page.goto(new URL("/?research="+parent,origin).href);
       await page.locator(".message.assistant").first().waitFor({timeout:30000});
       await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(question);
-      const next=page.waitForRequest(request=>request.method()==="POST"&&new URL(request.url()).pathname==="/api/tasks");
+      const next=page.waitForRequest(request=>request.method()==="POST"&&["/api/chat/messages","/api/tasks"].includes(new URL(request.url()).pathname));
       await page.getByLabel("发送消息",{exact:true}).click();
       const {id,input:{previousTaskId}}=(await next).postDataJSON();
       assert.equal(previousTaskId,parent);

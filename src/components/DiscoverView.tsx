@@ -1,4 +1,4 @@
-import {useEffect,useMemo,useRef,useState} from "react";
+import {useEffect,useLayoutEffect,useMemo,useRef,useState} from "react";
 import {Bookmark,Database,ListFilter,Radio,RefreshCw,Globe} from "lucide-react";
 import {BatchContext,ResearchListLibrary,SaveResearchList} from "./ResearchLists";
 import {ResearchAssessment} from "./ResearchAssessment";
@@ -15,7 +15,7 @@ import {regionalForDataset} from "../domain/regional-cases";
 import "../styles/data-access.css";
 
 export function DiscoverView(){
-  const {state:s,patch,inspectAsset,mapCandidates,toggleSaved,leaveDetail,openCatalog,openVisualization}=useWorkspace();
+  const {state:s,patch,inspectAsset,mapCandidates,toggleSaved,leaveDetail,openCatalog,openVisualization,registerWorkspaceSurface}=useWorkspace();
   const search=s.search,section=initialAccessSection(search),scope=search.result?.filters||emptyFilters();
   const [data,setData]=useState<AccessPage|null>(null),[incoming,setIncoming]=useState<AccessPage|null>(null);
   const [loading,setLoading]=useState(true),[error,setError]=useState(""),[reload,setReload]=useState(0);
@@ -72,6 +72,9 @@ export function DiscoverView(){
   },[section,queryKey]);
   useEffect(()=>()=>{actionVersion.current++;},[]);
   const rows=data?.rows||[],ids=rows.map(r=>r.asset.id);
+  useLayoutEffect(()=>registerWorkspaceSurface(()=>({surface:"discover",
+    candidateItems:data?.rows.slice(0,16).map(row=>({id:row.asset.id,label:row.asset.title}))})),
+    [data,registerWorkspaceSurface]);
   const batch=catalogBatch(search,ids,s.camera,s.gridSystem);
   const selectedIds=search.compare;
   const compared=selectedIds.flatMap(id=>assetById.get(id)||[]);

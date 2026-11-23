@@ -1,29 +1,26 @@
+import {availableChatOperations, chatCandidateBatch, chatCandidateItems, chatCandidateKey, saveChatResearchList} from "./chat-workspace-operations";
+import {validWorkspaceOperationKind, workspaceCandidateOperationAllowed} from "./workspace-operations";
 import {projectWorkspaceView, workspaceActionState, type WorkspaceSurfaceReading} from "./workspace-view-projection";
 import {authorizesWorkspaceViewAction, workspaceViewActionAllowed, type WorkspaceViewPublication} from "./workspace-view-context";
-import { canReplyToDiscoveryClarification, discoveryClarificationResult, loadResearchRecord, openTaskEvents } from "./runtime-client";
+import { canReplyToDiscoveryClarification, discoveryClarificationResult, loadResearchRecord, openTaskEvents, chatMessagesPath, researchRecordId, cancelChatRequest } from "./runtime-client";
 import {datasetScope,mergeScope,scopedQuestionContext,scopeDetail,scopeLabel,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
 import {rememberReadEvidence} from "./read-evidence";
 import {conversationReferenceMemory,modelHistoryMessages} from "./reference-memory";
 import {researchRegionCamera,validResearchRegion,sameResearchRegion,type ResearchRegion,type ResearchRegionLayer} from "./research-region";
 import {answerMapBatch,answerFilters,initialAnswerCamera,gridCamera,evidenceCamera,evidenceSelection} from "./answer-map";
-import { globeCases,regionalIds,layerFrameCount,datasetLayers,regionalForDataset,type RegionalId } from "./regional-cases";
+import { globeCases,layerFrameCount,datasetLayers,type RegionalId } from "./regional-cases";
 import {isRainYear} from "./rain-catalog";
-import { paperId, asksForPapers } from "./paper-record";
+import { paperId } from "./paper-record";
 import { loadPaperCatalog,readPaperCatalogStatus, type PaperCatalogStatus } from "./paper-catalog-client";
 import { randomId } from "./id";
-import { ChatResponseError, readChatResponse } from "./chat-response";
+import { ChatResponseError, readChatResponse, type ChatPhase } from "./chat-response";
 import {readDeepSeekTools,loadDeepSeekTools} from "./deepseek-tools";
 import { readChatModel } from "./chat-model";
-import { identifyCase } from "./research-chat";
-import {materialAnswer} from "./material-summary";
-import {selectedDistribution} from "./results";
 import {geoBounds,geoCentroid} from "d3-geo";
-import {checkedScenes, observationUnit, products, frequencySummary,globalProduct} from "./product-distribution";
-import {validWindow,windowFilters,windowLabel} from "./time-window";
-import { observationIntent } from "./observation-intent";
+import {checkedScenes} from "./product-distribution";
+import {validWindow,windowFilters} from "./time-window";
 import { observationBatchCamera, observationById, pushId, type PushFeed } from "./push-observations";
-import { isWorkspaceCommand } from "./research-question";
 import {makeQuestionDecision} from "./question-confirmation";
 import type {ClarificationReply, QuestionDecision} from "./types";
 import {validAccessSection,initialAccessSection} from "./data-access";
@@ -32,12 +29,11 @@ import {loadHainaCatalog,type HainaCatalogStatus} from "./haina-catalog-client";
 import { type ChatDelivery, saveChatDelivery, unfinishedChatDeliveries, removeChatDelivery, legacySession, mergeMessages, readFavorites, readSession, readSessionMessage, sessionMessages, sessionSummaries, writeFavorite, writeSession } from "./session-storage";
 import { sampleCamera } from "./earth-search";
 import { catalogResults, type SearchState } from "./results";
+import { catalogBatch } from "./batch-context";
 import { assetById, assetIdentity, assets } from "./datasets";
-import { evaluateBatch } from "./research-assessment";
-import { catalogBatch, searchConditions } from "./batch-context";
 import { saveReaderCheckpoint, restoreReaderCheckpoint } from "./reader-checkpoint";
 import { useResultLink } from "./use-result-link";
-import { createResearchList, persistResearchList, type SavedEvidence } from "./research-list";
+import type { SavedEvidence } from "./research-list";
 import { comparison, makeCandidates, makeMappedCandidates } from "./results";
 import type { CandidateSet } from "./types";
 import { defaultWindState, loadWindData, windDocument } from "./wind";
@@ -77,11 +73,10 @@ import {
   dataCamera,
   reconcileDataView,
 } from "./visualization";
-import { caseById, resources, sourceLabels } from "./catalog";
+import { caseById, sourceLabels } from "./catalog";
 import { emptyFilters, fitCamera, gridSpec, cellAt } from "./spatial";
 import { assetMaterials, evidenceFor } from "./evidence";
 import { resolution } from "../data/evidence/globe-navigation.mjs";
-import september from "../data/evidence/september-sea-ice-pdo.json";
 const emptySearch: SearchState = {
   query: "",
   type: "",
@@ -137,17 +132,26 @@ export interface State {
   messages: Message[];
   citation: Citation | null;
   evidence: EvidenceDocument | null;
-  pending: boolean;
-  chatStage?: string;
-  liveTrace?:import("./types").RunTrace;
+  activeChats: ActiveChat[];
   webMode?: "auto" | "on" | "off";
-  liveSearches?:import("./types").SearchRun[];
   error: string | null;
   chatOpen: boolean;
   saved: string[];
   previewKind: string | null;
   dataView: DataView | null;
 }
+type ActiveChat = {
+  id:string;
+  userMessageId:string;
+  scope:Pick<DiscoveryAttempt["context"],"filters"|"selection">;
+  stage:string;
+  phase:ChatPhase;
+  accepted?:boolean;
+  cancelling?:boolean;
+  cancelError?:string;
+  trace:import("./types").RunTrace;
+  searches:import("./types").SearchRun[];
+};
 const workspaceFields = [
   "view", "caseId", "filters", "camera", "gridSystem", "layer", "selection", "mesh", "source",
   "inspector", "mapResult", "search", "overview", "origin", "visualization", "fieldLayer", "dataView",
@@ -240,24 +244,6 @@ function bindEvidenceBatch(doc: EvidenceDocument, s: State): EvidenceDocument {
   };
   return { ...doc, assetId:id, sourceBatch,
     ...(doc.fullSource ? {fullSource:{...doc.fullSource, sourceBatch:{...sourceBatch, selection:null, filters:{...sourceBatch.filters,place:""}}}} : {}),
-  };
-}
-function focusedMaterial(s: State, batch: CandidateSet | null) {
-  const doc = s.evidence || s.citation?.excerpt;
-  const inspector = s.inspector && "assetId" in s.inspector ? s.inspector : null;
-  const evidenceId = doc?.assetId || doc?.locator?.documentId || doc?.id;
-  const id = doc ? (assetById.has(evidenceId || "") ? evidenceId :
-    evidenceId?.split("-excerpt-")[0].replace(/-source$|\/\d+$/g, "")) : inspector?.assetId;
-  const record = id ? assetById.get(id) : undefined;
-  const asset = doc?.version !== undefined && doc.version !== (record?.version ?? null) ? undefined : record;
-  const original = doc?.sourceBatch;
-  const sameInspector = inspector?.assetId === id ? inspector : null;
-  const parent = original || sameInspector?.parent || (id && batch?.ids.includes(id) ? batch : null);
-  const missingScope = !!doc && !!(doc.locator || doc.id.includes("-excerpt-")) && !(id && original?.ids.includes(id));
-  return {
-    id, asset, doc, parent, missingScope,
-    filters: original?.filters || sameInspector?.filters || parent?.filters || s.filters,
-    selection: original ? original.selection : sameInspector ? sameInspector.selection : parent ? parent.selection : s.selection,
   };
 }
 function requestWorkspaceKey(s: State) {
@@ -436,7 +422,7 @@ function initial(sessionId: string, url = new URL(location.href), saved: Record<
       : [],
     citation: null,
     evidence: null,
-    pending: false,
+    activeChats: [],
     error: null,
     chatOpen: (fieldLayer?.id === "forest" || fieldLayer?.id === "c40" || !fieldLayer) && (requestedView === "chat" || innerWidth > 760),
     saved: Array.isArray(saved.saved)
@@ -520,11 +506,13 @@ async function loadInitialSession(): Promise<State> {
           const messages:Message[]=[
             {id:saved.turnId,role:"user",text:saved.question,time:saved.created},
             {id:saved.id,role:"assistant",text:reply.message,time:saved.updated,replyTo:saved.turnId,
-              researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
+              chatMessage:true,...(reply.workspaceAction || reply.workspaceOperation ? {historicalReply:true} : {}),
+              workspacePending:reply.workspacePending,researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
               conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
               answerNotes:reply.answerNotes,runTrace:reply.runTrace,researchRegion:reply.researchRegion,
               gridCoverage:reply.gridCoverage,
-              ...(discoveryClarificationResult(reply)?{clarification:true,discoveryClarification:true}:{})},
+              ...(reply.clarification?{clarification:true}:{}),
+              ...(discoveryClarificationResult(reply)?{discoveryClarification:true}:{})},
           ];
           state.sessionId=saved.conversationId;
           state.messages=mergeMessages(stored?.messages||[],messages);
@@ -570,8 +558,13 @@ function useWorkspaceValue(initialState: State) {
     surfaceReading.current = read;
     return () => { if (surfaceReading.current === read) surfaceReading.current = null; };
   }, []);
-  const workspaceViewAt = useCallback((s: State) => projectWorkspaceView(s, surfaceReading.current?.()), []);
-  const request = useRef<AbortController | null>(null);
+  const workspaceViewAt = useCallback((s:State,batch:CandidateSet|null,operations:ReturnType<typeof availableChatOperations>)=>{
+    const reading=surfaceReading.current?.();
+    const items=chatCandidateItems(s,batch,reading?.surface===s.view ? reading.candidateItems : undefined);
+    return {...projectWorkspaceView(s,reading),operations:[...operations.keys()],
+      ...(items.length ? {candidateItems:items} : {})};
+  },[]);
+  const requests = useRef(new Map<string,{controller:AbortController;progress:ActiveChat}>());
   const serial = useRef(0);
   const patch = useCallback((value: Partial<State>) => {
     const scopeChange=["caseId","view","mapResult","filters","selection","gridSystem"].some(key=>Object.hasOwn(value,key));
@@ -750,6 +743,7 @@ function useWorkspaceValue(initialState: State) {
   const dirtyWorkspace = useRef(false);
   const lastSnapshot = useRef(captureWorkspace(initialState));
   const lastMessageTime = useRef(0);
+  const recentSubmission=useRef<{session:string;message:Message}|null>(null);
   const switchVersion = useRef(0);
   const recordWrite = useCallback((operation: Promise<unknown>, onError: () => void) => {
     const tracked = operation.then(() => {}, () => {
@@ -766,9 +760,11 @@ function useWorkspaceValue(initialState: State) {
     // Local actions can add both the question and answer in the same millisecond.
     lastMessageTime.current = Math.max(Date.now(), lastMessageTime.current + 1, (s.messages.at(-1)?.time || 0) + 1);
     const message = { id: randomId(), role, text, time: lastMessageTime.current, ...extra };
+    if(role==="user")recentSubmission.current={session:s.sessionId,message};
     if(role==="assistant" && message.candidates)automaticAnswerIds.current.add(message.id);
     dispatch({ type: "messages", sessionId: s.sessionId, messages: [message] });
     return recordWrite(writeSession(s.sessionId, sessionTitle(s), undefined, [message]).then(() => {
+      failedMessages.current.delete(message.id);
       channel.current?.postMessage({sessionId: s.sessionId, id: message.id});
     }), () => failedMessages.current.set(message.id, message));
   }, [recordWrite]);
@@ -841,8 +837,8 @@ function useWorkspaceValue(initialState: State) {
       next.saved = await readFavorites();
       if (!id) await writeSession(next.sessionId, sessionTitle(next), { ...captureWorkspace(next), resultId: null });
       if (switchVersion.current !== switchId || s.sessionId !== latest.current.sessionId) return false;
-      request.current?.abort();
-      request.current = null;
+      for (const entry of requests.current.values()) entry.controller.abort();
+      requests.current.clear();
       serial.current++;
       lastSnapshot.current = captureWorkspace(next);
       const url = new URL(location.href);
@@ -895,7 +891,10 @@ function useWorkspaceValue(initialState: State) {
     }else{url.searchParams.delete("rainYear");url.searchParams.delete("rainMonth");}
     history.replaceState({ ...history.state, oneearthSession: state.sessionId, oneearthPath: url.pathname + url.search }, "", url);
   }, [state.linkStatus, state.sessionId, state.caseId, state.view, state.search.source,state.search.section,state.search.page,state.search.query,state.search.type,state.search.capability,state.search.savedOnly, state.filters.source, state.mapResult, state.dataView, state.visualization,state.fieldLayer?.id,state.fieldLayer?.year,state.fieldLayer?.frame,state.fieldLayer?.city]);
-  useEffect(() => () => request.current?.abort(), []);
+  useEffect(() => () => {
+    for (const entry of requests.current.values()) entry.controller.abort();
+    requests.current.clear();
+  }, []);
   const openCase = useCallback(
     (id: string, need = -1) => {
       const c = caseById(id);
@@ -1168,7 +1167,7 @@ function useWorkspaceValue(initialState: State) {
     },
     [patch],
   );
-  const inspectAsset = (
+  const inspectAsset = useCallback((
     assetId: string,
     filters?: Filters,
     selection?: Selection | null,
@@ -1212,7 +1211,7 @@ function useWorkspaceValue(initialState: State) {
               : s.selection,
       },
     });
-  };
+  },[patch]);
   const openData = useCallback(
     (
       caseId: string,
@@ -1257,9 +1256,28 @@ function useWorkspaceValue(initialState: State) {
     },
     [patch],
   );
+  const publishChatProgress = useCallback(()=>{
+    patch({activeChats:[...requests.current.values()].map(entry=>entry.progress)});
+  },[patch]);
+  const cancelChat = useCallback(async (id:string)=>{
+    const entry=requests.current.get(id);
+    if (!entry?.progress.accepted || entry.progress.cancelling) return;
+    const update = (change:Partial<ActiveChat>)=>{
+      if (requests.current.get(id)!==entry) return;
+      entry.progress={...entry.progress,...change};
+      publishChatProgress();
+    };
+    update({cancelling:true,cancelError:undefined});
+    try {
+      const cancelled=await cancelChatRequest(id,AbortSignal.any([entry.controller.signal,AbortSignal.timeout(8000)]));
+      if (!cancelled) update({stage:"正在核对本轮终态"});
+    } catch (error) {
+      update({cancelling:false,cancelError:error instanceof Error ? error.message : "暂时无法取消本轮。"});
+    }
+  },[publishChatProgress]);
   const executeDiscovery = useCallback(
     async (attempt: DiscoveryAttempt, retrying: boolean, saved?: ChatDelivery) => {
-      if (request.current) return;
+      if ([...requests.current.values()].some(({progress})=>progress.userMessageId===attempt.userMessageId)) return;
       const q = attempt.query;
       const current = latest.current;
       const until = current.messages.findIndex(m => m.id === attempt.userMessageId);
@@ -1272,7 +1290,14 @@ function useWorkspaceValue(initialState: State) {
       const latestAssistant=assistantHistory.at(-1)?.id;
       const conversationAssertionEvidence=assistantHistory.filter(m=>m.conversationAssertionEvidence!==undefined).at(-1)?.conversationAssertionEvidence;
       const conversationReferences=conversationReferenceMemory(promptMessages);
-      const previousAnswer = current.messages.slice().reverse().find(message => message.role==="assistant" && !message.failed && message.answerNotes);
+      // Completion order can differ from submission order while a study is running.
+      const questionOrder = new Map(preceding.flatMap((message,index)=>message.role==="user" ? [[message.id,index] as const] : []));
+      const previousAnswer = preceding.reduce<Message|undefined>((best,message)=>{
+        if (message.role!=="assistant" || message.failed || !researchRecordId.test(message.id)
+          || (!message.chatMessage && !message.answerNotes && !message.questionCheck && !message.discoveryClarification)) return best;
+        return !best || (questionOrder.get(message.replyTo || "") ?? -1) >= (questionOrder.get(best.replyTo || "") ?? -1)
+          ? message : best;
+      },undefined);
       const payload = {query:q, context:attempt.context, config:readChatModel(), deepseekTools:readDeepSeekTools(),
         conversationId:current.sessionId, turnId:attempt.userMessageId, previousTaskId:attempt.clarificationReply?undefined:previousAnswer?.id,
         ...(attempt.questionDecision?{questionDecision:attempt.questionDecision}:{}),
@@ -1298,11 +1323,34 @@ function useWorkspaceValue(initialState: State) {
         dataView: attempt.context.dataView ?? null, visualization: attempt.context.visualization ?? null,
       };
       const controller = new AbortController();
-      request.current = controller;
-      const delivery = saved || {id: randomId(), attempt, body: JSON.stringify(payload)};
+      const delivery: ChatDelivery = saved || {id: randomId(), attempt, body: JSON.stringify(payload), route:"chat"};
       const session = current.sessionId;
-      const isCurrent = () => !controller.signal.aborted && latest.current.sessionId === session && request.current === controller;
-      const version = ++serial.current;
+      const legacy = delivery.route !== "chat";
+      const entry = {controller,progress:{id:delivery.id,userMessageId:attempt.userMessageId,
+        scope:{filters:attempt.context.filters,selection:attempt.context.selection},
+        stage:saved ? "正在接回本轮回答" : "正在提交问题",phase:legacy ? "research" as const : "foreground" as const,
+        trace:{started:Date.now(),stages:[],calls:[]},searches:[]} as ActiveChat};
+      requests.current.set(delivery.id,entry);
+      const isCurrent = () => !controller.signal.aborted && latest.current.sessionId === session
+        && requests.current.get(delivery.id) === entry;
+      const updateProgress = (progress:Partial<ActiveChat>) => {
+        entry.progress={...entry.progress,...progress};
+        publishChatProgress();
+      };
+      const closeProgress = () => {
+        if (!isCurrent()) return;
+        requests.current.delete(delivery.id);
+        publishChatProgress();
+      };
+      const complete = (message:string, extra:Partial<Message>) =>
+        add("assistant",message,{...extra,chatMessage:!legacy});
+      const latestQuestion = () => {
+        const rendered=latest.current.messages.slice().reverse().find(message=>message.role==="user");
+        const submitted=recentSubmission.current;
+        return submitted?.session===session && submitted.message.time>(rendered?.time ?? -1) ? submitted.message : rendered;
+      };
+      const version = serial.current;
+      let keepDelivery=false;
       let regionFlight:{id:string;camera:Camera;kind:"research-region"}|undefined;
       let regionReceived=false;
       // Only our own automatic camera move is exempt from the late-reply guard.
@@ -1311,7 +1359,9 @@ function useWorkspaceValue(initialState: State) {
         const now=latest.current;
         const ownCamera=regionFlight && now.flight?.id===regionFlight.id &&
           (now.camera===current.camera || JSON.stringify(now.camera)===JSON.stringify(regionFlight.camera));
-        return version===serial.current && requestWorkspaceKey(ownCamera?{...now,camera:current.camera}:now)===attempt.workspaceKey;
+        const question = latestQuestion();
+        return version===serial.current && (!question || question.id===attempt.userMessageId)
+          && requestWorkspaceKey(ownCamera?{...now,camera:current.camera}:now)===attempt.workspaceKey;
       };
       const receiveRegion=(region:ResearchRegion|null)=>{
         if(regionReceived || !isCurrent())return;
@@ -1330,7 +1380,8 @@ function useWorkspaceValue(initialState: State) {
         [c?.title, s.filters.place, s.selection?.grid.label]
           .filter(Boolean)
           .join(" · ") || "全球视图";
-      patch({ pending: true, liveTrace:{started:Date.now(),stages:[],calls:[]},liveSearches:[], chatStage:saved ? "正在接回本轮回答" : "正在提交问题", error: null, ...(retrying || attempt.clarificationReply ? {} : { citation: null }), ...(saved ? {} : {chatOpen:true}) });
+      publishChatProgress();
+      if (!saved) patch({error:null,chatOpen:true});
       try {
         if (!saved) {
           payload.deepseekTools = await loadDeepSeekTools(controller.signal);
@@ -1338,31 +1389,99 @@ function useWorkspaceValue(initialState: State) {
         }
         if (!saved) await saveChatDelivery(session, delivery).catch(() => patch({sessionError:sessionFailure}));
         const receive = async () => {
-          const response = await openTaskEvents(delivery.id, delivery.body, controller.signal);
-          return readChatResponse(response, (text, liveSearches, liveTrace) => {
-            if (isCurrent()) patch({chatStage:text,...(liveSearches ? {liveSearches} : {}),...(liveTrace ? {liveTrace} : {})});
+          const response = await openTaskEvents(delivery.id, delivery.body, controller.signal, legacy, ()=>{
+            if (isCurrent()) updateProgress({accepted:true});
+          });
+          return readChatResponse(response, (stage, searches, trace, phase) => {
+            if (isCurrent()) updateProgress({...(stage ? {stage} : phase==="research" ? {stage:"研究已进入队列"} : {}),
+              ...(searches ? {searches} : {}),...(trace ? {trace} : {}),...(phase ? {phase} : {})});
           },receiveRegion);
         };
         let r: DiscoveryResponse;
         try { r = await receive(); }
         catch (error) {
           if (!isCurrent() || error instanceof ChatResponseError) throw error;
-          patch({chatStage:"正在重新连接本轮回答"});
+          updateProgress({stage:"正在重新连接本轮回答"});
           r = await receive();
         }
         if (!isCurrent()) return;
+        if (r.workspaceOperation !== undefined) {
+          const now=latest.current;
+          const question=now.messages.find(message=>message.id===attempt.userMessageId);
+          const batch=chatCandidateBatch(now);
+          const operations=availableChatOperations(now,batch,question?.citation || null);
+          const operation=r.workspaceOperation,kind=operation?.kind;
+          const original=attempt.context.workspaceView;
+          const originalViewport=original ? {...original,operations:undefined,candidateItems:undefined} : undefined;
+          const target=validWorkspaceOperationKind(kind) && original?.operations?.includes(kind) ? operations.get(kind) : undefined;
+          const staleWorkspace=()=>!workspaceCurrent() ||
+            workspaceActionState(originalViewport)!==workspaceActionState(projectWorkspaceView(latest.current,surfaceReading.current?.()));
+          const staleTarget=!!target && validWorkspaceOperationKind(kind) && attempt.workspaceOperationKeys?.[kind]!==target.key;
+          let stale=staleWorkspace() || staleTarget;
+          let message="当前工作台无法应用这项操作。";
+          if (!stale && !legacy && operation && "ids" in operation) {
+            const {ids,kind}=operation;
+            const candidateKey=attempt.workspaceCandidateKey;
+            stale=!!candidateKey && candidateKey!==chatCandidateKey(batch);
+            if (batch && !stale && candidateKey && workspaceCandidateOperationAllowed(original?.candidateItems,kind,ids)) {
+              try {
+                if (ids.some(id=>!assetById.has(id))) await loadRemoteAssetIds(ids);
+                if (!isCurrent()) return;
+                const current=latest.current,nextBatch=chatCandidateBatch(current),reading=surfaceReading.current?.();
+                const currentItems=chatCandidateItems(current,nextBatch,reading?.surface===current.view ? reading.candidateItems : undefined);
+                const chosen=ids.flatMap(id=>assetById.get(id) || []);
+                stale=staleWorkspace() || candidateKey!==chatCandidateKey(nextBatch) ||
+                  !workspaceCandidateOperationAllowed(currentItems,kind,ids);
+                if (!stale && chosen.length===ids.length) {
+                  if (kind==="open-candidate") {
+                    inspectAsset(chosen[0].id,batch.filters,batch.selection,batch);
+                    message="已打开「"+chosen[0].title+"」的数据速览。";
+                  } else {
+                    patch({inspector:{comparison:comparison(chosen,batch.filters,batch.selection),comparedBatch:{...batch,ids}},evidence:null});
+                    message="已打开对照 · "+chosen.map(asset=>asset.title).join("、");
+                  }
+                }
+              } catch {
+                if (!isCurrent()) return;
+                message="当前候选资料暂时无法读取。";
+              }
+            }
+          } else if (!stale && target && !legacy) {
+            try {
+              if (kind==="open-saved") {
+                patch({view:"discover",search:{...emptySearch,savedOnly:true},inspector:null,evidence:null});
+                message="已打开收藏。";
+              } else if (kind==="open-research-lists") {
+                patch({view:"discover",listLibraryOpen:true,inspector:null,evidence:null,
+                  origin:now.view==="earth" ? remember(now) : now.origin});
+                message="已打开本浏览器保存的研究清单。";
+              } else if (kind==="return-to-results") {
+                leaveDetail();
+                message="已返回进入前的视图并恢复原筛选。";
+              } else if (target.save) {
+                message=saveChatResearchList(delivery.id,target.save,localStorage);
+                window.dispatchEvent(new Event("oneearth-list-changed"));
+              }
+            } catch (error) {
+              message=error instanceof Error ? error.message : "暂时无法完成本轮操作。";
+            }
+          }
+          await complete(stale ? "工作台已变化，本轮操作未应用。" : message,
+            {id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,workspacePending:r.workspacePending,conversationContext:r.conversationContext,
+            ...(stale ? {historicalReply:true} : {})});
+          return;
+        }
         if (r.workspaceAction !== undefined) {
           const action = r.workspaceAction;
           const original = attempt.context.workspaceView;
           const latestState = latest.current;
           const surface = surfaceReading.current?.();
-          const currentView = projectWorkspaceView(latestState, surface);
-          const lastQuestion = latestState.messages.slice().reverse().find(message => message.role === "user");
-          const stale = !workspaceCurrent() || workspaceActionState(original) !== workspaceActionState(currentView)
-            || (!!lastQuestion && lastQuestion.id !== attempt.userMessageId);
+          const currentView = projectWorkspaceView(latestState,surface);
+          const stale = !workspaceCurrent() || workspaceActionState(original ? {...original,operations:undefined,candidateItems:undefined} : undefined)
+            !== workspaceActionState(currentView);
           const isPublishedChoice = (publication:WorkspaceViewPublication, valueId:string) =>
             !!surface?.resolvePublishedChoice?.(publication, valueId);
-          const allowed = authorizesWorkspaceViewAction(q) && workspaceViewActionAllowed(original, action, isPublishedChoice)
+          const allowed = (!legacy || authorizesWorkspaceViewAction(q)) && workspaceViewActionAllowed(original, action, isPublishedChoice)
             && workspaceViewActionAllowed(currentView, action, isPublishedChoice);
           const control = !stale && allowed && surface?.surface === latestState.view
             ? currentView.activeLayer?.controls.find(item => item.id === action.controlId) : undefined;
@@ -1372,34 +1491,25 @@ function useWorkspaceValue(initialState: State) {
           const message = control && target ? "已将" + control.label + "切换到「" + target.label + "」。"
             : stale ? "工作台已变化，本轮操作未应用。"
             : "当前视图无法应用这项操作。";
-          patch({pending:false});
-          await add("assistant", message, {id:delivery.id, replyTo:attempt.userMessageId,
-            runTrace:r.runTrace, ...(stale ? {historicalReply:true} : {}),
+          await complete(message, {id:delivery.id, replyTo:attempt.userMessageId,
+            runTrace:r.runTrace, workspacePending:r.workspacePending, ...(stale ? {historicalReply:true} : {}),
             researchIntent:r.researchIntent, conversationContext:r.conversationContext,
             conversationEvidence:r.conversationEvidence, conversationAssertionEvidence:r.conversationAssertionEvidence});
-          if (!failedMessages.current.has(delivery.id))
-            await removeChatDelivery(session, delivery.id).catch(()=>patch({sessionError:sessionFailure}));
           return;
         }
         if(r.researchRegion===null || validResearchRegion(r.researchRegion))receiveRegion(r.researchRegion);
         if(r.clarification){
-          patch({pending:false});
-          await add("assistant",r.message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,
+          await complete(r.message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,workspacePending:r.workspacePending,
             clarification:true,...(discoveryClarificationResult(r)?{discoveryClarification:true}:{}),researchRegion:r.researchRegion,researchIntent:r.researchIntent,conversationContext:r.conversationContext,conversationEvidence:r.conversationEvidence,conversationAssertionEvidence:r.conversationAssertionEvidence});
-          if(!failedMessages.current.has(delivery.id))
-            await removeChatDelivery(session,delivery.id).catch(()=>patch({sessionError:sessionFailure}));
           return;
         }
         if(r.questionCheck){
-          patch({pending:false});
-          await add("assistant",r.message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,
+          await complete(r.message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,
             questionCheck:{...r.questionCheck,attempt},researchRegion:r.researchRegion,researchIntent:r.researchIntent,conversationContext:r.conversationContext,conversationEvidence:r.conversationEvidence,conversationAssertionEvidence:r.conversationAssertionEvidence});
-          if(!failedMessages.current.has(delivery.id))
-            await removeChatDelivery(session,delivery.id).catch(()=>patch({sessionError:sessionFailure}));
           return;
         }
         if(r.hainaRecords&&r.hainaCatalog)registerHaina(r.hainaRecords,r.hainaCatalog.synced,r.hainaCatalog.endpoint,false);
-        const next: Partial<State> = { pending: false };
+        const next: Partial<State> = {};
         if(r.hainaCatalog)next.hainaFeed=r.hainaCatalog;
         if (
           r.view === "earth" &&
@@ -1570,9 +1680,7 @@ function useWorkspaceValue(initialState: State) {
           next.origin = s.origin || remember(s);
         if (s.visualization && r.visualization === null && s.origin)
           Object.assign(next, s.origin, { origin: null, evidence: null });
-        const lastQuestion = latest.current.messages.slice().reverse().find(m => m.role === "user");
-        const historicalReply = !workspaceCurrent() ||
-          !!lastQuestion && lastQuestion.id !== attempt.userMessageId;
+        const historicalReply = !workspaceCurrent();
         const effective = { ...s, ...next };
         const modelBatch: CandidateSet | undefined = r.modelIds?.length ? {
           title:q, ids:r.modelIds, caseId:r.caseId || s.caseId, filters:answerFilters(s.filters,r.filters),
@@ -1625,20 +1733,20 @@ function useWorkspaceValue(initialState: State) {
         if(regionReceived && r.researchRegion && !next.visualization && !next.dataView && r.visualizeNeed===undefined){
           delete next.camera;next.flight=regionFlight || latest.current.flight;
         }
-        patch(historicalReply ? {pending:false} : next);
+        if (!historicalReply) patch(next);
         if (next.search && r.catalogQuery !== undefined)
           r.message +=
             " 当前匹配 " +
             catalogResults(next.search, effective.saved).length +
             " 份资料。";
         if (next.error && r.visualizeNeed !== undefined) r.message = next.error;
-        await add("assistant", r.message, {
+        await complete(r.message, {
           id: delivery.id,
           researchRegion:r.researchRegion,
           researchIntent:r.researchIntent,conversationContext:r.conversationContext,
           conversationEvidence:r.conversationEvidence,
           conversationAssertionEvidence:r.conversationAssertionEvidence,
-          runTrace:r.runTrace, answerNotes:r.answerNotes, gridCoverage:r.gridCoverage,
+          runTrace:r.runTrace, answerNotes:r.answerNotes, gridCoverage:r.gridCoverage, workspacePending:r.workspacePending,
           replyTo: attempt.userMessageId,
           ...(historicalReply ? { historicalReply: true, context: "原问题 · " + q + " · " + context } : {}),
           ...(r.gap ? {dataSupport:r.gap.dataSupport} : {}),
@@ -1665,7 +1773,7 @@ function useWorkspaceValue(initialState: State) {
                   {
                     title: "获得服务响应",
                     detail:
-                      "POST /api/tasks" +
+                      "POST " + (legacy ? "/api/tasks" : chatMessagesPath) +
                       "\n" +
                       r.message,
                   },
@@ -1715,24 +1823,30 @@ function useWorkspaceValue(initialState: State) {
         });
       } catch (error) {
         if (!isCurrent()) return;
-        patch({
-          pending: false,
-          error: error instanceof Error ? error.message : "请求失败，请重试。",
-        });
-        await add("assistant", error instanceof ChatResponseError && error.code==="invalid_answer_references"
+        if (error instanceof ChatResponseError && error.code==="cancelled") {
+          await add("assistant",error.message,{id:delivery.id,replyTo:attempt.userMessageId,
+            runTrace:error.runTrace || entry.progress.trace});
+          return;
+        }
+        keepDelivery = !(error instanceof ChatResponseError);
+        patch({error:error instanceof Error ? error.message : "请求失败，请重试。"});
+        await complete(error instanceof ChatResponseError && error.code==="invalid_answer_references"
           ? "这次回答的资料引用未通过核对，可按原条件重试。"
           : "这次请求没有完成，可按此轮原始条件重试。", {
-          runTrace:error instanceof ChatResponseError ? error.runTrace || latest.current.liveTrace : latest.current.liveTrace,
+          runTrace:error instanceof ChatResponseError ? error.runTrace || entry.progress.trace : entry.progress.trace,
           id: delivery.id, failed: true, retry: attempt, replyTo: attempt.userMessageId,
         });
       } finally {
-        if (request.current === controller) request.current = null;
-      }
-      if (!failedMessages.current.has(delivery.id)) {
-        await removeChatDelivery(session, delivery.id).catch(() => patch({sessionError:sessionFailure}));
+        if (isCurrent()) {
+          closeProgress();
+          if (!keepDelivery && !failedMessages.current.has(delivery.id))
+            await removeChatDelivery(session, delivery.id).catch(() => {
+              if (latest.current.sessionId===session) patch({sessionError:sessionFailure});
+            });
+        }
       }
     },
-    [add, patch],
+    [add, inspectAsset, leaveDetail, patch, publishChatProgress],
   );
   const attachScope=(...items:ScopeItem[])=>{
     const previous=latest.current.draftScope || [];
@@ -1749,7 +1863,7 @@ function useWorkspaceValue(initialState: State) {
   const confirmQuestion = useCallback(async (messageId:string,choice:QuestionDecision["choice"],edited?:string)=>{
     const current=latest.current;
     const message=current.messages.find(m=>m.id===messageId),check=message?.questionCheck;
-    if(!message || !check || current.pending || request.current || confirmingQuestions.current.has(messageId) ||
+    if(!message || !check || confirmingQuestions.current.has(messageId) ||
       current.messages.some(m=>m.role==="user" && m.time>message.time))return;
     let decision:QuestionDecision;
     try{decision=makeQuestionDecision(check,messageId,choice,edited);}
@@ -1769,15 +1883,16 @@ function useWorkspaceValue(initialState: State) {
     async function restore() {
       const last = latest.current.messages.at(-1);
       const deliveries = await unfinishedChatDeliveries(session);
-      if (active && latest.current.sessionId === session && !deliveries.length && last?.role === "user" && !request.current) {
+      if (active && latest.current.sessionId === session && !deliveries.length && last?.role === "user" && !requests.current.size) {
         patch({unansweredQuestionId:last.id});
       }
       for (const delivery of deliveries) {
         if (!active || latest.current.sessionId !== session) return;
-        if (latest.current.messages.some(m => m.id === delivery.id)) {
+        const answer = latest.current.messages.find(m => m.id === delivery.id);
+        if (answer && !answer.failed) {
           await removeChatDelivery(session, delivery.id);
-        } else if (!request.current) {
-          await executeDiscovery(delivery.attempt, true, delivery);
+        } else if (!answer) {
+          void executeDiscovery(delivery.attempt, true, delivery);
         }
       }
     }
@@ -1835,691 +1950,66 @@ function useWorkspaceValue(initialState: State) {
     },
     [patch],
   );
-  const send = useCallback(
-    async (query: string, clarificationReply?: ClarificationReply) => {
-      const q = query.trim(),
-        s = latest.current;
-      if (!q || s.pending || s.attachingMapScope || request.current) return;
-      const workspaceView = workspaceViewAt(s);
-      if (clarificationReply) {
-        const {parentTaskId}=clarificationReply;
-        const parent=s.messages.find(m=>m.id===parentTaskId);
-        const alreadySent=s.messages.some(m=>m.role==="user" && m.id!==s.unansweredQuestionId &&
-          m.clarificationReply?.parentTaskId===parentTaskId);
-        if (!canReplyToDiscoveryClarification(parent) || alreadySent) return;
-        const attempt:DiscoveryAttempt={query:q,userMessageId:randomId(),workspaceKey:requestWorkspaceKey(s),
-          view:s.view,context:{...scopedQuestionContext([],null),workspaceView},clarificationReply};
-        add("user",q,{id:attempt.userMessageId,clarificationReply});
-        patch({clarificationReply:null,unansweredQuestionId:null});
-        await executeDiscovery(attempt,false);
-        return;
-      }
-      // Explicit workspace commands remain local after attachments are removed.
-      // Ordinary science questions do not acquire an area or year just by browsing.
-      const useComposerScope=!isWorkspaceCommand(q) && (s.draftScope!==null || (!s.caseId && !s.citation &&
-        !!(s.selection || s.filters.period || s.filters.utcWindow) && !s.mapResult && s.view==="earth" && !s.fieldLayer && s.filters.source!=="constellation" &&
-        !/当前(?:网格|选区|地图|范围|时段)|所选(?:网格|范围)|这个网格|此格|这格/.test(q)));
-      if(useComposerScope){
-        const items=s.draftScope || [];
-        const citation=s.citation ? (({excerpt,...ref})=>ref)(s.citation):null;
-        const context={...scopedQuestionContext(items,citation),workspaceView};
-        const attempt:DiscoveryAttempt={query:q,userMessageId:randomId(),workspaceKey:requestWorkspaceKey(s),view:s.view,context};
-        add("user",q,{id:attempt.userMessageId,attachedScope:items,...(s.citation?{citation:s.citation}:{})});
-        patch({draftScope:null});
-        await executeDiscovery(attempt,false);return;
-      }
-      const lastBatch=s.messages.slice().reverse().find(m=>m.role==="assistant" && m.candidates)?.candidates;
-      const contextAssetId=s.inspector && "assetId" in s.inspector ? s.inspector.assetId : lastBatch?.ids.length===1?lastBatch.ids[0]:undefined;
-      const contextDataset=contextAssetId && assetById.get(contextAssetId)?.datasetId;
-      const layerId=(Object.keys(globeCases) as RegionalId[]).find(id=>q.includes(datasetLayers[id]) || q.includes(globeCases[id].title) ||
-        ({rain:/全球.*(?:陆地)?降水|GPM.?IMERG|IMERG.*降水|NOAA.?CPC|CPC.*降水/i,rivers:/巴西.*河|GloFAS/i,lightning:/美国.*(?:地闪|闪电)|NLDN/i,forest:/大兴安岭|森林.*嵌入|1846764/i,c40:/C40|landuse|城市.*嵌入|1846639/i})[id]?.test(q)) || (/这份|这个数据|该数据/.test(q) && contextDataset ? regionalForDataset(contextDataset) : undefined);
-      if(layerId && !(layerId==="c40" && s.fieldLayer?.id==="c40") && isWorkspaceCommand(q) && /打开|切换|展示|显示|可视化|在球上看/.test(q) && !/能否|哪些|是否|有没有/.test(q)){
-        add("user",q);openVisualization(layerId);
-        add("assistant","已在数据地球打开「"+globeCases[layerId].title+"」。",{candidates:{
-          caseId:null,ids:[datasetLayers[layerId]],title:globeCases[layerId].dataset,originKind:"chat",layer:"all",filters:emptyFilters(),selection:null,
-          gridSystem:s.gridSystem,camera:{center:globeCases[layerId].center,zoom:globeCases[layerId].zoom,reason:globeCases[layerId].title}}});return;
-      }
-      const sourceBatch = s.view === "discover" ? s.search.result : s.view === "earth" ? s.mapResult : null;
-      const activeObservations = (s.view === "discover" ? initialAccessSection(s.search)==="timely" :
-        s.view === "earth" && s.filters.source === "constellation") || sourceBatch?.filters.source === "constellation";
-      const frozenObservations = activeObservations && sourceBatch?.filters.source === "constellation" ? sourceBatch : null;
-      let batch: CandidateSet | null = null;
-      if (s.view === "discover") {
-        batch = catalogBatch(
-          s.search,
-          s.search.pageIds||catalogResults(s.search, s.saved).map((a) => a.id),
-          s.camera,
-          s.gridSystem,
-        );
-      } else if (s.caseId || s.mapResult || s.selection || s.filters.period) {
-        const scope = {
-          title: caseById(s.caseId)?.title || s.mapResult?.title || "当前选区",
-          caseId: s.caseId || s.mapResult?.caseId || null,
-          filters: s.filters,
-          selection: s.selection,
-          layer: s.layer,
-          camera: s.camera,
-          gridSystem: s.gridSystem,
-        };
-        batch = s.mapResult
-          ? makeMappedCandidates(s.mapResult, scope)
-          : makeCandidates(scope);
-        const last = s.search.result;
-        const sameScope =
-          last &&
-          last.caseId === scope.caseId &&
-          last.layer === scope.layer &&
-          last.selection?.id === scope.selection?.id &&
-          last.selection?.grid.key === scope.selection?.grid.key &&
-          JSON.stringify(last.filters) === JSON.stringify(scope.filters);
-        if (!s.mapResult && sameScope) {
-          const referenced = last!;
-          const available = new Set(
-            batch.ids.map((id) =>
-              assetById.has(id) ? assetIdentity(assetById.get(id)!) : undefined,
-            ),
-          );
-          batch.ids = referenced.ids.filter((id) =>
-            available.has(
-              assetById.has(id) ? assetIdentity(assetById.get(id)!) : undefined,
-            ),
-          );
-        }
-      }
-      if(s.fieldLayer && s.view==="earth" && !layerId){
-        const id=s.fieldLayer.id;
-        batch={title:globeCases[id].dataset,caseId:null,ids:[datasetLayers[id]],filters:s.filters,selection:s.selection,layer:s.layer,camera:s.camera,gridSystem:s.gridSystem};
-      }
-      const visibleBatch = batch;
-      if (s.inspector && /这批|清单|当前选中|能否合用|联合使用判断/.test(q)) {
-        if ("batch" in s.inspector) batch = s.inspector.batch;
-        else if ("comparedBatch" in s.inspector && s.inspector.comparedBatch && !/整批|这批|全部|本轮/.test(q))
-          batch = s.inspector.comparedBatch;
-        else if ("parent" in s.inspector && s.inspector.parent)
-          batch = s.inspector.parent;
-      }
-      async function sendDiscovery(batch: CandidateSet | null, observationQuery = false, observationParent?: CandidateSet | null) {
-        const citation = s.citation ? (({ excerpt, ...reference }) => reference)(s.citation) : null;
-        const filters = s.view==="discover" && batch ? {...s.filters,source:batch.filters.source,type:batch.filters.type} : s.filters;
-        const attempt: DiscoveryAttempt = {
-          query: q, userMessageId: randomId(), workspaceKey: requestWorkspaceKey(s), view: s.view,
-          context: {
-            caseId: s.caseId, filters, gridSystem: s.gridSystem, layer: s.layer,
-            selection: s.selection, camera: s.camera, citation, dataView: s.dataView,
-            visualization: s.visualization,
-            workspaceView,
-            ...(observationQuery && activeObservations ? {observationSource: true} : {}),
-            ...(observationParent ? {observationBatch: {
-              catalogConditions: observationParent.catalogConditions, selection: observationParent.selection,
-              period: observationParent.filters.period, utcWindow: observationParent.filters.utcWindow,
-            }} : {}),
-            candidateIds: batch?.ids || [], inCandidateScope:!!batch,
-            candidateVersions: Object.fromEntries((batch?.ids || []).flatMap(id => {
-              const version = assetById.get(id)?.version;
-              return version ? [[id, version]] : [];
-            })),
-          },
-        };
-        add("user", q, {
-          id: attempt.userMessageId,
-          context: [caseById(s.caseId)?.title, s.filters.place, s.selection?.grid.label].filter(Boolean).join(" · ") || "全球视图",
-          ...(s.citation ? { citation: s.citation } : {}),
-        });
-        await executeDiscovery(attempt, false);
-      }
-      if(!isWorkspaceCommand(q)){
-        const intent=!s.citation && observationIntent(q,activeObservations);
-        const parent=intent==="refine"?frozenObservations:null;
-        await sendDiscovery(parent || batch,!!intent,parent);
-        return;
-      }
-      if (asksForPapers(q) && !s.selection && !s.filters.period && !s.filters.utcWindow && !s.filters.place && !s.filters.depth && !/^(?:请)?(?:在球上|在地图上|标出|高亮|显示|只看|切换|放大|缩小)/.test(q)) {
-        await sendDiscovery(batch);
-        return;
-      }
-      const clusterRequest = /局地聚集|数据聚集|数据集中在哪|哪些(?:地方|地区|区域).{0,18}(?:多种|多份|多类).{0,12}(?:实测|观测|数据)|(?:实测|观测|数据).{0,8}(?:聚集|集中分布)/.test(q);
-      if (clusterRequest && !s.citation) {
-        const topic = identifyCase(q) || (/冰川/.test(q) ? "glacier" : null);
-        const parent = !topic || topic === batch?.caseId ? batch : null;
-        const filters = {...(parent?.filters || (topic ? emptyFilters() : s.filters))};
-        if (/论文|文献/.test(q)) filters.source = "paper";
-        const caseId = topic || parent?.caseId || null;
-        const selection = parent?.selection || null;
-        const camera = !selection && caseId ? fitCamera(caseId, filters, "all") || s.camera : s.camera;
-        const scope = { caseId, filters, camera, selection, gridSystem:s.gridSystem, layer:parent?.layer || "all" as const,
-          title:(caseById(caseId)?.title || "当前资料") + " · 局地聚集" };
-        const result = parent ? makeMappedCandidates(parent,scope) : makeCandidates(scope);
-        result.clusterOverlay = true;
-        result.originKind = "chat";
-        result.metric = "products";
-        add("user",q);
-        patch({view:"earth",caseId:null,overview:"catalog",mapResult:result,filters,camera,selection,layer:scope.layer,
-          visualization:null,dataView:null,inspector:null,evidence:null,origin:remember(s)});
-        add("assistant","已按本轮资料的局地空间依据查找聚集。棕色轮廓旁标出格内产品数，可点选查看贡献产品。",{candidates:result});
-        return;
-      }
-      if (!s.citation && /论文|文献/.test(q) && /线索|研究区|采样区|球上|地图|用过.{0,6}数据|涉及.{0,6}数据/.test(q)) {
-        const topic = identifyCase(q);
-        const inherit = !topic || topic === (s.caseId || batch?.caseId);
-        const parent = inherit ? batch : null;
-        const filters = {...(parent?.filters || emptyFilters()), source:"paper"};
-        const caseId = topic || parent?.caseId || null;
-        const selection = parent?.selection || null;
-        const layer = parent?.layer || "all";
-        const camera = selection ? s.camera : (caseId && fitCamera(caseId,filters,layer)) || s.camera;
-        const scope = {caseId,filters,selection,layer,camera,gridSystem:s.gridSystem,
-          title: (caseById(caseId)?.title || "当前目录") + " · 论文数据线索"};
-        const result = parent ? makeMappedCandidates(parent,scope) : makeCandidates(scope);
-        result.originKind = "chat";
-        delete result.clusterOverlay;
-        add("user",q);
-        patch({view:"earth", caseId:null, overview:"catalog", mapResult:result, filters, layer, camera,
-          selection, visualization:null, dataView:null, inspector:null, evidence:null, origin:remember(s)});
-        add("assistant",result.ids.length
-          ? `找到 ${result.ids.length} 条论文关联资料。球上用紫色虚线标出有空间依据的研究区或采样格。点选后可查看格内资料与出处，其余资料保留在本轮列表。`
-          : "当前条件下没有找到论文关联资料。", {candidates:result});
-        return;
-      }
-      const asksForMaterial=/^(?:请)?(?:这份|这批|这些|当前|这里|所选|哪些|有|查看|核对).{0,24}(?:可核对的内容|已核记录|已核实的记录|查到具体记录|可预览的材料|有原始记录|有原表|已核到的观测|查到具体观测)[？?。！!]*$/.test(q);
-      if (!s.citation && asksForMaterial){
-        const scope=batch||makeCandidates({title:"当前资料",caseId:s.caseId,filters:s.filters,selection:s.selection,layer:s.layer,camera:s.camera,gridSystem:s.gridSystem});
-        const focus=focusedMaterial(s,scope);
-        const chosen=focus.asset && /这份|当前资料|当前数据/.test(q)?{...scope,ids:[focus.asset.id]}:scope;
-        add("user",q);
-        add("assistant",materialAnswer(chosen),{candidates:chosen});
-        return;
-      }
-      if(!s.citation && s.view==="earth" && !s.visualization && !s.fieldLayer && !s.dataView && !s.caseId && !activeObservations){
-        const match=q.match(/^(?:只看|限定|切换到|时间轴(?:切换到)?)\s*(\d{4})年(?:(\d{1,2})月)?[。？！?]?$/);
-        if(match && (!match[2] || (+match[2]>=1 && +match[2]<=12))){
-          const y=+match[1],m=Number(match[2])||1;
-          const f=match[2]?windowFilters([Date.UTC(y,m-1,1),Date.UTC(y,m,1)]):{period:[y,y] as [number,number],utcWindow:null};
-          setFilters(f);add("user",q);add("assistant","已将数据地球的时间轴限定到"+(f.utcWindow?windowLabel(f.utcWindow):y+" 年")+"。");return;
-        }
-      }
-      if(!s.citation && s.view==="earth" && !s.caseId && !s.visualization && !s.dataView && s.overview==="catalog"){
-        if(/(?:哪些|列出|查看|有多少).{0,8}全球(?:连续)?覆盖|全球(?:连续)?覆盖.{0,8}(?:哪些|有多少)/.test(q)){
-          const pool=s.mapResult?s.mapResult.ids.flatMap(id=>assetById.get(id)||[]):assets;
-          const world=pool.filter(a=>globalProduct(a,s.filters));
-          const group:CandidateSet={title:"当前条件下全球覆盖的产品",ids:world.map(a=>a.id),caseId:null,filters:s.filters,selection:null,layer:"all",camera:s.camera,gridSystem:s.gridSystem,originKind:"chat"};
-          add("user",q);add("assistant","当前条件下有 "+products(world).size+" 种全球连续覆盖产品。"+world.map(a=>a.title).join("、")+"。具体地点的有效值仍需核对。",{candidates:group});return;
-        }
-        const frequency=/频次|观测频率|最频繁|最密集|拍得最多|观测.{0,3}最多/.test(q);
-        const verified=/哪些.*(?:查到|核实|核到|确有).*景|已(?:经)?查到.*几景/.test(q);
-        const pick=/^(?:请)?(?:看|打开|查看)/.test(q) && /那景|这景|号的?影像|日的?影像|LT0|LE0|LC0/.test(q);
-        const goBack=/(?:回到|返回).*(?:分布|刚才的球)/.test(q);
-        const saveScene=/(?:存|保存|加入|加到).*清单|把这景存下来/.test(q)&&!!s.mapResult?.sceneKey;
-        if(frequency || verified || pick || goBack || saveScene){
-          const current=batch || makeCandidates({title:"当前数据分布",caseId:null,filters:s.filters,selection:s.selection,layer:s.layer,camera:s.camera,gridSystem:s.gridSystem});
-          const records=checkedScenes(current);
-          add("user",q);
-          if(saveScene||goBack){
-            let saved="";
-            if(saveScene){
-              if(!records.length){add("assistant","当前选期中没有可保存的这景记录。");return;}
-              try{persistResearchList(createResearchList(current),localStorage);window.dispatchEvent(new Event("oneearth-list-changed"));saved="已保存 "+records[0].id+" 及其采集时刻和来源。";}
-              catch(e){add("assistant",e instanceof Error?e.message:"保存失败。");return;}
-            }
-            if(goBack){
-              if(s.origin) {patch({...s.origin,evidence:null});saved+="已恢复上一幅分布及其时段与范围。";}
-              else {patch({mapResult:s.mapResult?{...s.mapResult,metric:"products"}:null,evidence:null,inspector:null});saved+="当前按产品数显示。";}
-            }
-            add("assistant",saved);return;
-          }
-          if(frequency && !/拍|影像|卫星|逐景/.test(q) && current.ids.some(id=>!records.some(r=>r.asset.id===id))){
-            add("assistant",materialAnswer(current)+"\n要比较频次，请指定同一种记录，例如同一变量的站点读数或同一类采样事件。",{candidates:current});return;
-          }
-          if(!records.length){add("assistant",materialAnswer(current),{candidates:current});return;}
-          if(pick){
-            const day=q.match(/(\d{1,2})\s*[日号]/),month=q.match(/(\d{1,2})\s*月/),year=q.match(/(\d{4})\s*年/);
-            const hits=records.filter(r=>q.includes(r.id)||!!day && +r.date.slice(8,10)===+day[1] && (!month||+r.date.slice(5,7)===+month[1]) && (!year||+r.date.slice(0,4)===+year[1]));
-            if(hits.length!==1){add("assistant",hits.length?"该日期有多景，请用影像编号选择："+hits.slice(0,8).map(r=>r.id).join("、"):"当前结果中没有匹配的影像，请指定日期或影像编号。");return;}
-            const r=hits[0],t=Date.parse(r.date);
-            const focused:CandidateSet={...current,title:r.id,sceneKey:r.id,ids:[r.asset.id],filters:{...current.filters,...windowFilters([t,t+1])},
-              camera:{center:geoCentroid(r.geometry),zoom:Math.min(80,Math.max(12,current.camera.zoom)),reason:r.id},catalogConditions:[...(current.catalogConditions||[]),"逐景编号 "+r.id]};
-            patch({origin:remember(s),mapResult:focused,camera:focused.camera,filters:focused.filters,inspector:{assetId:r.asset.id,parent:focused,filters:focused.filters,selection:focused.selection},evidence:null});
-            add("assistant",r.id+" · "+r.date+"。已定位并打开这景的资料。",{candidates:focused});return;
-          }
-          const sceneBatch:CandidateSet={...current,ids:[...new Set(records.map(r=>r.asset.id))],metric:frequency?"scenes":current.metric||"products"};
-          if(frequency)patch({mapResult:sceneBatch,origin:remember(s),evidence:null,inspector:null});
-          add("assistant","当前时空范围已核 "+records.length+" "+observationUnit(records)+"，来自 "+products(records.map(r=>r.asset)).size+" 种产品。"+
-            (frequency?(current.selection?"已按所选网格统计。":frequencySummary(records,gridSpec(current.gridSystem,resolution(s.camera.zoom))))+"球面按当前网格层级显示已核记录数。":"采集记录："+records.slice(0,6).map(r=>r.date.slice(0,10)+" · "+r.id).join("、")),{candidates:sceneBatch});return;
-        }
-        if(s.selection && /(?:这里|这个格|此格|这个网格).*(?:哪些|有什么|有多少).*(?:产品|数据|资料)/.test(q) && batch){
-          const {total,globals}=selectedDistribution(batch);
-          add("user",q);add("assistant","这个网格关联 "+total+" 种产品，其中 "+products(globals).size+" 种具有全球覆盖。\n"+materialAnswer(batch),{candidates:batch});return;
-        }
-      }
-      const intent = !s.citation && observationIntent(q, activeObservations);
-      if (intent) {
-        let parent: CandidateSet | null = null;
-        if (intent === "refine" && s.view === "discover" && visibleBatch) {
-          const checked = /勾选|已选资料/.test(q) ||
-            (s.search.compare.length > 0 && !/这批|整批|全部|当前结果/.test(q));
-          const filtered = !!s.search.result || !!s.search.type || !!searchConditions(s.search).length;
-          if (checked) parent = {...visibleBatch, ids:visibleBatch.ids.filter(id => s.search.compare.includes(id)),
-            catalogConditions:[...(visibleBatch.catalogConditions || []), "目录勾选的资料"]};
-          else if (filtered) parent = visibleBatch;
-        } else if (intent === "refine") parent = frozenObservations;
-        await sendDiscovery(parent || visibleBatch, true, parent);
-        return;
-      }
-
-      if (
-        !s.caseId &&
-        s.view === "earth" &&
-        s.overview === "simulation" &&
-        /(?:打开|查看|比较|对比).*第|这里有.*(?:数据|依据)/.test(q)
-      ) {
-        add("user", q);
-        add(
-          "assistant",
-          "当前图层展示模拟记录的来源计数。切换到「数据目录分布」即可点选网格并打开真实候选。",
-        );
-        return;
-      }
-      const recordAction = (message: string, action: string, details: string) =>
-        add("assistant", message, {
-          activity: {
-            id: "action-" + randomId(),
-            title: "工作区操作记录",
-            scope: q,
-            source: "OneEarth 当前工作区",
-            tabs: [
-              {
-                kind: "trace",
-                label: "执行记录",
-                steps: [
-                  { title: "读取请求", detail: q },
-                  { title: action, detail: details },
-                ],
-              },
-            ],
-          },
-        });
-      const material = focusedMaterial(s, batch);
-      const currentMaterialQuestion = /这(?:一)?份|该份|这个数据|当前(?:数据|表格|证据|引文|引用|资料)|这(?:段|条)引用/.test(q) ||
-        /^(?:怎么获取|如何下载|从哪里下载|预览(?:PDF|表格|摘录)|打开原表)[？?。]?$/i.test(q);
-      const asksSource = /来源|下载|获取/.test(q);
-      const asksPreview = /预览|查看|打开|看一下/.test(q);
-      if (currentMaterialQuestion && (asksSource || asksPreview) && !/保存|研究清单/.test(q)) {
-        const {asset, doc, parent, filters, selection, missingScope} = material;
-        add("user", q);
-        if (!asset) {
-          add("assistant", "当前资料及版次未能在目录中核对，请从原批次打开对应资料。");
-          return;
-        }
-        if (asksSource) {
-          const url = doc?.url || asset.url;
-          recordAction(asset.title + " 的来源为 " + (doc?.source || asset.source) + "。" +
-            (asset.profile?.access || "") + (url ? " 原始来源 " + url : ""),
-            "读取获取条件", asset.id + " · " + (url || asset.source));
-          return;
-        }
-        const kind = /pdf/i.test(q) ? "pdf" : /表格|原表|原网格/.test(q) ? "table" :
-          /代码/.test(q) ? "code" : /摘录|片段/.test(q) ? "text" : null;
-        const currentTab = doc?.tabs.find(t => t.kind !== "web" && (!kind || t.kind === kind));
-        if (doc && currentTab) {
-          if (s.evidence !== doc) patch({evidence:doc, previewKind:currentTab.kind});
-          else if (kind && s.evidence.tabs[s.readerPosition?.tab ?? 0]?.kind !== kind)
-            patch({readerPosition:{tab:doc.tabs.indexOf(currentTab), page:0}});
-          recordAction("正在预览 " + doc.title + "。", "读取当前材料", asset.id + " · " + currentTab.label);
-        } else if (missingScope) {
-          add("assistant", "这条历史引用缺少原批次的范围记录。请从原批次重新打开资料后预览其他材料。");
-        } else if (asset.caseId === "wind" && kind === "table") {
-          const opened = await preview("wind", 0, "table");
-          if (!opened || latest.current.sessionId !== s.sessionId) return;
-          recordAction("查看当前数据材料 · " + asset.title, "读取已接入材料", asset.id + " · table");
-        } else {
-          const original = assetMaterials(asset, filters, selection, s.view === "earth" && s.caseId === asset.caseId ? s.dataView : null);
-          const tabs = original.tabs.filter(t => t.kind !== "web" && (!kind || t.kind === kind) && (t.kind !== "table" || !!t.rows?.length));
-          if (!tabs.length) add("assistant", asset.title + " 在当前范围没有这种可预览材料。");
-          else {
-            patch({evidence:{...original, sourceBatch:parent || undefined, tabs}, previewKind:tabs[0].kind});
-            recordAction("查看当前数据材料 · " + asset.title, "读取已接入材料", asset.id + " · " + tabs[0].kind);
-          }
-        }
-        return;
-      }
-      if (
-        !s.citation &&
-        /^(?:打开|查看)(?:我的|已保存的)?研究清单[。？！?]?$/.test(q)
-      ) {
-        add("user", q);
-        patch({
-          view: "discover",
-          listLibraryOpen: true,
-          evidence: null,
-          inspector: null,
-          origin: s.view === "earth" ? remember(s) : s.origin,
-        });
-        add("assistant", "已打开本浏览器保存的研究清单。");
-        return;
-      }
-      if (
-        /(?:保存|生成|存入|加入|添加到).*(?:清单)|(?:保存|存下)(?:当前)?(?:这份|这批|勾选的)(?:资料|数据)?[。？！?]?$/.test(q)
-      ) {
-        const single = /这(?:一)?份|该份|当前(?:这份|资料|数据集|这项)|这(?:一)?项/.test(q);
-        const explicitChecked = !single && /勾选|已选|选中的/.test(q);
-        const whole = /这批|整批|全部|本轮|当前结果/.test(q);
-        const {id: focus, doc, asset, parent, filters, selection, missingScope} = material;
-        const checked = explicitChecked || (!single && !whole && !focus && s.view === "discover" && s.search.compare.length > 0);
-        const object = single || (!checked && !whole && focus) ? "当前资料" : checked ? "勾选资料" : "当前批次";
-        let reference: SavedEvidence | undefined;
-        if (object === "当前资料" && focus) {
-          if (!asset) {
-            add("user", q);
-            add("assistant", "当前证据的资料或原版次无法在目录中核对，未保存研究清单。");
-            return;
-          }
-          if (missingScope) {
-            add("user", q);
-            add("assistant", "这条历史引用缺少原批次的范围记录。请在原批次重新打开该资料后保存。");
-            return;
-          }
-          batch = {...parent, title:parent?.title || asset.title, ids:[focus],
-            caseId:parent ? parent.caseId : caseById(asset.caseId)?.id || null, filters, selection,
-            layer:parent?.layer || s.layer, camera:parent?.camera || s.camera,
-            gridSystem:selection?.grid.system || parent?.gridSystem || s.gridSystem};
-          if (doc?.locator) reference = {assetId:focus, title:doc.title, locator:doc.locator, url:doc.url};
-        }
-        const chosen = object === "当前资料" ? (focus ? [focus] : []) :
-          checked ? s.search.compare.filter(id => batch?.ids.includes(id)) : batch?.ids || [];
-        add("user", q);
-        if (!batch || !chosen?.length) {
-          add("assistant", object + "为 0 项，未保存研究清单。" +
-            (object === "当前资料" ? "请先打开要保存的资料。" : checked ? "请先在目录中勾选资料。" : ""));
-
-          return;
-        }
-        try {
-          persistResearchList(
-            createResearchList({ ...batch, ids: chosen }, reference),
-            localStorage,
-          );
-          window.dispatchEvent(new Event("oneearth-list-changed"));
-          recordAction(
-            "已保存 " + chosen.length + " 项资料（" + object + "）：" +
-              chosen.map(id => assetById.get(id)!.title).join("、") +
-              "。可在数据触达的「研究清单」中导出或恢复。",
-            "保存研究清单",
-            batch.title,
-          );
-        } catch (e) {
-          add("assistant", e instanceof Error ? e.message : "保存失败。");
-        }
-        return;
-      }
-      if (
-        batch &&
-        !s.citation &&
-        /(?:能否|能不能|是否可以|可否).*(?:合用|联用|一起用|共同使用)|查看联合使用判断/.test(
-          q,
-        )
-      ) {
-        add("user", q);
-        const assessment = evaluateBatch(batch);
-        inspectCandidates(batch);
-        recordAction(
-          assessment.status + "。" + assessment.summary,
-          "查看联合使用判断",
-          batch.title,
-        );
-        return;
-      }
-      if (
-        !s.citation &&
-        /^(?:打开|查看|显示|浏览)?(?:我的)?收藏(?:的资料|列表|夹)?[。？?]?$/.test(
-          q,
-        )
-      ) {
-        add("user", q);
-        const search = { ...emptySearch, savedOnly: true };
-        patch({ view: "discover", search, inspector: null, evidence: null });
-        recordAction(
-          "已打开收藏，当前有 " +
-            catalogResults(search, s.saved).length +
-            " 份资料。",
-          "筛选收藏",
-          "数据触达 · 仅收藏",
-        );
-        return;
-      }
-      if (
-        batch &&
-        !s.citation &&
-        /(?:这批|这些|这次推荐|当前候选|这组|推荐结果)/.test(q)
-      ) {
-        if (/地球|球上|地图/.test(q)) {
-          add("user", q);
-          patch({
-            view: "earth",
-            caseId: null,
-            filters: batch.filters,
-            layer: batch.layer,
-            camera: batch.camera,
-            gridSystem: batch.gridSystem,
-            selection: batch.selection,
-            overview: "catalog",
-            mapResult: batch,
-            origin: remember(s),
-            evidence: null,
-          });
-          recordAction(
-            "已在地球上显示这批候选的空间依据。未定位资料仍保留在候选清单。",
-            "应用候选范围",
-            batch.title + " · " + batch.ids.length + " 份",
-          );
-          return;
-        }
-        if (/列表|目录|推荐结果|查看这次推荐/.test(q)) {
-          add("user", q);
-          showCandidates(batch);
-          recordAction(
-            "已打开这批推荐的完整目录。",
-            "打开候选列表",
-            batch.title + " · " + batch.ids.length + " 份",
-          );
-          return;
-        }
-      }
-      if (
-        s.origin &&
-        /^(?:返回|回到)(?:进入前的结果|上一步|上一页|候选列表|之前的结果)[。？?]?$/.test(
-          q,
-        )
-      ) {
-        add("user", q);
-        leaveDetail();
-        recordAction(
-          "已返回进入前的视图并恢复原筛选。",
-          "恢复工作区",
-          s.origin.view,
-        );
-        return;
-      }
-      if (
-        batch?.caseId === "Q08" &&
-        /对照|对齐|比较|时间序列|同期/.test(q) &&
-        /海冰|PDO|两个序列|这两条|9月|九月/i.test(q) &&
-        !s.citation
-      ) {
-        add("user", q);
-        const period = batch.filters.period;
-        const years = september.filter(([date]) => {
-          const year = Number(String(date).slice(0, 4));
-          return !period || (year >= period[0] && year <= period[1]);
-        });
-        if (
-          !years.length ||
-          !batch.ids.includes("Q08-0") ||
-          !batch.ids.includes("Q08-1")
-        ) {
-          recordAction(
-            !years.length
-              ? "当前年份没有已读的 9 月配对值。本地两表共同覆盖 1979–2025 年，可调整年份或前往原表核对。"
-              : "当前批次未同时包含海冰范围与 PDO 指数。请恢复这两项需求后再作同期对照。",
-            "核对两表与时段",
-            batch.title,
-          );
-          return;
-        }
-        inspectCandidates(batch);
-        recordAction(
-          "已打开 9 月海冰范围与 PDO 指数的逐年对照，可核对同年取值和来源。",
-          "按年份对齐两条序列",
-          "Q08-0 · Q08-1",
-        );
-        return;
-      }
-      if (
-        batch &&
-        /比较|对比|查看|打开|预览|获取|下载/.test(q) &&
-        !s.citation
-      ) {
-        const numbers = Array.from(
-          q.matchAll(/第\s*([一二三四五六七八九十]|\d+)/g),
-          (match) =>
-            Number(match[1]) || "一二三四五六七八九十".indexOf(match[1]) + 1,
-        );
-        if (
-          !numbers.length &&
-          /(?:比较|对比)(?:一下)?(?:前|这)?(?:两|二|2)(?:份|项|个)/.test(q)
-        )
-          numbers.push(1, 2);
-        if (
-          !numbers.length &&
-          /^(?:比较|对比)(?:一下|这些|候选|资料|已选|当前|数据|。|？)*$/.test(q)
-        ) {
-          if (s.view === "discover" && s.search.compare.length > 1)
-            numbers.push(
-              ...s.search.compare.map((id) => batch.ids.indexOf(id) + 1),
-            );
-          else if (batch.ids.length === 2) numbers.push(1, 2);
-          else {
-            add("user", q);
-            recordAction(
-              "当前有 " +
-                batch.ids.length +
-                " 份候选，可按序号选择，例如“比较第一份和第二份”。",
-              "读取候选列表",
-              batch.title,
-            );
-            return;
-          }
-        }
-        if (!numbers.length) {
-          const target = q
-            .toLowerCase()
-            .replace(/^(?:打开|查看|预览|比较|对比)\s*/, "")
-            .trim();
-          if (target.length >= 3 && target !== q.toLowerCase()) {
-            const named = batch.ids.filter((id) =>
-              assetById.get(id)?.title.toLowerCase().includes(target),
-            );
-            if (named.length === 1)
-              numbers.push(batch.ids.indexOf(named[0]) + 1);
-          }
-        }
-        if (numbers.length) {
-          add("user", q);
-          const refs = numbers.map((n) => assetById.get(batch.ids[n - 1]));
-          if (refs.some((a) => !a)) {
-            add(
-              "assistant",
-              "这批候选共有 " + batch.ids.length + " 项，请按列表序号选择。",
-            );
-            return;
-          }
-          const chosen = [...new Set(refs.filter((a) => !!a))];
-          if (/比较|对比/.test(q)) {
-            if (chosen.length < 2) {
-              add(
-                "assistant",
-                "请给出两个候选序号，例如“比较第一份和第二份”。",
-              );
-              return;
-            }
-            patch({
-              inspector: {
-                comparison: comparison(chosen, batch.filters, batch.selection),
-                comparedBatch: { ...batch, ids: chosen.map((a) => a.id) },
-              },
-              evidence: null,
-            });
-            recordAction(
-              "已打开对照 · " + chosen.map((a) => a.title).join("、"),
-              "生成候选对照表",
-              chosen.map((a) => a.id).join("、"),
-            );
-            return;
-          }
-          const a = chosen[0];
-          inspectAsset(a.id, batch.filters, batch.selection, batch);
-          if (/预览/.test(q)) {
-            const doc = assetMaterials(a, batch.filters, batch.selection, null);
-            const kind = /PDF/i.test(q)
-              ? "pdf"
-              : /表格/.test(q)
-                ? "table"
-                : undefined;
-            const tab = doc.tabs.find(
-              (t) =>
-                t.kind !== "web" &&
-                (t.kind !== "table" || !!t.rows?.length) &&
-                (!kind || t.kind === kind),
-            );
-            if (tab) {
-              patch({
-                evidence: { ...doc, tabs: [tab] },
-                previewKind: tab.kind,
-              });
-              recordAction(
-                "已打开“" + tab.label + "”。",
-                "打开材料",
-                a.id + " · " + tab.kind,
-              );
-            } else
-              recordAction(
-                "当前候选没有这种本地预览材料。已打开速览，可核对来源入口。",
-                "核对可用材料",
-                a.id,
-              );
-          } else {
-            recordAction(
-              /获取|下载/.test(q)
-                ? a.profile?.access ||
-                    "可在速览的“材料与获取”核对已接入的内容及发布方入口。"
-                : "已打开 " + a.title,
-              "打开数据速览",
-              a.id + " · " + a.source,
-            );
-          }
-          return;
-        }
-      }
-      if (!s.citation && s.mapResult && s.selection && /这里|此格|选中/.test(q)) {
-        const batch = makeMappedCandidates(s.mapResult, {
-          ...s.mapResult,
-          filters: s.filters,
-          selection: s.selection,
-          camera: s.camera,
-          gridSystem: s.gridSystem,
-        });
-        add("user", q);
-        add(
-          "assistant",
-          batch.ids.length
-            ? batch.ids.map((id) => assetById.get(id)!.title).join("\n")
-            : "所选网格内没有这批候选的已核依据。",
-          { candidates: batch },
-        );
-        return;
-      }
-      await sendDiscovery(batch);
-    },
-    [add, patch, preview, inspectCandidates, showCandidates, leaveDetail, executeDiscovery, openVisualization, workspaceViewAt],
-  );
+  const send = useCallback(async (query:string, clarificationReply?:ClarificationReply) => {
+    const q = query.trim(), s = latest.current;
+    if (!q || s.attachingMapScope) return;
+    const batch=chatCandidateBatch(s);
+    const operations=availableChatOperations(s,batch);
+    const workspaceView=workspaceViewAt(s,batch,operations);
+    const workspaceCandidateKey=workspaceView.candidateItems?.length ? chatCandidateKey(batch) : undefined;
+    const workspaceOperationKeys=Object.fromEntries([...operations].map(([kind,target])=>[kind,target.key]));
+    const turnId = randomId();
+    if (clarificationReply) {
+      const {parentTaskId}=clarificationReply;
+      const parent=s.messages.find(message=>message.id===parentTaskId);
+      const alreadySent=s.messages.some(message=>message.role==="user" && message.id!==s.unansweredQuestionId
+        && message.clarificationReply?.parentTaskId===parentTaskId);
+      if (!canReplyToDiscoveryClarification(parent) || alreadySent) return;
+      const attempt:DiscoveryAttempt={query:q,userMessageId:turnId,workspaceKey:requestWorkspaceKey(s),
+        view:s.view,context:{...scopedQuestionContext([],null),workspaceView},workspaceOperationKeys,workspaceCandidateKey,clarificationReply};
+      void add("user",q,{id:turnId,clarificationReply});
+      patch({clarificationReply:null,unansweredQuestionId:null});
+      await executeDiscovery(attempt,false);
+      return;
+    }
+    const items = s.draftScope ?? [];
+    const citation = s.citation ? (({excerpt,...reference})=>reference)(s.citation) : null;
+    const activeObservations = s.view==="discover" ? initialAccessSection(s.search)==="timely"
+      : s.view==="earth" && (s.filters.source==="constellation" || batch?.filters.source==="constellation");
+    const observationBatch = activeObservations && batch && (batch.filters.source==="constellation" || s.view==="discover")
+      && batch.ids.every(id=>/^constellation:[a-f0-9]{64}$/.test(id)) ? batch : null;
+    const ids = batch?.ids || [];
+    const filters = s.view==="discover" && batch ? {...s.filters,source:batch.filters.source,type:batch.filters.type} : s.filters;
+    const context = items.length ? scopedQuestionContext(items,citation)
+      : {caseId:s.caseId,filters:activeObservations ? {...filters,source:"constellation"} : filters,
+        gridSystem:s.gridSystem,layer:s.layer,selection:s.selection,camera:s.camera,citation,
+        dataView:s.view==="earth"?s.dataView:null,visualization:s.view==="earth"?s.visualization:null,
+        candidateIds:ids,inCandidateScope:!!batch,
+        candidateVersions:Object.fromEntries(ids.flatMap(id=>{
+          const version=assetById.get(id)?.version;
+          return version ? [[id,version]] : [];
+        })),
+        ...(observationBatch?{observationBatch:{catalogConditions:observationBatch.catalogConditions,
+          selection:observationBatch.selection,period:observationBatch.filters.period,utcWindow:observationBatch.filters.utcWindow}}:{})};
+    const attempt:DiscoveryAttempt = {query:q,userMessageId:turnId,workspaceKey:requestWorkspaceKey(s),
+      view:s.view,context:structuredClone({...context,workspaceView}),workspaceOperationKeys,workspaceCandidateKey};
+    void add("user",q,{id:turnId,attachedScope:items,
+      context:[caseById(s.caseId)?.title,s.filters.place,s.selection?.grid.label].filter(Boolean).join(" · ") || "全球视图",
+      ...(s.citation?{citation:s.citation}:{})});
+    patch({draftScope:null,citation:null,unansweredQuestionId:null});
+    await executeDiscovery(attempt,false);
+  },[add,executeDiscovery,patch,workspaceViewAt]);
+  const retry = useCallback(async (attempt:DiscoveryAttempt, id:string) => {
+    const session=latest.current.sessionId;
+    try {
+      const deliveries=await unfinishedChatDeliveries(session);
+      const current=latest.current;
+      if (current.sessionId===session && !current.messages.some(message=>message.id===id && !message.failed))
+        await executeDiscovery(attempt,true,deliveries.find(item=>item.id===id));
+    } catch {
+      if (latest.current.sessionId===session) patch({sessionError:sessionFailure});
+    }
+  },[executeDiscovery,patch]);
   const toggleSaved = useCallback(
     (id: string) => {
       const saved = latest.current.saved;
@@ -2545,9 +2035,9 @@ function useWorkspaceValue(initialState: State) {
     patch,
     add,
     send,
-    attachScope,confirmQuestion,
+    attachScope,confirmQuestion,cancelChat,
     registerWorkspaceSurface, noteManualNavigation,
-    retry: (attempt: DiscoveryAttempt) => executeDiscovery(attempt, true),
+    retry,
     openCase,
     inspectAsset,
     openData,

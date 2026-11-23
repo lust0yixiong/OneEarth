@@ -163,6 +163,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     flyToResearchRegion,
     send,
     confirmQuestion,
+    cancelChat,
     attachScope,
     retry,
     switchSession,
@@ -179,7 +180,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
   const answerReady=useCallback((id:string)=>setReadyAnswers(ids=>ids.has(id)?ids:new Set(ids).add(id)),[]);
   const latest=s.messages.at(-1);
   const latestReady=latest?.role==="assistant" && !latest.failed && !latest.clarification && !latest.questionCheck
-    && !s.pending && (historyIds.has(latest.id) || readyAnswers.has(latest.id));
+    && (historyIds.has(latest.id) || readyAnswers.has(latest.id));
   const latestSources=useMemo(()=>latestReady?sourcesFor(literatureDisplay(latest!)).refs:[],[latest,latestReady,revision]);
   const [composerSources,setComposerSources]=useState<Message|null>(null);
   useEffect(()=>setComposerSources(null),[s.sessionId]);
@@ -244,7 +245,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     if (latest && s.messages.length)
       latest.scrollIntoView({ block: "start", behavior: "instant" });
     else conversation.current?.closest(".chat-scroll")?.scrollTo(0, 0);
-  }, [s.messages.length, s.pending]);
+  }, [s.messages.length, s.activeChats.length]);
   const regionsByQuestion=useMemo(()=>{
     const regions=new Map(s.messages.flatMap(m=>m.replyTo && m.researchRegion?[[m.replyTo,m.researchRegion] as const]:[]));
     if(s.researchRegion)regions.set(s.researchRegion.messageId,s.researchRegion.region);
@@ -255,6 +256,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
               key={m.id}
               id={"message-"+m.id}
               data-message-id={m.id}
+              data-reply-to={m.replyTo}
               tabIndex={m.role==="user"?-1:undefined}
               className={"message " + m.role + (m.failed ? " failed" : "")}
             >
@@ -300,19 +302,19 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   <CopyButton text={m.text} label="复制问题"/>
                 </footer>
               </>}
-              {m.id === s.unansweredQuestionId && m === s.messages.at(-1) && !s.pending && (
+              {m.id === s.unansweredQuestionId && m === s.messages.at(-1) && !s.activeChats.some(chat=>chat.userMessageId===m.id) && (
                 <button className="activity-link" onClick={() => { setText(m.text); patch({draftScope:m.attachedScope || null,citation:m.citation || null,clarificationReply:m.clarificationReply ?? null}); input.current?.focus(); }}>
                   这条问题未收到回答，重新提问
                 </button>
               )}
-              {m.role==="assistant" && m.questionCheck && <QuestionCheck check={m.questionCheck} pending={s.pending}
+              {m.role==="assistant" && m.questionCheck && <QuestionCheck check={m.questionCheck} pending={s.activeChats.some(chat=>chat.userMessageId===m.replyTo)}
                 closed={s.messages.find(next=>next.role==="user" && next.time>m.time)?.questionDecision ||
                   (s.messages.some(next=>next.role==="user" && next.time>m.time)?"superseded":undefined)}
                 onChoose={(choice,edited)=>void confirmQuestion(m.id,choice,edited)}/>}
               {m.role==="assistant" && !m.questionCheck && <AnswerBody message={m} archived={historyIds.has(m.id)} animate={!historyIds.has(m.id) && Date.now()-m.time<3000} onReady={answerReady}
                 clarificationAction={replyTargets.has(m.id) && <button type="button" className="activity-link"
                   aria-controls="chat-question-input" aria-pressed={clarificationTarget?.id===m.id}
-                  disabled={s.pending} onClick={()=>selectClarification(m.id)}>回复此问题</button>}
+                  onClick={()=>selectClarification(m.id)}>回复此问题</button>}
                 showLiveMembership={!hasCoverageRecord(m,questions.get(m.id))}
                 question={questions.get(m.id)?.text || "OneEarth 研究记录"} onQuote={(reference,number)=>{
                   const item={kind:"reference" as const,reference,number,messageId:m.id};
@@ -362,10 +364,11 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
               {m.research && <ResearchRows message={m}/>}
               </AnswerBody>}
               {m.failed && (m.retry ? (
-                <button disabled={s.pending} onClick={() => retry(m.retry!)}>重试</button>
+                <button disabled={s.activeChats.some(chat=>chat.userMessageId===m.retry!.userMessageId)}
+                  onClick={() => void retry(m.retry!,m.id)}>重试</button>
               ) : <small>旧记录没有保存完整请求，可重新提问。</small>)}
             </article>
-          )),[s.messages,s.unansweredQuestionId,s.pending,s.camera,s.gridSystem,historyIds,questions,patch,confirmQuestion,attachScope,retry,inspectAsset,answerReady,regionsByQuestion,flyToResearchRegion,locateQuestion,replyTargets,clarificationTarget,selectClarification]);
+          )),[s.messages,s.unansweredQuestionId,s.activeChats,s.camera,s.gridSystem,historyIds,questions,patch,confirmQuestion,attachScope,retry,inspectAsset,answerReady,regionsByQuestion,flyToResearchRegion,locateQuestion,replyTargets,clarificationTarget,selectClarification]);
   if (!s.chatOpen) return null;
   const examples =
     c?.id === "wind"
@@ -461,12 +464,24 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
         >
           {renderedMessages}
         </div>
-        {s.pending && <div className="live-search pending" role="status"><RunDetails working trace={s.liveTrace} stage={s.chatStage} runs={s.liveSearches} openFinding={id=>void loadRemoteAssetIds([id]).then(()=>inspectAsset(id,s.filters,s.selection)).catch(()=>patch({error:"暂时无法打开这条线索。"}))}/></div>}
+        {s.activeChats.map(chat=>{
+          const question=s.messages.find(message=>message.id===chat.userMessageId);
+          return <div className="live-search pending" role="status" key={chat.id}
+              data-chat-id={chat.id} data-chat-phase={chat.phase} data-reply-to={chat.userMessageId}>
+            {question && <button type="button" className="activity-link" onClick={()=>locateQuestion(question.id)}
+              aria-controls={"message-"+question.id}>{chat.phase==="research" ? "研究" : "回复"} · {question.text}</button>}
+            <RunDetails working trace={chat.trace} stage={chat.stage} runs={chat.searches}
+              openFinding={id=>void loadRemoteAssetIds([id]).then(()=>inspectAsset(id,chat.scope.filters,chat.scope.selection)).catch(()=>patch({error:"暂时无法打开这条线索。"}))}/>
+            {chat.accepted && <button type="button" className="activity-link" disabled={chat.cancelling}
+              onClick={()=>void cancelChat(chat.id)}>{chat.cancelling?"正在取消本轮":"取消本轮"}</button>}
+            {chat.cancelError && <p role="alert">{chat.cancelError}</p>}
+          </div>;
+        })}
         <NeedList />
         {c && (
           <div className="followup-suggestions">
             {examples.map((q) => (
-              <button key={q} disabled={s.pending} onClick={() => send(q)}>
+              <button key={q} disabled={s.attachingMapScope} onClick={() => send(q)}>
                 {q}
                 <ArrowUpRight size={12} />
               </button>
@@ -510,7 +525,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (!text.trim() || s.pending || s.attachingMapScope) return;
+            if (!text.trim() || s.attachingMapScope) return;
             void send(text,clarificationTarget ? {parentTaskId:clarificationTarget.id} : undefined);
             setText("");
           }}
@@ -537,7 +552,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
           <div className="compose-bottom">
             <small>Enter 发送 · Shift + Enter 换行</small>
             <button
-              disabled={!text.trim() || s.pending || s.attachingMapScope}
+              disabled={!text.trim() || s.attachingMapScope}
               type="submit"
               aria-label="发送消息"
             >

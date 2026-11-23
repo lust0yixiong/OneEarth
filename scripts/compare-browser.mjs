@@ -31,7 +31,7 @@ try {
     page.on("request",request=>{
       const url=new URL(request.url());
       assert.notEqual(url.port,"5174");
-      if(request.method()==="POST"&&url.pathname==="/api/tasks")taskId=request.postDataJSON().id;
+      if(request.method()==="POST"&&["/api/chat/messages","/api/tasks"].includes(url.pathname))taskId=request.postDataJSON().id;
     });
     const canvas=page.locator("canvas[data-painted]");
     const pending=page.locator(".live-search.pending");

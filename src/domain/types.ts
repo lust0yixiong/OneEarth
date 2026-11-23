@@ -315,6 +315,8 @@ export interface Message {
   failed?: boolean;
   retry?: DiscoveryAttempt;
   historicalReply?: boolean;
+  chatMessage?: boolean;
+  workspacePending?: DiscoveryResponse["workspacePending"];
   replyTo?: string;
   activity?: EvidenceDocument;
 }
@@ -334,6 +336,8 @@ export interface DiscoveryAttempt {
   context: DiscoveryContext;
   workspaceKey: string;
   userMessageId: string;
+  workspaceOperationKeys?: Partial<Record<import("./workspace-operations").WorkspaceOperationKind,string>>;
+  workspaceCandidateKey?: string;
   view?: View;
 }
 export interface DiscoveryContext {
@@ -369,6 +373,8 @@ export interface CapabilityGap {
 }
 export interface DiscoveryResponse {
   workspaceAction?: import("./workspace-view-context").WorkspaceViewAction;
+  workspaceOperation?: import("./workspace-operations").WorkspaceOperation;
+  workspacePending?: {question:string;originalQuestion?:string};
   discoveryClarification?: boolean;
   gridCoverage?: import("./grid-coverage").GridCoverageEvidence;
   researchRegion?:import("./research-region").ResearchRegion|null;

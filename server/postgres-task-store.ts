@@ -1,8 +1,10 @@
-import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import { productDatabase } from "./product-database";
 import { TaskConflict,type TaskStore,type Task,type Payload,type TaskStatus } from "./task-store";
+import {chatSchema, lockRuntimeSubmission, postgresChatMessages, submissionFingerprint, type PostgresChatMessages} from "./postgres-chat-messages";
 
+export function postgresTaskStore(namespace:"runtime"):Promise<TaskStore & {chat:PostgresChatMessages}>;
+export function postgresTaskStore(namespace:"discovery"):Promise<TaskStore>;
 export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise<TaskStore>{
   const pool=productDatabase(namespace==="runtime"?"RUNTIME":"DISCOVERY");
   const tasks=namespace+"_tasks", events=namespace+"_events";
@@ -47,6 +49,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
             task_id uuid NOT NULL REFERENCES runtime_tasks(id), ordinal integer NOT NULL,
             source_channel text, reference jsonb NOT NULL, PRIMARY KEY(task_id,ordinal)
           );`);
+        await db.query(chatSchema);
       }else{
         await db.query(`
           CREATE TABLE IF NOT EXISTS discovery_findings (
@@ -74,12 +77,44 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         [id,saved.rows[0].seq,JSON.stringify(payload.finding)]);
     }
   }
+  async function submit(db:PoolClient,id:string,body:unknown,checkpoint?:Payload,options?:{created:number;handoff:true}){
+    const raw=JSON.stringify(body), hash=submissionFingerprint(raw), now=Date.now();
+    if(namespace==="runtime"&&!options?.handoff){
+      await lockRuntimeSubmission(db,id);
+      const existing=await chat?.existing(db,id);
+      if(existing){
+        if(existing.fingerprint!==hash)throw new TaskConflict("该编号已用于另一条 Chat 消息。");
+        const current=(await db.query<Task>("SELECT * FROM runtime_tasks WHERE id=$1",[id])).rows[0];
+        return current?row(current):existing;
+      }
+    }
+    const inserted=await db.query<Task>(`INSERT INTO ${tasks}(id,body,fingerprint,status,created,updated)
+      VALUES ($1,$2,$3,'queued',$4,$5) ON CONFLICT(id) DO NOTHING RETURNING *`,[id,raw,hash,options?.created??now,now]);
+    if(!inserted.rowCount){
+      const previous=(await db.query<Task>(`SELECT * FROM ${tasks} WHERE id=$1`,[id])).rows[0];
+      if(!previous||previous.fingerprint!==hash)throw new TaskConflict("该任务编号已经用于另一份提交。");
+      return row(previous);
+    }
+    if(checkpoint){
+      if(namespace!=="runtime")throw Error("持久研究步骤仅属于运行时。");
+      await db.query("INSERT INTO runtime_steps VALUES($1,$2::jsonb,$3)",[id,JSON.stringify(checkpoint),now]);
+    }
+    const decision=(body as {questionDecision?:{checkMessageId?:string}})?.questionDecision;
+    if(namespace==="runtime"&&decision){
+      await db.query("INSERT INTO runtime_confirmations(task_id,parent_task_id,decision) VALUES ($1,$2,$3::jsonb)",
+        [id,decision.checkMessageId,JSON.stringify(decision)]);
+    }
+    await write(db,id,{queued:true,queuedAt:now,...(options?.handoff?{chatPhase:"research"}:{})},now);
+    return row(inserted.rows[0]);
+  }
+  const chat=namespace==="runtime"?postgresChatMessages(pool,transaction,submit):undefined;
   const get=async(id:string)=>{
     const result=await pool.query<Task>(`SELECT * FROM ${tasks} WHERE id=$1`,[id]);
-    return result.rows[0] ? row(result.rows[0]) : undefined;
+    return result.rows[0] ? row(result.rows[0]) : chat?.get(id);
   };
   async function finish(id:string,status:Exclude<TaskStatus,"queued"|"running">,payload:Payload){
     return transaction(async db=>{
+      if(status==="cancelled"&&await chat?.cancel(db,id,payload))return true;
       const now=Date.now();
       const updated=await db.query(`UPDATE ${tasks} SET status=$1,updated=$2 WHERE id=$3 AND status IN ('running','queued')`,[status,now,id]);
       if(!updated.rowCount)return false;
@@ -114,7 +149,8 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
     });
   }
   let workerConnection:PoolClient|undefined;
-  return {
+  const store={
+    ...(chat?{chat}:{}),
     get,
     ...(namespace==="runtime"?{async materialEvents(id:string){
       const result=await pool.query<{seq:string;at:string;payload:Payload}>(`SELECT seq,at,payload FROM runtime_events
@@ -124,30 +160,10 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
     async terminal(id){
       const result=await pool.query<{payload:Payload}>(`SELECT e.payload FROM ${events} e JOIN ${tasks} t ON t.id=e.id
         WHERE e.id=$1 AND t.status NOT IN ('queued','running') ORDER BY e.seq DESC LIMIT 1`,[id]);
-      return result.rows[0]?.payload;
+      return result.rows[0]?.payload??chat?.terminal(id);
     },
     async submit(id,body,checkpoint){
-      return transaction(async db=>{
-        const raw=JSON.stringify(body), hash=createHash("sha256").update(raw).digest("hex"), now=Date.now();
-        const inserted=await db.query<Task>(`INSERT INTO ${tasks}(id,body,fingerprint,status,created,updated)
-          VALUES ($1,$2,$3,'queued',$4,$4) ON CONFLICT(id) DO NOTHING RETURNING *`,[id,raw,hash,now]);
-        if(!inserted.rowCount){
-          const previous=(await db.query<Task>(`SELECT * FROM ${tasks} WHERE id=$1`,[id])).rows[0];
-          if(!previous||previous.fingerprint!==hash)throw new TaskConflict("该任务编号已经用于另一份提交。");
-          return row(previous);
-        }
-        if(checkpoint){
-          if(namespace!=="runtime")throw Error("持久研究步骤仅属于运行时。");
-          await db.query("INSERT INTO runtime_steps VALUES($1,$2::jsonb,$3)",[id,JSON.stringify(checkpoint),now]);
-        }
-        const decision=(body as {questionDecision?:{checkMessageId?:string}})?.questionDecision;
-        if(namespace==="runtime"&&decision){
-          await db.query("INSERT INTO runtime_confirmations(task_id,parent_task_id,decision) VALUES ($1,$2,$3::jsonb)",
-            [id,decision.checkMessageId,JSON.stringify(decision)]);
-        }
-        await write(db,id,{queued:true,queuedAt:now},now);
-        return row(inserted.rows[0]);
-      });
+      return transaction(db=>submit(db,id,body,checkpoint));
     },
     async claim(){
       return transaction(async db=>{
@@ -222,9 +238,12 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
     },
     async events(id,after){
       const result=await pool.query<{seq:string;at:string;payload:Payload}>(`SELECT seq,at,payload FROM ${events}
-        WHERE id=$1 AND seq>$2 ORDER BY seq LIMIT 128`,[id,after]);
+        WHERE id=$1 AND seq>$2
+        ${chat?"UNION ALL SELECT seq,at,payload FROM runtime_chat_events WHERE id=$1 AND seq>$2":""}
+        ORDER BY seq LIMIT 128`,[id,after]);
       return result.rows.map(({seq,at,payload})=>({...payload,seq:Number(seq),at:Number(at),taskId:id}));
     },
-    async close(){workerConnection?.release(true);await pool.end();},
-  };
+    async close(){workerConnection?.release(true);chat?.release();await pool.end();},
+  } satisfies TaskStore & {chat?: PostgresChatMessages};
+  return store;
 }

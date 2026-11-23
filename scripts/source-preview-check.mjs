@@ -32,7 +32,7 @@ try{
  await p.route('**/api/source-preview/check',route=>route.fulfill({json:{url:route.request().postDataJSON().url,disposition:'preview'}}));
  if(old)await p.route('**/api/chat',route=>route.fulfill({json:reply}));
  else {
-   await p.route('**/api/tasks',route=>route.fulfill({status:202,json:{id:route.request().postDataJSON().id,status:'queued'}}));
+   await p.route('**/api/chat/messages',route=>route.fulfill({status:202,json:{id:route.request().postDataJSON().id,status:'queued'}}));
    await p.route('**/api/tasks/*/events',route=>route.fulfill({contentType:'application/x-ndjson',body:JSON.stringify({result:reply})+'\n'}));
  }
  let failing=false;
@@ -52,7 +52,7 @@ try{
  await reader.getByRole('button',{name:'放大文档',exact:true}).click();await reader.getByRole('button',{name:'适合页宽',exact:true}).filter({hasText:'125%'}).waitFor();await reader.locator('canvas[data-page="2"]').waitFor();
  await p.setViewportSize({width:390,height:844});await reader.locator('canvas[data-page="2"]').waitFor();assert.ok(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await reader.getByRole('button',{name:'引用到 Chat',exact:true}).click();assert.match(await p.locator('.citation-attachment').innerText(),/PDF 第 2 页文字摘录/);
- const sent=p.waitForRequest(r=>r.url().endsWith(old?'/api/chat':'/api/tasks')&&r.method()==='POST');await p.getByLabel('向 OneEarth 提问',{exact:true}).fill('说明这个引用页中的不确定度。');await p.getByLabel('发送消息',{exact:true}).click();const raw=(await sent).postDataJSON();const request=old?raw:raw.input;const quote=request.context?.citation||request.citation;assert.match(quote.body,/Second page uncertainty is 2 metres/);assert.equal(quote.url,publicUrl+'#page=2');assert.equal(quote.locator.page,2);await p.locator('.oe-answer-footer').nth(1).waitFor();
+ const sent=p.waitForRequest(r=>r.url().endsWith(old?'/api/chat':'/api/chat/messages')&&r.method()==='POST');await p.getByLabel('向 OneEarth 提问',{exact:true}).fill('说明这个引用页中的不确定度。');await p.getByLabel('发送消息',{exact:true}).click();const raw=(await sent).postDataJSON();const request=old?raw:raw.input;const quote=request.context?.citation||request.citation;assert.match(quote.body,/Second page uncertainty is 2 metres/);assert.equal(quote.url,publicUrl+'#page=2');assert.equal(quote.locator.page,2);await p.locator('.oe-answer-footer').nth(1).waitFor();
  const requested=ranges.reduce((sum,[a,z])=>sum+z-a+1,0);assert.ok(ranges.length>=2);assert.ok(requested<pdf.length,`${requested} must be less than ${pdf.length}`);
  failing=true;await p.locator('.answer-citation[href="'+publicUrl+'"]').last().click();await reader.getByText('来源站点返回 HTTP 403。',{exact:true}).waitFor();assert.equal(await reader.getByRole('link',{name:'在新标签页打开原始来源'}).getAttribute('href'),publicUrl);assert.ok(await reader.getByRole('button',{name:'重试读取',exact:true}).isEnabled());
  assert.deepEqual(errors,[]);console.log('PASS actual two-page PDF rendering, page navigation, range bytes '+requested+'/'+pdf.length+', zoom/mobile, original-URL page quote sent into a follow-up and explicit inaccessible-source fallback.');

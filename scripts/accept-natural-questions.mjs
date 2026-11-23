@@ -23,7 +23,7 @@ try{
       page.on("request",request=>{if(new URL(request.url()).port==="5174")calls.push(request.url());});
       await page.goto(base.href);
       await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(scenario.question);
-      const submitted=page.waitForRequest(request=>request.method()==="POST"&&new URL(request.url()).pathname==="/api/tasks");
+      const submitted=page.waitForRequest(request=>request.method()==="POST"&&["/api/chat/messages","/api/tasks"].includes(new URL(request.url()).pathname));
       const started=Date.now();
       await page.getByLabel("发送消息",{exact:true}).click();
       const id=(await submitted).postDataJSON().id;

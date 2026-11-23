@@ -15,7 +15,7 @@ const notes = {entry:base.origin,browser:browser.version(),viewport:[1512,859],d
 page.on("request",req=>{
   const url = new URL(req.url());
   if (url.port === "5174") requests.push(url.origin);
-  if(url.pathname === "/api/tasks" && req.method() === "POST") ids.push(req.postDataJSON().id);
+  if(["/api/chat/messages","/api/tasks"].includes(url.pathname) && req.method() === "POST") ids.push(req.postDataJSON().id);
 });
 try {
   await page.goto(base.href);

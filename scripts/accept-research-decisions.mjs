@@ -32,7 +32,7 @@ async function save(){await writeFile(out+"/"+kind+".json",JSON.stringify(record
 page.on("request",request=>{
   const url=new URL(request.url());
   if(url.port==="5174")prototype.push(url.origin);
-  if(url.pathname==="/api/tasks"&&request.method()==="POST")submits.push(request.postDataJSON().id);
+  if(["/api/chat/messages","/api/tasks"].includes(url.pathname)&&request.method()==="POST")submits.push(request.postDataJSON().id);
 });
 try{
   const existing=process.env.ONEEARTH_REOPEN_TASK;
@@ -46,7 +46,7 @@ try{
     assert.equal(stored.question,question);
   }else{
     await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(question);
-    const submitted=page.waitForRequest(request=>request.method()==="POST"&&new URL(request.url()).pathname==="/api/tasks");
+    const submitted=page.waitForRequest(request=>request.method()==="POST"&&["/api/chat/messages","/api/tasks"].includes(new URL(request.url()).pathname));
     await page.getByLabel("发送消息",{exact:true}).click();
     record.taskId=(await submitted).postDataJSON().id;
   }
