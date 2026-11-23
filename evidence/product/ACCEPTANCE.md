@@ -1,8 +1,22 @@
 # Mac mini 产品验收
 
+## Mac mini 发现渠道范围正式发布
+
+2026-11-23 10:26:23（上海时间），[Mac mini 5474](http://127.0.0.1:5474/) 切换到已签收的后端源码 `e2756ad6a4129e00b13cddacc329abad45eda0a2`，源码树 `37d7fee3305fd91c6059189c715dd12e8371671a`，GitHub 归档 `b3b9c8ad5ee32919b6524409108bf3e7366ba978`。发布目录为 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.9-e2756ad`。工作台仍使用前端 `7446494`，3,424 项构建清单 `bb796f2b…` 逐件通过，前后完整静态目录逐字节一致。在线首页 SHA-256 为 `ad0417c24ea70ba750a57e642eb22090c4f4136796397532d3b488665929e752`。实际网页监听 `127.0.0.1:5474`，四个应用端口均为本机回环。网络绑定和权限配置前后相同。
+
+旧队列排空后，在停受理窗口封存原 primary 的三库、5,950 个按内容寻址的对象和应用状态；已独立恢复三库，四个应用 SQLite 副本通过完整性快检，备份中 14,648 B 森林样本哈希一致。备份清单 SHA-256 `905fbbec66ce765de55bfd27223d9d4174285b6c5571dd4a7ccf599fc0272c3d`。启用新版本后，既有 41 个运行时、31 个发现任务及相应事件、原论文/网页/KEO 归档、图层目录、森林对象均通过切前切后核对。PostgreSQL 和 Garage 保留原 primary 及 PID。上版和精确 launchd 配置已保留并演练指针回退，回退服务版本时沿用当时 primary 数据。
+
+五个实际应用角色工作目录均为新发布。运行时 API、worker、发现服务 PID 分别为 99608、99607、99605，服务端口均健康。角色入口和关键依赖字节与签收 Git 树一致。发现入口 SHA-256 `fa9df12bc9b3986a990c3860c3f69587db0ae1336330908c76059beb39a271f2`，实际调度 `00e22a6c69cb5e7168340e64dc7be6b27c85b05612450c2ed2dea99736263c00`，运行时执行轮 `11ba6d7ed4a2665c68eb4e44ff7bf123d7257e9dca3e51d5c30a6e222bd9cb16`。其余角色、部署及保留数据的指纹见证据中的 `prepare.json` 和 `after.json`。
+
+独立 QA 从正式 Chrome 仅提交一次「海纳内部有哪些适合分析城市土地利用变化的数据？」。[正式研究 ddc2fb74…](http://127.0.0.1:5474/?research=ddc2fb74-057e-4d30-9d92-3c11fa30b17c) 绑定 A2A `6b0b1b70-349f-4f97-b957-d0303706907b`，实际发现作业 `50075365-e81b-4892-98db-be0acd82f288`。运行时使用 Codex `gpt-6-luna`，发现配置为 DeepSeek `deepseek-flash`。作业只启动一次 `source-haina`，返回 15 条目录候选，答复保存 6 条海纳引用。论文断言库和公开网络记为 `not_requested`，无网页补读、星座研究调用或补查子任务。任务读取 10:26:26 已发布的 461 条海纳目录快照，读取时未在刷新。后台同步和浏览器页面目录请求均独立于本题的渠道记录。
+
+数据库受理至完成用时 90.919 秒，发现作业 35.361 秒。两次发现规划的渠道均为 `restricted/haina`，但第一次多返回 `fallback: null`，第二次对单渠道返回 `fallback: "no_match"`，均未通过结构校验。本题由原话限定和恢复流程执行，正式验收覆盖这条路径的实际渠道边界。模型结构输出兼容问题单独留证。独立浏览器采集保留首次 POST 载荷，首次 HTTP 响应未保存，通过同 UUID 的正式受理、终态和重开核对。六条引用在同一 Chrome 刷新及重开时保持原身份，重开未提交新任务。
+
+独立正式复检与总体签收通过。独立索引 `~/Library/Application Support/OneEarth Next/iterations/discovery-channel-primary-independent/e2756ad-real-submission/independent-verdict.json` 的 SHA-256 为 `a96da78e47bbdeea087a19a2031e886eb29ec83a3d15c8be978233b18d766935`。主程证据根位于 `~/Library/Application Support/OneEarth Next/iterations/discovery-channel-scope/primary-cutover/`，从此处运行 `shasum -a 256 -c evidence/release-proof.sha256` 核验，清单 SHA-256 为 `5f9b809e2071dd8720409d87ed6da603de11b80a1bb8fa8ea3b07bfdb4900348`。
+
 ## Mac mini 发现渠道范围隔离验收
 
-基线 `48237be12d5aa9c8de2b5842c4266869c02eb926`，签收代码 `e2756ad6a4129e00b13cddacc329abad45eda0a2`，源码树 `37d7fee3305fd91c6059189c715dd12e8371671a`。本批验收结论适用于 Mac mini 隔离环境。常驻 5474 尚未切换后端，也未提交正式研究任务。
+基线 `48237be12d5aa9c8de2b5842c4266869c02eb926`，签收代码 `e2756ad6a4129e00b13cddacc329abad45eda0a2`，源码树 `37d7fee3305fd91c6059189c715dd12e8371671a`。本段记录 Mac mini 隔离签收时的结论。当时常驻 5474 仍使用旧后端，隔离复验未提交正式研究任务。
 
 旧版实际调度函数在模型摘要标为「仅用海纳专区」时仍进入论文、海纳、公开网络三路。候选按用户原问题和确认范围在启动请求前限制渠道。正式运行时和 A2A 路由结合隔离 PostgreSQL、固定模型与海纳发布快照测试。问「海纳内部有哪些这类数据」时，有命中、完成无匹配、接口不可用三组均只启动海纳一次。论文、公开网络、星座和历史网页补读都未启动。零命中与结果未知各有明确回复。
 
