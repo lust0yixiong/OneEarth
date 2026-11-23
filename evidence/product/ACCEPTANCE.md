@@ -1,5 +1,17 @@
 # Mac mini 产品验收
 
+## Mac mini 科学问题案例目录静态发布
+
+2026-11-23 08:23（上海时间），[5474](http://127.0.0.1:5474) 完成静态发布。前端源码 `ac09bb362661b25f6525ba5ebf37fc1d17d44421`，基线 `0d859776f29e11e74c95f19b84c7824639751a20`。3,424 件构建清单 SHA-256 为 `8c44e05471d79f6ddc49b84d4006f2fa4050127dd9f5b3ffa05ead5bbbd86797`，在线首页 SHA-256 为 `ae9ad8dab09958ade5b6cdb085bccc56c9fc715d21ef2a73a2c8f3d10c8814d2`。五个应用角色继续运行 `a5b7d8dbdba41e6139740d4612e20023e84ceaf6`，发布目录仍为 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.9-a5b7d8d`。PostgreSQL、Garage、launchd 及五个应用角色的 PID 前后一致。
+
+[6844 隔离候选](http://127.0.0.1:6844/) 通过独立 Chrome 复测和总体复核。案例页在干净浏览器、同配置刷新及从旧档回访时，科学问题案例区仅一个标题。六张可视化的文字、顺序和封面与切换前一致，森林、城市切换和风场入口可打开，Q02 书签及两份旧研究的引用可读。隔离页使用产品网关及冻结的只读记录和图层响应。类型检查和构建通过，单元与服务测试 809 通过、5 个已有环境门控跳过。带 Chat 提交的完整风场脚本在隔离网关被拒，风场的只读部分另以实际浏览器复测。浏览器验收未提交研究。
+
+正式发布先增加 21 个带内容哈希的 JS/CSS 及压缩资源，再原子替换首页。此前的 21 个资源仍供已打开页面使用，新旧 42 项逐项通过在线字节哈希及压缩传输检查。带旧首页 ETag 的请求返回新首页。正式目录逐一校验了新构建清单中的 3,424 项。保留上版首页、上版静态资源和静态回退脚本。回退只原子置回上版首页，应用和存储继续运行。
+
+独立上线复测与总体签收通过。Chrome 从首页首次进入、刷新及已有会话回访后，科学问题案例区都只有标题。六张可视化的文案、顺序和封面与切换前一致，逐一打开为六个不同页面或图层。Q02 仍进入原冰川案例，旧论文、网页、KEO 研究及森林图层前后哈希一致，旧引用可打开。本轮两阶段独立浏览器验收均为零研究提交。独立证据索引为 `~/Library/Application Support/OneEarth Next/iterations/empty-science-cases-independent/independent-acceptance.json`，SHA-256 为 `eb541877b88c5cc53925e7171f8d94d71527d110cabeb38d74cfc62b14a9ab1d`。此次仅盘点可视化，降水卡标注的时间与已发布目录不一致，作为既有问题单列。
+
+主程证据根位于 `~/Library/Application Support/OneEarth Next/iterations/empty-science-cases/`，可从该目录运行 `shasum -a 256 -c evidence/release-proof.sha256` 核验。隔离和正式环境的构建、入口响应及前后对照见 `evidence/`，回退计划及原首页见 `static-rollback/`。上版正式构建及 KEO 验收见下文。
+
 ## Mac mini 日常入口的 KEO 文件读取
 
 2026-11-22 23:30:44（上海时间），[5474](http://127.0.0.1:5474) 完成常驻切换。签收源码为 `a5b7d8dbdba41e6139740d4612e20023e84ceaf6`，源码归档为 `490d3d36e350cf296b736fcef854d5079bdef98a`。正式目录为 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.9-a5b7d8d`。3,424 件构建清单 SHA-256 为 `71de7af70f7cc0079caa0adcd9861a961daf21ff1ad331e6b214fe135a8548f2`。在线首页 SHA-256 为 `d2ff9a2448919ee80d620f1c911d3f76a8e96b4481275c92a18cecbcb1b4166a`，入口实际引用的 JavaScript 和 CSS 逐项与发布目录一致。健康接口仍报告 `0.2.0-rc.9`。
