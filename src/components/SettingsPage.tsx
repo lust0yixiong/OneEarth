@@ -9,6 +9,7 @@ import { useCatalogRevision } from "./use-catalog-revision";
 import {DeepSeekToolsSettings} from "./DeepSeekToolsSettings";
 import {ChatHomeSettings} from "./ChatHomeSettings";
 import {useDataAccessNavigation} from "./use-data-access-navigation";
+import {version} from "../../package.json";
 
 export function SettingsPage({onBack,resetLayout}:{onBack:()=>void;resetLayout:()=>void}) {
   const { state,patch } = useWorkspace();
@@ -90,6 +91,7 @@ export function SettingsPage({onBack,resetLayout}:{onBack:()=>void;resetLayout:(
       <button onClick={onBack}><ArrowLeft size={16}/>返回工作区</button></header>
     <div className="settings-content">
       <h1 id="settings-heading">设置</h1>
+      <p className="settings-version">OneEarth v{version}</p>
       <ChatHomeSettings/>
       <section><h2><SlidersHorizontal size={19}/>模型与执行器</h2>
         <form onSubmit={e=>{

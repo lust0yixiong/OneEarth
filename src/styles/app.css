@@ -3047,6 +3047,7 @@ html[data-panel-interaction="move"] * {
 .settings-page button:hover {background:#e5efe9}
 .settings-content {max-width:740px;margin:32px auto;padding:0 20px 24px}
 .settings-content h1 {font-size:28px;margin:0 0 20px}
+.settings-version {color:#5c7065;font-size:13px;margin:-12px 0 20px}
 .settings-content section {padding:20px clamp(16px,3vw,32px);border:1px solid #d3e0d7;border-radius:14px;background:#fff;margin-bottom:16px}
 .settings-content h2 {display:flex;align-items:center;gap:10px;font-size:17px;margin:0 0 12px}
 .settings-content label,.settings-row {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;font-size:14px}

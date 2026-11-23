@@ -7,7 +7,7 @@ import {lightning} from "./lightning";
 import {administrativeOrientation} from "./admin-orientation";
 import { deepSeekKey, serviceModels, setServiceKey } from "./model-service";
 import { mkdirSync } from "node:fs";
-import { accessGuard } from "./access";
+import { accessGuard, workbenchLan } from "./access";
 import { staticAssets } from "./static-assets";
 import { listModels } from "./model-list";
 import { randomUUID } from "node:crypto";
@@ -42,7 +42,12 @@ if (existsSync(windFile)) {
   );
 }
 const app = express();
-app.use(accessGuard(process.env.ONEEARTH_ALLOWED_HOSTS));
+const host = process.env.ONEEARTH_HOST || "127.0.0.1";
+const lanInterface=process.env.ONEEARTH_LAN_INTERFACE;
+if(lanInterface&&host!=="127.0.0.1")throw Error("局域网入口要求 ONEEARTH_HOST=127.0.0.1。");
+const lan=workbenchLan(lanInterface);
+app.use(accessGuard(process.env.ONEEARTH_ALLOWED_HOSTS,lan));
+app.use("/internal", (_req,res)=>res.status(404).json({error:"未找到对应接口。"}));
 app.use("/api/simulation-grid", simulationGrid(path.join(dataDir,"grid-data")));
 app.disable("x-powered-by");
 app.use("/api/orientation",administrativeOrientation(process.env.ONEEARTH_ADMIN_BOUNDARY_DIR || path.join(root,".local","admin-boundaries"),
@@ -156,10 +161,13 @@ app.use(
   },
 );
 const port = Number(process.env.PORT || 5274);
-const host = process.env.ONEEARTH_HOST || "127.0.0.1";
-const server = app.listen(port, host, () =>
-  console.log("OneEarth app http://" + (host.includes(":") ? `[${host}]` : host) + ":" + port),
-);
+const server = app.listen(port, host, () => {
+  console.log("OneEarth app http://" + (host.includes(":") ? `[${host}]` : host) + ":" + port);
+  if(lan){
+    const lanServer=app.listen(port,lan.address,()=>console.log("OneEarth LAN http://"+lan.address+":"+port));
+    lanServer.on("error",(error)=>console.error("OneEarth LAN: "+error.message));
+  }else if(lanInterface)console.warn("OneEarth LAN: 指定网络接口当前没有唯一可用的私有 IPv4 地址。");
+});
 server.on("error", (error) => {
   console.error(error.message);
   process.exitCode = 1;
