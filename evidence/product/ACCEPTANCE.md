@@ -1,5 +1,19 @@
 # Mac mini 产品验收
 
+## Mac mini 发现渠道范围隔离验收
+
+基线 `48237be12d5aa9c8de2b5842c4266869c02eb926`，签收代码 `e2756ad6a4129e00b13cddacc329abad45eda0a2`，源码树 `37d7fee3305fd91c6059189c715dd12e8371671a`。本批验收结论适用于 Mac mini 隔离环境。常驻 5474 尚未切换后端，也未提交正式研究任务。
+
+旧版实际调度函数在模型摘要标为「仅用海纳专区」时仍进入论文、海纳、公开网络三路。候选按用户原问题和确认范围在启动请求前限制渠道。正式运行时和 A2A 路由结合隔离 PostgreSQL、固定模型与海纳发布快照测试。问「海纳内部有哪些这类数据」时，有命中、完成无匹配、接口不可用三组均只启动海纳一次。论文、公开网络、星座和历史网页补读都未启动。零命中与结果未知各有明确回复。
+
+普通「优先海纳」先等海纳，开放条件下没有取得候选才继续其他渠道。明确「找不到再看论文」在海纳确认零命中后按顺序开启论文，公开网络没有请求。海纳命中或故障不启论文。若原范围内已有海纳数据，后续同题补字段即使为零仍只查海纳。普通开放问题保持三路。已单列另一种边界，用户明确说「海纳临时不可用也查论文」时，本候选仍停在海纳。
+
+总体阶段签收和独立复测通过。独立测试覆盖 12 个实际调度对照、真实 A2A 路由及父、子、孙补查绑定、变更原题被拒，以及 65 项定向产品回归。固定模型与适配器用于验证执行边界，调用计数来自实际进入的适配器。主程 79 项定向通过，包含真实运行时和隔离 PostgreSQL。全套 825 项中 820 通过、5 项既有环境门控跳过，构建及类型检查通过。
+
+独立证据位于 `~/Library/Application Support/OneEarth Next/iterations/discovery-channel-scope-independent/`。调度记录 `frozen-e2756ad-dispatch/checks.json` 的 SHA-256 为 `a675b9c543460a382fa9889d1702beaae622145232a6fefee2342a13f1984df0`。A2A 记录 `frozen-e2756ad-a2a/checks.json` 的 SHA-256 为 `af8820d07e4b2b7b644f28176dac2bfea0376359e81ae96fca6a724dd1dab162`。产品复跑 `frozen-e2756ad-product-regression.log` 的 SHA-256 为 `bbd099b8d1bec6d132d4b133a38d017bddd5d5f63edea7703598aa19cac3fb2d`。
+
+主程证据位于 `~/Library/Application Support/OneEarth Next/iterations/discovery-channel-scope/`，可执行 `shasum -a 256 -c evidence/release-proof.sha256`。见[发现渠道范围](../../docs/发现服务-A2A.md#发现渠道范围)。
+
 ## Mac mini 数据触达浏览入口静态发布
 
 2026-11-23 09:42:28（上海时间），[常驻 5474](http://127.0.0.1:5474/) 完成数据触达静态发布。前端 `744649488d22f5edc3b3ad8106cee67c8ccfc33c`，基线 `9af7033fe268a3cf5645198a465d841b572f5308`。3,424 项构建清单 SHA-256 为 `bb796f2bbcf06370a4baaad83c2f17f82df7b5c8d1f94cce8dfefc22dff16e67`，在线首页 SHA-256 为 `ad0417c24ea70ba750a57e642eb22090c4f4136796397532d3b488665929e752`。应用角色仍运行 `a5b7d8d`，发布目录为 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.9-a5b7d8d`。应用、PostgreSQL、Garage 进程的 PID 和正式数据样本均与切换前一致。
