@@ -1,4 +1,5 @@
 import type {DiscoveryResponse,Message} from "./types";
+import {createClarificationPrompt,validClarificationPrompt} from "./clarification";
 
 export const chatMessagesPath = "/api/chat/messages";
 export async function openTaskEvents(id: string, body: string, signal: AbortSignal, legacy = false, onAccepted?:()=>void) {
@@ -33,6 +34,21 @@ export function discoveryClarificationResult(result:Pick<DiscoveryResponse,"clar
 export function canReplyToDiscoveryClarification(message?:Message):boolean {
   return !!message && message.role==="assistant" && !message.failed &&
     discoveryClarificationResult(message) && researchRecordId.test(message.id);
+}
+
+export function messageClarificationPrompt(message?:Message) {
+  if (!message || message.role!=="assistant" || message.failed || message.questionCheck || !researchRecordId.test(message.id)) return;
+  if (validClarificationPrompt(message.clarificationPrompt)) return message.clarificationPrompt;
+  if (!canReplyToDiscoveryClarification(message)) return;
+  const text=message.text.trim();
+  return createClarificationPrompt("research",text.length>500 ? text.slice(0,499)+"…" : text || "请补充研究所需的信息。");
+}
+
+export function answeredClarificationIds(messages:Message[],unansweredId:string|null) {
+  return new Set(messages.flatMap(message=>{
+    const id=message.clarificationAnswer?.parentTaskId ?? message.clarificationReply?.parentTaskId;
+    return message.role==="user" && message.id!==unansweredId && id ? [id] : [];
+  }));
 }
 
 interface ResearchRecord {

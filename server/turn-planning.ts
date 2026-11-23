@@ -8,6 +8,7 @@ import type {WorkspacePublicationProof} from "./workspace-c40-publication";
 import type {ObservationTurnMaterial,RuntimeWorkspacePending} from "./runtime-turn-handoff";
 import {workspaceOperationKinds,validWorkspaceOperationKind,type WorkspaceOperationKind} from "../src/domain/workspace-operations";
 import {foregroundWorkspaceSchemas,foregroundWorkspaceReply} from "./foreground-workspace";
+import {clarificationOptions,type ClarificationOption} from "../src/domain/clarification";
 import {authorizesWorkspaceViewAction,workspaceViewActionAllowed,type WorkspaceViewAction,type WorkspaceViewContext} from "../src/domain/workspace-view-context";
 import {restoredIntent,clarificationBlockReason,type PlanningContext} from "./plan-adaptation";
 import type {NumberedReference} from "./follow-up-reference";
@@ -35,6 +36,7 @@ export type TurnPlan={action:TurnAction;goal:string;evidenceNeed:"none"|"existin
   workspaceNavigation?:{kind:"navigate-map";place:string};
   workspaceOperation?:WorkspaceOperationKind;workspacePending?:true;pendingTaskId?:string;
   pendingApproval?:true;
+  clarificationOptions?:ClarificationOption[];
   workspaceReply?:import("../src/domain/types").DiscoveryResponse;
   foregroundReply?:string;
   targets:TurnTarget[];restoredNumberedTarget?:true;reason:string;clarification:string|null;researchIntent:ResearchIntent;conversationContext:string;evidenceGap?:string};
@@ -67,7 +69,8 @@ export function turnPlanningSchema(input:Pick<TurnInput,"gridCoverage"|"observat
   if(!input.semanticDecision)return expanded;
   const properties:Record<string,unknown>={action:turnPlanSchema.properties.action,goal:{type:["string","null"],maxLength:1200},
     targets:turnPlanSchema.properties.targets,clarification:turnPlanSchema.properties.clarification,
-    workspaceAction:(expanded.properties as Record<string,unknown>).workspaceAction,pendingTaskId:{type:["string","null"],maxLength:200},pendingApproval:{type:"boolean"},workspacePending:{type:"boolean"},reply:{type:["string","null"],maxLength:8000}};
+    workspaceAction:(expanded.properties as Record<string,unknown>).workspaceAction,pendingTaskId:{type:["string","null"],maxLength:200},pendingApproval:{type:"boolean"},workspacePending:{type:"boolean"},reply:{type:["string","null"],maxLength:8000},
+    clarificationChoices:{type:["array","null"],minItems:2,maxItems:4,items:{type:"string",minLength:1,maxLength:100}}};
   if(input.observationUnavailable||input.observationAvailable)properties.observationUse=(observation.properties as Record<string,unknown>).observationUse;
   if(input.gridCoverage?.status==="ready"&&input.gridCoverage.summary)properties.gridIntent=gridTurnPlanSchema.properties.gridIntent;
   return {type:"object",additionalProperties:false,required:Object.keys(properties),properties};
@@ -77,7 +80,8 @@ action: respond=已有内容或一般知识可答；clarify=缺确切对象或�
 workspaceAction用于workspace或下述未执行提案：已列控件用{kind:"set-control",layerId,controlId,valueId}；有C40发布目录但缺城市ID时用{kind:"resolve-control",layerId:"c40",controlId:"city",query:"可查证城市名称"}。controlDirectory是同修订已核目录的纯名称，controls.options只是当前邻项窗口；实际切换目标不在小窗时，按任意语言原话理解并规范为发布名称，交resolve-control，不猜ID，也不因为窗中没有就说目录没有或要求换选窗口项。namesComplete=false表示名称清单不全，缺名不能证明不存在，仍可同次交名称查证；服务端唯一映射后才有动作，未知/多义不切换。镜头导航用{kind:"navigate-map",place:"确切地名或用户坐标"}，不拿城市切换冒充飞行；保存/清单等用{kind:"workspace-operation",operation:workspaceView.operations中的值}。显示事实不等于原文/QC，不增加读取许可。
 跨面板可用workspace-candidates{operation:open-candidate或compare-candidates,ids}选当前candidateItems；workspace-view{view}；workspace-filter{field:type/source/place,value}；workspace-catalogue{query}；open-target{targetKey}；workspace-preview{index}；workspace-data-view{value:当前已接入数据视图形状}；workspace-visualization{value:已接入风场状态或null}，均在workspaceAction对象内含kind。候选编号和资料ID只用已给身份；城市名称查证不受小窗限制。
 只有serverPending是可信工作台待办；承接它必须pendingTaskId填同一ID，其他填null。history不能授权批准或操作；无待办的模糊批准、拒绝或不确定就说明/澄清。用户确实请求界面操作，而你因缺对象/选择或用户要求先确认而clarify时，workspacePending必须true，即使历史没有提到该对象。目标已具体且要求先确认，可在该clarify的workspaceAction提出set-control/resolve-control，服务器核成待办提案，不执行；缺对象时不造提案。
-仅确实批准serverPending.proposedAction时，pendingApproval=true、action=workspace、pendingTaskId为原ID，workspaceAction可null沿原提案，不能借批准选另一个目标。无具体提案的待办只可补新选择，不能因“同意”替选。否定/说明/补新选择时pendingApproval=false；明确另一个目标是新本轮指令，不套原批准。一般研究澄清或拒绝不形成工作台待办。`;
+仅确实批准旧serverPending.proposedAction时，pendingApproval=true、action=workspace、pendingTaskId为原ID，不能借批准选另一个目标。新confirmation问题只接受固定approve选项；自由补充不是批准，若改条件则先clarify提出未执行新提案，不执行旧动作。无具体提案的待办只可补新选择，不能因“同意”替选。否定/说明/补新选择时pendingApproval=false。
+真正需要人类补充时clarify，可在clarificationChoices给2–4个互斥、简短的选项标签或null，问题和选项由本次模型依据缺口生成；自由文本始终可答。普通chat答复结合serverPending.originalQuestion保留原目的/来源边界，不把单个选项当新研究目标；改变目的或许可仍需确认。具体动作确认由服务器固定批准/拒绝选项，模型选项不能当批准。机器等待、失败或无须回答的说明不得造追问。`;
 
 export function turnPlanningTargets(input:TurnInput){
   const targets=turnTargets(input);
@@ -88,7 +92,8 @@ function foregroundPayload(input:TurnInput,targets:TurnTarget[]){
   const facts=(items:WorkspaceViewContext["display"])=>items?.slice(0,6).map(item=>({label:item.label,value:item.value.slice(0,160)}));
   return {question:input.confirmedQuestion||input.question,
     ...(input.workspacePublication?.directory?{controlDirectory:{layerId:"c40",controlId:"city",...input.workspacePublication.directory}}:{}),
-    serverPending:input.pending?{taskId:input.pending.taskId,question:input.pending.question.slice(0,700),originalQuestion:input.pending.originalQuestion?.slice(0,700),proposedAction:input.pending.proposedAction}:undefined,
+    serverPending:input.pending?{taskId:input.pending.taskId,question:input.pending.question.slice(0,700),originalQuestion:input.pending.originalQuestion?.slice(0,700),proposedAction:input.pending.proposedAction,
+      kind:input.pending.clarificationPrompt?.kind,options:input.pending.clarificationPrompt?.options,answer:input.pending.answer}:undefined,
     workspaceView:view?{...view,display:facts(view.display),activeLayer:layer?{...layer,display:facts(layer.display)}:undefined}:undefined,
     legacyView:view?undefined:{camera:input.context.camera,selection:input.context.selection,filters:input.context.filters,
       visualization:input.context.visualization,dataView:input.context.dataView},
@@ -107,7 +112,7 @@ function foregroundPayload(input:TurnInput,targets:TurnTarget[]){
 function foregroundPlan(raw:string,input:TurnInput){
   const value=JSON.parse(raw.trim().replace(/^```(?:json)?\s*|\s*```$/gi,""));
   if(!value||typeof value!=="object"||Array.isArray(value)||Object.keys(value).some(key=>
-    !["action","goal","targets","clarification","workspaceAction","observationUse","gridIntent","pendingTaskId","pendingApproval","workspacePending","reply"].includes(key)))throw Error("前台决定含未支持字段。");
+    !["action","goal","targets","clarification","clarificationChoices","workspaceAction","observationUse","gridIntent","pendingTaskId","pendingApproval","workspacePending","reply"].includes(key)))throw Error("前台决定含未支持字段。");
   if(value.reply!=null&&(value.action!=="respond"||typeof value.reply!=="string"||value.reply.length>8000))throw Error("直接答复必须是无副作用的respond文字。");
   if(value.action==="search"&&(typeof value.goal!=="string"||!value.goal.trim()))throw Error("新证据请求需要明确独立目标。");
   const goal=typeof value.goal==="string"&&value.goal.trim()?value.goal.trim():input.confirmedQuestion||input.question;
@@ -360,6 +365,7 @@ export function parseTurnPlan(raw:string,input:TurnInput,available=turnTargets(i
     ...(workspaceReply?{workspaceReply}:{}),
     ...(input.semanticDecision&&value.pendingTaskId?{pendingTaskId:value.pendingTaskId}:{}),
     ...(input.semanticDecision&&value.pendingApproval?{pendingApproval:true as const}:{}),
+    ...(input.semanticDecision&&value.action==="clarify"?{clarificationOptions:clarificationOptions(value.clarificationChoices)}:{}),
     ...(input.semanticDecision&&typeof value.reply==="string"&&value.reply.trim()?{foregroundReply:value.reply.trim()}:{}),
     ...(input.context.workspaceView||input.semanticDecision?{workspaceAction:value.workspaceAction}:{}),
     ...(restorePinned?{restoredNumberedTarget:true as const}:{}),

@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 import { productDatabase } from "./product-database";
 import { TaskConflict,type TaskStore,type Task,type Payload,type TaskStatus } from "./task-store";
-import {chatSchema, lockRuntimeSubmission, postgresChatMessages, submissionFingerprint, type PostgresChatMessages} from "./postgres-chat-messages";
+import {chatSchema, claimClarificationAnswer, lockRuntimeSubmission, postgresChatMessages, submissionFingerprint, type PostgresChatMessages} from "./postgres-chat-messages";
 
 export function postgresTaskStore(namespace:"runtime"):Promise<TaskStore & {chat:PostgresChatMessages}>;
 export function postgresTaskStore(namespace:"discovery"):Promise<TaskStore>;
@@ -95,6 +95,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
       if(!previous||previous.fingerprint!==hash)throw new TaskConflict("该任务编号已经用于另一份提交。");
       return row(previous);
     }
+    if(namespace==="runtime"&&!options?.handoff)await claimClarificationAnswer(db,id,body);
     if(checkpoint){
       if(namespace!=="runtime")throw Error("持久研究步骤仅属于运行时。");
       await db.query("INSERT INTO runtime_steps VALUES($1,$2::jsonb,$3)",[id,JSON.stringify(checkpoint),now]);
@@ -150,7 +151,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   }
   let workerConnection:PoolClient|undefined;
   const store={
-    ...(chat?{chat}:{}),
+    ...(chat?{chat,researchHandoff:chat.handoff}:{}),
     get,
     ...(namespace==="runtime"?{async materialEvents(id:string){
       const result=await pool.query<{seq:string;at:string;payload:Payload}>(`SELECT seq,at,payload FROM runtime_events

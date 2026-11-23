@@ -1,4 +1,6 @@
 import type {DiscoveryContext,DiscoveryResponse} from "../src/domain/types";
+import {clarificationAnswerText,createClarificationPrompt,validClarificationAnswer,validClarificationPrompt,type ClarificationAnswer} from "../src/domain/clarification";
+import {validRuntimeTurnHandoff} from "./runtime-turn-handoff";
 import type {DeepSeekTools} from "../src/domain/deepseek-tools";
 import type {TaskStore} from "./task-store";
 import {taskIdPattern} from "./task-store";
@@ -6,7 +8,7 @@ import {previousDiscovery,discoveryConfirmation} from "./discovery-bindings";
 import type {StoredDiscoveryBinding} from "./discovery-bindings";
 
 export type ClarificationReply={parentTaskId:string};
-type ReplyInput={query:string;conversationId:string;context:DiscoveryContext;deepseekTools?:DeepSeekTools;questionDecision?:unknown;clarificationReply?:ClarificationReply};
+type ReplyInput={query:string;conversationId:string;context:DiscoveryContext;deepseekTools?:DeepSeekTools;questionDecision?:unknown;clarificationReply?:ClarificationReply;clarificationAnswer?:ClarificationAnswer};
 type ArchivedTurn={query:string;context:DiscoveryContext;deepseekTools?:DeepSeekTools;questionDecision?:import("../src/domain/types").QuestionDecision;
   history:import("./turn-planning").TurnHistory;clarificationReply?:ClarificationReply};
 export type ClarificationParent={binding:StoredDiscoveryBinding&{lastSeq:number};original:ArchivedTurn;goal:string;focus?:string;
@@ -21,14 +23,21 @@ export async function clarificationParent(tasks:TaskStore,body:ReplyInput):Promi
     throw Error("补充澄清需要明确引用原研究记录，不能替代问题确认。");
   const parent=await tasks.get(reply.parentTaskId);
   if(!parent||JSON.parse(parent.body).conversationId!==body.conversationId)throw Error("原澄清不属于当前研究会话。");
-  const previous=JSON.parse(parent.body),result=(await tasks.terminal(reply.parentTaskId))?.result as (DiscoveryResponse&{discoveryClarification?:boolean})|undefined;
-  if(!result?.clarification||!result.discoveryClarification||result.questionCheck)throw Error("该记录没有可继续的受托澄清。");
-  const binding=await previousDiscovery(tasks,body.conversationId,reply.parentTaskId,true);
-  if(binding.transport!=="a2a"||binding.state!=="TASK_STATE_INPUT_REQUIRED"||binding.lastSeq===undefined)
-    throw Error("原澄清缺少有效的受理身份或等待水位。");
-  // Current browser filters/tool preferences are a view, never renewed authority.
-  // The original runtime record and the provider's accepted envelope remain authoritative.
-  let source=parent,original=previous as ArchivedTurn;
+  const terminal=await tasks.terminal(parent.id);
+  const result=terminal?.result as DiscoveryResponse|undefined;
+  if(parent.status!=="complete"||!result?.clarification||!result.discoveryClarification||result.questionCheck)
+    throw Error("该记录没有可继续的受托澄清。");
+  if(body.clarificationAnswer!==undefined){
+    const answer=body.clarificationAnswer;
+    const prompt=result.clarificationPrompt??createClarificationPrompt("research",result.message);
+    if(!validClarificationAnswer(answer)||answer.parentTaskId!==reply.parentTaskId||!validClarificationPrompt(prompt)||
+      prompt.kind!=="research"||clarificationAnswerText(prompt,answer)!==body.query)
+      throw Error("这份补充与原研究追问的选项或内容不一致。");
+  }
+  // Only a persisted follow-up that stayed local can inherit an older provider wait.
+  let waiting=parent,waitingResult=result;
+  let source=parent,original=JSON.parse(parent.body) as ArchivedTurn;
+  let inheritsWait=terminal?.clarificationContinuation===true;
   const visited=new Set([parent.id]);
   for(let depth=0;original.clarificationReply;depth++){
     const id=original.clarificationReply.parentTaskId;
@@ -36,6 +45,26 @@ export async function clarificationParent(tasks:TaskStore,body:ReplyInput):Promi
     const next=await tasks.get(id);
     if(!next||JSON.parse(next.body).conversationId!==body.conversationId)throw Error("原澄清的研究记录关联已失效。");
     visited.add(id);source=next;original=JSON.parse(next.body);
+    if(inheritsWait){
+      const local=await tasks.terminal(id);
+      const archived=local?.result as DiscoveryResponse|undefined;
+      if(next.status!=="complete"||!archived?.clarification||!archived.discoveryClarification||archived.questionCheck)
+        throw Error("找不到上一条有效的受托澄清。");
+      waiting=next;waitingResult=archived;
+      inheritsWait=local?.clarificationContinuation===true;
+    }
+  }
+  if(inheritsWait)throw Error("找不到实际等待的原发现委托。");
+  const binding=await previousDiscovery(tasks,body.conversationId,waiting.id,true);
+  if(binding.transport!=="a2a"||binding.state!=="TASK_STATE_INPUT_REQUIRED"||binding.lastSeq===undefined)
+    throw Error("原澄清缺少有效的受理身份或等待水位。");
+  // The accepted private Chat handoff retains the original authorization. Browser scope stays descriptive.
+  const handoff=await tasks.researchHandoff?.(source.id);
+  if(handoff){
+    if(handoff.kind!=="chat-research.v1"||!validRuntimeTurnHandoff(handoff.plan)||!handoff.body||
+      (handoff.body as {conversationId?:unknown}).conversationId!==body.conversationId)
+      throw Error("原研究记录无法重开。");
+    original=handoff.body as ArchivedTurn;
   }
   if(typeof original.query!=="string"||!original.context||!Array.isArray(original.history))throw Error("原研究记录无法重开。");
   const prior=(await tasks.terminal(source.id))?.result as DiscoveryResponse|undefined;
@@ -47,10 +76,11 @@ export async function clarificationParent(tasks:TaskStore,body:ReplyInput):Promi
   const delegation=confirmation?.newTask?{query:original.questionDecision!.dataQuestion}:{query:original.query,decision:original.questionDecision};
   let focus:string|undefined;
   if(binding.kind==="continuation"){
-    const call=result.runTrace?.calls.find(c=>c.id===binding.messageId+":discovery");
+    const call=waitingResult.runTrace?.calls.find(c=>c.id===binding.messageId+":discovery");
     try{const saved=JSON.parse(call?.input||"null")?.focus;if(typeof saved==="string"&&saved)focus=saved;}catch{}
   }
-  return {binding:binding as ClarificationParent["binding"],original,goal,focus,delegation,context:{...original.context},result};
+  return {binding:binding as ClarificationParent["binding"],original,goal,focus,delegation,context:{...original.context},
+    result:{...result,gridCoverage:result.gridCoverage??waitingResult.gridCoverage}};
 }
 
 export const clarificationGuardSchema={type:"object",additionalProperties:false,

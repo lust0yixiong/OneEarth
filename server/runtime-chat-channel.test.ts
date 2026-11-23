@@ -124,6 +124,30 @@ test("Chat receipt and research handoff retain identity while the existing worke
   assert.equal(events.filter(event => event.started).length, 1);
   assert.deepEqual(events.at(-1)?.result, {message: "original research"});
 
+  // Two different IDs cannot both claim one immutable parent. Delivery retries keep the original ID.
+  const replyIds = [randomUUID(), randomUUID()];
+  const reply = {...input("show next city"), clarificationAnswer: {parentTaskId: city, text: "show next city"}};
+  const replies = await Promise.all(replyIds.map(id => submit(id, reply)));
+  assert.deepEqual(replies.map(response => response.status).sort(), [202, 409]);
+  const winner = replyIds[replies.findIndex(response => response.status === 202)];
+  await until(async () => (await tasks.get(winner))?.status === "complete");
+  assert.equal((await submit(winner, reply)).status, 202);
+  assert.equal((await submit(winner, {...reply, query: "different"})).status, 409);
+  assert.deepEqual((await audit.query("SELECT answer_id FROM runtime_clarification_answers WHERE parent_task_id=$1", [city])).rows,
+    [{answer_id: winner}]);
+  assert.equal(seen.get(winner), 1);
+
+  await stop();
+  const researchReplies = [randomUUID(), randomUUID()];
+  const researchReply = {...input("original clarification"), clarificationReply: {parentTaskId: research}};
+  const claims = await Promise.allSettled(researchReplies.map(id=>tasks.submit(id, researchReply)));
+  assert.deepEqual(claims.map(claim=>claim.status).sort(),["fulfilled","rejected"]);
+  const acceptedReply = researchReplies[claims.findIndex(claim=>claim.status==="fulfilled")];
+  assert.deepEqual((await audit.query("SELECT answer_id FROM runtime_clarification_answers WHERE parent_task_id=$1", [research])).rows,
+    [{answer_id:acceptedReply}]);
+  assert.equal((await audit.query("SELECT id FROM runtime_tasks WHERE id=ANY($1)",[researchReplies])).rowCount,1);
+  assert.equal((await tasks.submit(acceptedReply, researchReply)).id,acceptedReply);
+
   await chat.close();
   await tasks.chat.admit(interrupted, input("interrupted"), 4);
   tasks.chat.release();

@@ -5,11 +5,13 @@ import type {ChatModel} from "../src/domain/chat-model";
 import type {DeepSeekTools} from "../src/domain/deepseek-tools";
 import type {ClarificationReply} from "./clarification-guard";
 import type {TurnHistory,TurnPlan} from "./turn-planning";
+import type {ClarificationPrompt,ClarificationAnswer} from "../src/domain/clarification";
 
 export type RuntimeTurnInput={query:string;conversationId:string;turnId:string;previousTaskId?:string;context:DiscoveryContext;
-  history:TurnHistory;config:ChatModel;questionDecision?:QuestionDecision;deepseekTools?:DeepSeekTools;clarificationReply?:ClarificationReply};
+  history:TurnHistory;config:ChatModel;questionDecision?:QuestionDecision;deepseekTools?:DeepSeekTools;clarificationReply?:ClarificationReply;clarificationAnswer?:ClarificationAnswer};
 export type ObservationTurnMaterial={artifactId:string;version:string;title:string;variables:string[]};
-export type RuntimeWorkspacePending={taskId:string;question:string;originalQuestion?:string;proposedAction?:import("../src/domain/workspace-view-context").WorkspaceViewAction};
+export type RuntimeWorkspacePending={taskId:string;question:string;originalQuestion?:string;proposedAction?:import("../src/domain/workspace-view-context").WorkspaceViewAction;
+  proposalOrigin?:{layerId:string;controlId:string;valueId:string};clarificationPrompt?:ClarificationPrompt;answer?:ClarificationAnswer};
 export type RuntimeTurnOptions={observationUnavailable?:boolean;observationAvailable?:boolean;priorResult?:DiscoveryResponse|null;observationMaterials?:ObservationTurnMaterial[];pending?:RuntimeWorkspacePending};
 /** Private server record, never a browser input or a replacement for source authorization. */
 export type RuntimeTurnHandoff={version:1;kind:"runtime-turn-plan";inputFingerprint:string;plannedAt:number;plan:TurnPlan;runTrace:RunTrace;
@@ -22,8 +24,8 @@ function canonical(value:any):any{
   return value;
 }
 export function runtimeTurnFingerprint(body:RuntimeTurnInput){
-  const {query,conversationId,turnId,previousTaskId,context,history,config,questionDecision,deepseekTools,clarificationReply}=body;
-  return createHash("sha256").update(JSON.stringify(canonical({query,conversationId,turnId,previousTaskId,context,history,config,questionDecision,deepseekTools,clarificationReply}))).digest("hex");
+  const {query,conversationId,turnId,previousTaskId,context,history,config,questionDecision,deepseekTools,clarificationReply,clarificationAnswer}=body;
+  return createHash("sha256").update(JSON.stringify(canonical({query,conversationId,turnId,previousTaskId,context,history,config,questionDecision,deepseekTools,clarificationReply,clarificationAnswer}))).digest("hex");
 }
 export function validRuntimeTurnHandoff(value:unknown):value is RuntimeTurnHandoff{
   if(!value||typeof value!=="object"||Array.isArray(value))return false;

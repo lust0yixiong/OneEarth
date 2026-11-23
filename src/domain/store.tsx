@@ -2,7 +2,8 @@ import {availableChatOperations, chatCandidateBatch, chatCandidateItems, chatCan
 import {validWorkspaceOperationKind, workspaceCandidateOperationAllowed} from "./workspace-operations";
 import {projectWorkspaceView, workspaceActionState, type WorkspaceSurfaceReading} from "./workspace-view-projection";
 import {authorizesWorkspaceViewAction, workspaceViewActionAllowed, type WorkspaceViewPublication} from "./workspace-view-context";
-import { canReplyToDiscoveryClarification, discoveryClarificationResult, loadResearchRecord, openTaskEvents, chatMessagesPath, researchRecordId, cancelChatRequest } from "./runtime-client";
+import { answeredClarificationIds, messageClarificationPrompt, discoveryClarificationResult, loadResearchRecord, openTaskEvents, chatMessagesPath, researchRecordId, cancelChatRequest } from "./runtime-client";
+import {clarificationAnswerText,validClarificationPrompt,type ClarificationAnswer} from "./clarification";
 import {datasetScope,mergeScope,scopedQuestionContext,scopeDetail,scopeLabel,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
 import {rememberReadEvidence} from "./read-evidence";
@@ -507,6 +508,7 @@ async function loadInitialSession(): Promise<State> {
         if(!cachedResearch){
           const stored=await readSession(saved.conversationId);
           state.clarificationReply=stored?.workspace.clarificationReply ?? null;
+          const clarificationPrompt=validClarificationPrompt(reply.clarificationPrompt) ? reply.clarificationPrompt : undefined;
           const messages:Message[]=[
             {id:saved.turnId,role:"user",text:saved.question,time:saved.created},
             {id:saved.id,role:"assistant",text:reply.message,time:saved.updated,replyTo:saved.turnId,
@@ -515,7 +517,8 @@ async function loadInitialSession(): Promise<State> {
               conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
               answerNotes:reply.answerNotes,runTrace:reply.runTrace,researchRegion:reply.researchRegion,
               gridCoverage:reply.gridCoverage,
-              ...(reply.clarification?{clarification:true}:{}),
+              ...(reply.clarification || clarificationPrompt ? {clarification:true} : {}),
+              clarificationPrompt,
               ...(discoveryClarificationResult(reply)?{discoveryClarification:true}:{})},
           ];
           state.sessionId=saved.conversationId;
@@ -1306,7 +1309,9 @@ function useWorkspaceValue(initialState: State) {
           ? message : best;
       },undefined);
       const payload = {query:q, context:attempt.context, config:readChatModel(), deepseekTools:readDeepSeekTools(),
-        conversationId:current.sessionId, turnId:attempt.userMessageId, previousTaskId:attempt.clarificationReply?undefined:previousAnswer?.id,
+        conversationId:current.sessionId, turnId:attempt.userMessageId,
+        previousTaskId:attempt.clarificationReply ? undefined : attempt.clarificationAnswer?.parentTaskId ?? previousAnswer?.id,
+        ...(attempt.clarificationAnswer?{clarificationAnswer:attempt.clarificationAnswer}:{}),
         ...(attempt.questionDecision?{questionDecision:attempt.questionDecision}:{}),
         ...(attempt.clarificationReply?{clarificationReply:attempt.clarificationReply}:{}),
         history:promptMessages.slice(-8).map(m=>{
@@ -1412,6 +1417,21 @@ function useWorkspaceValue(initialState: State) {
           r = await receive();
         }
         if (!isCurrent()) return;
+        const clarificationPrompt=validClarificationPrompt(r.clarificationPrompt) ? r.clarificationPrompt : undefined;
+        if (r.questionCheck || clarificationPrompt || r.clarification) {
+          if(r.researchRegion===null || validResearchRegion(r.researchRegion))receiveRegion(r.researchRegion);
+          if (r.questionCheck) {
+            await complete(r.message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,
+              questionCheck:{...r.questionCheck,attempt},researchRegion:r.researchRegion,researchIntent:r.researchIntent,
+              conversationContext:r.conversationContext,conversationEvidence:r.conversationEvidence,conversationAssertionEvidence:r.conversationAssertionEvidence});
+          } else {
+            await complete(r.message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,workspacePending:r.workspacePending,
+              clarification:true,clarificationPrompt,...(clarificationPrompt && !workspaceCurrent() ? {historicalReply:true} : {}),...(discoveryClarificationResult(r)?{discoveryClarification:true}:{}),
+              researchRegion:r.researchRegion,researchIntent:r.researchIntent,conversationContext:r.conversationContext,
+              conversationEvidence:r.conversationEvidence,conversationAssertionEvidence:r.conversationAssertionEvidence});
+          }
+          return;
+        }
         if (r.workspaceOperation !== undefined) {
           const now=latest.current;
           const question=now.messages.find(message=>message.id===attempt.userMessageId);
@@ -1505,16 +1525,6 @@ function useWorkspaceValue(initialState: State) {
           return;
         }
         if(r.researchRegion===null || validResearchRegion(r.researchRegion))receiveRegion(r.researchRegion);
-        if(r.clarification){
-          await complete(r.message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,workspacePending:r.workspacePending,
-            clarification:true,...(discoveryClarificationResult(r)?{discoveryClarification:true}:{}),researchRegion:r.researchRegion,researchIntent:r.researchIntent,conversationContext:r.conversationContext,conversationEvidence:r.conversationEvidence,conversationAssertionEvidence:r.conversationAssertionEvidence});
-          return;
-        }
-        if(r.questionCheck){
-          await complete(r.message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,
-            questionCheck:{...r.questionCheck,attempt},researchRegion:r.researchRegion,researchIntent:r.researchIntent,conversationContext:r.conversationContext,conversationEvidence:r.conversationEvidence,conversationAssertionEvidence:r.conversationAssertionEvidence});
-          return;
-        }
         if(r.hainaRecords&&r.hainaCatalog)registerHaina(r.hainaRecords,r.hainaCatalog.synced,r.hainaCatalog.endpoint,false);
         const next: Partial<State> = {};
         if(r.hainaCatalog)next.hainaFeed=r.hainaCatalog;
@@ -1875,7 +1885,7 @@ function useWorkspaceValue(initialState: State) {
     let decision:QuestionDecision;
     try{decision=makeQuestionDecision(check,messageId,choice,edited);}
     catch(error){patch({error:error instanceof Error?error.message:"请核对问题内容。"});return;}
-    const {clarificationReply: _clarificationReply,...checkedAttempt}=check.attempt;
+    const {clarificationReply: _clarificationReply,clarificationAnswer: _clarificationAnswer,...checkedAttempt}=check.attempt;
     const attempt={...checkedAttempt,query:check.originalQuestion,userMessageId:randomId(),questionDecision:decision};
     confirmingQuestions.current.add(messageId);
     try{
@@ -1957,28 +1967,51 @@ function useWorkspaceValue(initialState: State) {
     },
     [patch],
   );
+  const chatRequestSnapshot=useCallback((s:State,batch:CandidateSet|null)=>{
+    const operations=availableChatOperations(s,batch);
+    const workspaceView=workspaceViewAt(s,batch,operations);
+    return {workspaceView,
+      workspaceCandidateKey:workspaceView.candidateItems?.length ? chatCandidateKey(batch) : undefined,
+      workspaceOperationKeys:Object.fromEntries([...operations].map(([kind,target])=>[kind,target.key]))};
+  },[workspaceViewAt]);
+
+  const answeringClarifications=useRef(new Set<string>());
+  const answerClarification=useCallback((reply:ClarificationAnswer)=>{
+    const s=latest.current;
+    const {parentTaskId}=reply;
+    const pendingKey=s.sessionId+"/"+parentTaskId;
+    if (answeringClarifications.current.has(pendingKey) || answeredClarificationIds(s.messages,s.unansweredQuestionId).has(parentTaskId))
+      return false;
+    const parent=s.messages.find(message=>message.id===parentTaskId);
+    const prompt=messageClarificationPrompt(parent);
+    const query=prompt && clarificationAnswerText(prompt,reply);
+    if (!prompt || !query) return false;
+    const clarificationReply=prompt.kind==="research" ? {parentTaskId} : undefined;
+    const clarificationAnswer=validClarificationPrompt(parent?.clarificationPrompt) ? reply : undefined;
+    const {workspaceView,...snapshot}=chatRequestSnapshot(s,chatCandidateBatch(s));
+    const unsent=s.messages.find(message=>message.role==="user" && message.id===s.unansweredQuestionId);
+    const unsentParent=unsent?.clarificationAnswer?.parentTaskId ?? unsent?.clarificationReply?.parentTaskId;
+    const originalTurnId=unsentParent===parentTaskId && unsent?.text===query
+      && unsent.clarificationAnswer?.optionId===reply.optionId ? unsent.id : undefined;
+    const attempt:DiscoveryAttempt={query,userMessageId:originalTurnId ?? randomId(),workspaceKey:requestWorkspaceKey(s),view:s.view,
+      context:structuredClone({...scopedQuestionContext([],null),workspaceView}),...snapshot,clarificationReply,clarificationAnswer};
+    answeringClarifications.current.add(pendingKey);
+    if (!originalTurnId) void add("user",query,{id:attempt.userMessageId,clarificationReply,clarificationAnswer:reply});
+    patch({unansweredQuestionId:null,...(s.clarificationReply?.parentTaskId===parentTaskId ? {clarificationReply:null} : {})});
+    void executeDiscovery(attempt,false).finally(()=>answeringClarifications.current.delete(pendingKey));
+    return true;
+  },[add,chatRequestSnapshot,executeDiscovery,patch]);
+
   const send = useCallback(async (query:string, clarificationReply?:ClarificationReply) => {
     const q = query.trim(), s = latest.current;
     if (!q || s.attachingMapScope) return;
-    const batch=chatCandidateBatch(s);
-    const operations=availableChatOperations(s,batch);
-    const workspaceView=workspaceViewAt(s,batch,operations);
-    const workspaceCandidateKey=workspaceView.candidateItems?.length ? chatCandidateKey(batch) : undefined;
-    const workspaceOperationKeys=Object.fromEntries([...operations].map(([kind,target])=>[kind,target.key]));
-    const turnId = randomId();
     if (clarificationReply) {
-      const {parentTaskId}=clarificationReply;
-      const parent=s.messages.find(message=>message.id===parentTaskId);
-      const alreadySent=s.messages.some(message=>message.role==="user" && message.id!==s.unansweredQuestionId
-        && message.clarificationReply?.parentTaskId===parentTaskId);
-      if (!canReplyToDiscoveryClarification(parent) || alreadySent) return;
-      const attempt:DiscoveryAttempt={query:q,userMessageId:turnId,workspaceKey:requestWorkspaceKey(s),
-        view:s.view,context:{...scopedQuestionContext([],null),workspaceView},workspaceOperationKeys,workspaceCandidateKey,clarificationReply};
-      void add("user",q,{id:turnId,clarificationReply});
-      patch({clarificationReply:null,unansweredQuestionId:null});
-      await executeDiscovery(attempt,false);
+      answerClarification({parentTaskId:clarificationReply.parentTaskId,text:q});
       return;
     }
+    const batch=chatCandidateBatch(s);
+    const {workspaceView,...snapshot}=chatRequestSnapshot(s,batch);
+    const turnId = randomId();
     const items = s.draftScope ?? [];
     const citation = s.citation ? (({excerpt,...reference})=>reference)(s.citation) : null;
     const activeObservations = s.view==="discover" ? initialAccessSection(s.search)==="timely"
@@ -1999,13 +2032,13 @@ function useWorkspaceValue(initialState: State) {
         ...(observationBatch?{observationBatch:{catalogConditions:observationBatch.catalogConditions,
           selection:observationBatch.selection,period:observationBatch.filters.period,utcWindow:observationBatch.filters.utcWindow}}:{})};
     const attempt:DiscoveryAttempt = {query:q,userMessageId:turnId,workspaceKey:requestWorkspaceKey(s),
-      view:s.view,context:structuredClone({...context,workspaceView}),workspaceOperationKeys,workspaceCandidateKey};
+      view:s.view,context:structuredClone({...context,workspaceView}),...snapshot};
     void add("user",q,{id:turnId,attachedScope:items,
       context:[caseById(s.caseId)?.title,s.filters.place,s.selection?.grid.label].filter(Boolean).join(" · ") || "全球视图",
       ...(s.citation?{citation:s.citation}:{})});
     patch({draftScope:null,citation:null,unansweredQuestionId:null});
     await executeDiscovery(attempt,false);
-  },[add,executeDiscovery,patch,workspaceViewAt]);
+  },[add,answerClarification,chatRequestSnapshot,executeDiscovery,patch]);
   const retry = useCallback(async (attempt:DiscoveryAttempt, id:string) => {
     const session=latest.current.sessionId;
     try {
@@ -2042,7 +2075,7 @@ function useWorkspaceValue(initialState: State) {
     patch,
     add,
     send,
-    attachScope,confirmQuestion,cancelChat,
+    attachScope,confirmQuestion,answerClarification,cancelChat,
     registerWorkspaceSurface, noteManualNavigation,
     retry,
     openCase,

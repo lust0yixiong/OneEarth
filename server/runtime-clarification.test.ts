@@ -9,6 +9,8 @@ import express from "express";
 import {openTaskStore} from "./task-store";
 import {executeTurn,type RuntimeServices} from "./runtime-turn";
 import {validateTurn} from "./runtime-input";
+import {clarificationOptions,createClarificationPrompt} from "../src/domain/clarification";
+import {clarificationParent} from "./clarification-guard";
 import {discoveryConfirmation,previousDiscovery} from "./discovery-bindings";
 import {emptyFilters} from "../src/domain/spatial";
 import type {DiscoveryContext} from "../src/domain/types";
@@ -26,7 +28,7 @@ const acquiredPaper:PaperRecord={id:"earthnano:"+"c".repeat(64),dsKey:"doi:10.99
 const acquiredSearch={engine:"controlled search",query:"confirmed target data",status:"done" as const,
   hits:[{url:"https://example.org/controlled-acquired-source",title:"Controlled acquired source",snippet:"Actual fixture result",pageExcerpt:"Retained source text",stage:"page-excerpt" as const}]};
 
-async function fixture(t:TestContext,action:"supplement"|"new_goal"|"clarify"="supplement",givenContext=context(),newGoalSupplement=false,childWait=false){
+async function fixture(t:TestContext,action:"supplement"|"new_goal"|"clarify"="supplement",givenContext=context(),newGoalSupplement=false,childWait=false,structured=false){
   const directory=mkdtempSync(path.join(tmpdir(),"oneearth-clarification-runtime-")),promptFile=path.join(directory,"prompts.txt"),guardFile=path.join(directory,"guard.json");
   const guard={action,reason:"controlled runtime model decision",proposedQuestion:action==="new_goal"?"查找一个已明确确认的新研究目标。":null,
     clarification:action==="clarify"?"还需说明哪个原定条件？":null};
@@ -55,6 +57,7 @@ async function fixture(t:TestContext,action:"supplement"|"new_goal"|"clarify"="s
   }
   tasks.append(parentId,{discoveryBinding:{transport:"a2a",kind:childWait?"continuation":"initial",messageId:childWait?childMessageId:parentId,discoveryId:externalId,contextId,state:"TASK_STATE_INPUT_REQUIRED",lastSeq:20}});
   tasks.finish(parentId,"complete",{result:{message:"请补充原委托缺失的条件。",clarification:true,discoveryClarification:true,
+    ...(structured?{clarificationPrompt:createClarificationPrompt("research","请补充原委托缺失的条件。",[{id:"coast",label:"只看沿海站点"},{id:"inland",label:"只看内陆站点"}])}:{}),
     ...(childWait?{paperRecords:[acquiredPaper]}:{}),
     runTrace:{started:1,stages:[],searches:childWait?[acquiredSearch]:[],calls:[{id:"turn-action",status:"done",output:JSON.stringify({goal:normalizedGoal})},
       ...(childWait?[{id:childMessageId+":discovery",status:"done",input:JSON.stringify({focus})}]:[])]}}});
@@ -122,9 +125,44 @@ test("explicit clarification restores the archived goal/authority and sends only
   t.diagnostic(JSON.stringify({runtime:id,parent:s.parentId,discovery:s.remote.id,oldCheckpoint:20,newCheckpoint:21,minimalBusiness:business,modelGuard:true}));
 });
 
+test("structured research choices resolve from the same archived parent and resume its exact wait",async t=>{
+  const s=await fixture(t,"supplement",context(),false,false,true),body:any=s.body("只看沿海站点");
+  body.clarificationAnswer={parentTaskId:s.parentId,optionId:"coast"};
+  assert.equal(await validateTurn(s.tasks,body),undefined);
+  for(const invalid of [{...body,query:"把选项改成另一个目标"},{...body,clarificationReply:undefined},
+    {...body,clarificationAnswer:{...body.clarificationAnswer,parentTaskId:randomUUID()}},
+    {...body,clarificationAnswer:{...body.clarificationAnswer,optionId:"unknown"}}])assert.ok(await validateTurn(s.tasks,invalid));
+  const {outcome}=await s.run(body);assert.equal(outcome.error,undefined);assert.equal(s.posts.length,1);
+  assert.equal(s.posts[0].message.taskId,s.remote.id);
+  assert.deepEqual(s.posts[0].message.parts[0].data.input,{continuedFrom:s.remote.id,clarificationReply:{text:body.query,afterSeq:20}});
+  assert.equal(s.remote.jobs,2);
+});
+
 test("an old waiting card cannot wake a newer clarification with a fresh message identity",async t=>{
   const s=await fixture(t);s.stale();const {outcome}=await s.run(s.body());
   assert.match(String(outcome.error),/等待水位/);assert.equal(s.posts.length,0);assert.equal(s.prompts(),"");
+});
+
+test("a persisted local follow-up validates its own options and inherits the original provider wait",async t=>{
+  const s=await fixture(t),followupId=randomUUID();
+  const question="请补充原委托的年份。";
+  const prompt=createClarificationPrompt("research",question,clarificationOptions(["2023 年","2024 年"]))!;
+  s.tasks.submit(followupId,s.body("不确定。"));s.tasks.claim();
+  s.tasks.finish(followupId,"complete",{clarificationContinuation:true,
+    result:{message:question,clarification:true,discoveryClarification:true,clarificationPrompt:prompt}});
+  const next={...s.body("2023 年"),clarificationReply:{parentTaskId:followupId},
+    clarificationAnswer:{parentTaskId:followupId,optionId:"option-1"}};
+  const waiting=await clarificationParent(s.tasks,next);
+  assert.equal(waiting.binding.discoveryId,s.remote.id);
+  assert.equal(waiting.binding.lastSeq,20);
+  assert.equal(waiting.result.message,question);
+  assert.equal(waiting.original.query,originalQuery);
+  await assert.rejects(clarificationParent(s.tasks,{...next,query:"2024 年"}),/选项或内容/);
+  await assert.rejects(clarificationParent(s.tasks,{...next,conversationId:randomUUID()}),/不属于/);
+  const resumed=await s.run(next);assert.equal(resumed.outcome.error,undefined);assert.equal(s.posts.length,1);
+  const message=s.posts[0].message;
+  assert.equal(message.taskId,s.remote.id);
+  assert.deepEqual(message.parts[0].data.input,{continuedFrom:s.remote.id,clarificationReply:{text:"2023 年",afterSeq:20}});
 });
 
 test("after a child clarification completes, a new gap preserves the unconfirmed accepted query and goal",async t=>{
@@ -162,8 +200,17 @@ test("changing the goal asks through existing QuestionCheck and confirmed new wo
 });
 
 test("an insufficient explicit reply stays local and does not masquerade as a new provider wait",async t=>{
-  const s=await fixture(t,"clarify"),{outcome}=await s.run(s.body("嗯。"));
-  assert.equal((outcome.result as any).clarification,true);assert.equal((outcome.result as any).discoveryClarification,undefined);assert.equal(s.posts.length,0);
+  const s=await fixture(t,"clarify"),{id,outcome}=await s.run(s.body("嗯。"));
+  assert.equal((outcome.result as any).clarification,true);assert.equal((outcome.result as any).discoveryClarification,true);assert.equal(s.posts.length,0);
+  assert.equal(outcome.clarificationContinuation,true);
+  assert.deepEqual((outcome.result as any).clarificationPrompt,{kind:"research",question:"还需说明哪个原定条件？"});
+  assert.equal(s.tasks.events(id,0).filter(event=>event.discoveryBinding).length,0);
+  assert.equal(s.tasks.terminal(id)?.clarificationContinuation,true);
+  s.supplement();
+  const next:any={...s.body("2020年至2023年。"),clarificationReply:{parentTaskId:id},clarificationAnswer:{parentTaskId:id,text:"2020年至2023年。"}};
+  const resumed=await s.run(next);assert.equal(resumed.outcome.error,undefined);assert.equal(s.posts.length,1);
+  assert.equal(s.posts[0].message.taskId,s.remote.id);
+  assert.deepEqual(s.posts[0].message.parts[0].data.input,{continuedFrom:s.remote.id,clarificationReply:{text:next.query,afterSeq:20}});
 });
 
 test("confirmed new-goal supplemental discovery retains the new input and binds its own waiting task",async t=>{

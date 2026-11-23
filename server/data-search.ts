@@ -15,12 +15,14 @@ import {sourceIdentityInstructions} from "./source-identity";
 import {complementInput,complementPlan,type WebComplementInput,type WebComplementPlan} from "./web-complement";
 import {allowsDiscoverySource,discoverySourceNames,discoverySources,explicitDiscoverySourcePolicy,parseDiscoverySourcePolicy,releasesDiscoverySourcePolicy,
   type DiscoverySourcePolicy} from "../src/domain/discovery-source-policy";
+import {clarificationOptions,type ClarificationOption} from "../src/domain/clarification";
 
 export interface DataSearchPlan {
   sourcePolicy?:DiscoverySourcePolicy;
   researchIntent?:ResearchIntent;
   skippedSources?:{paper?:string;web?:string;haina?:string};
   clarification?:string;
+  clarificationOptions?:ClarificationOption[];
   conversationContext?:string;
   conversationPeriod?:[number,number]|null;
   conversationWindow?:UtcWindow|null;
@@ -34,6 +36,7 @@ export interface DataSearchPlan {
 export interface DataSearchResult {
   paperNotices?:string[];
   clarification?:string;
+  clarificationOptions?:ClarificationOption[];
   questionCheck?:QuestionCheck;
   plan:DataSearchPlan;
   papers:PaperRecord[];
@@ -64,13 +67,15 @@ const regularSourcePolicy={
 };
 /** Structured planning output constrains shape; runtime checks still own intent/approval and valid calendar intervals. */
 export const dataSearchSchema={type:'object',additionalProperties:false,
-  required:['questionMode','dataQuestion','dataNeed','researchIntent','conversationContext','conversationPeriod','conversationWindow','clarification','sourcePolicy','hainaQueries','paper','web'],
+  required:['questionMode','dataQuestion','dataNeed','researchIntent','conversationContext','conversationPeriod','conversationWindow','clarification','clarificationOptions','sourcePolicy','hainaQueries','paper','web'],
   properties:{
     questionMode:{type:'string',enum:['preserve','reframe']},dataQuestion:{type:'string',minLength:1,maxLength:4000},dataNeed:{type:['string','null'],maxLength:4000},
     researchIntent:researchIntentSchema,
     conversationContext:{type:'string',maxLength:1600},conversationPeriod:{type:['array','null'],items:{type:'integer',minimum:1000,maximum:2300},minItems:2,maxItems:2},
     conversationWindow:{type:['array','null'],items:{type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}(?:T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z)?$'},minItems:2,maxItems:2},
-    clarification:{type:['string','null'],minLength:1,maxLength:500},hainaQueries:{type:'array',items:{type:'string',minLength:1,maxLength:160},maxItems:4},
+    clarification:{type:['string','null'],minLength:1,maxLength:500},
+    clarificationOptions:{type:['array','null'],minItems:2,maxItems:4,items:{type:'string',minLength:1,maxLength:100}},
+    hainaQueries:{type:'array',items:{type:'string',minLength:1,maxLength:160},maxItems:4},
     sourcePolicy:{anyOf:[{type:"null"},
     {type:"object",additionalProperties:false,required:["mode","sources"],properties:regularSourcePolicy},
     {type:"object",additionalProperties:false,required:["mode","sources","fallback"],properties:{...regularSourcePolicy,fallback:{type:"null"}}},
@@ -103,7 +108,7 @@ conversationPeriod 单独返回当前讨论中用户明确的研究年份区间 
 dataQuestion 只写待回答的问题本身，不加入“待确认”“这样理解是否符合原意”等求证话术；求证交互由界面呈现，以免确认后把求证话术误当成研究问题。
 dataNeed 与 dataQuestion 分开：仅用户明确要求找数、选数、获取数据或明确提出数据条件时，用字符串复述已给条件（不增加假设）；其他情况为 null。候选变量与检索主题是探索线索，不代表用户已确认的数据需求。
 仅在入口动作规划已决定需要发现数据或补充外部证据后进入本流程；解释已有材料、读取指定来源或界面操作不由本流程处理。按本轮来源范围生成检索词；开放查找仍为文献资料、海纳和网络生成词。未获许可的渠道保留空参数（hainaQueries=[]、paper={name:"",facets:[],region:[],scenario:[]}、web=[]）。不要生成结论或声称取得了文件。
-仅输出 JSON {questionMode,dataQuestion,dataNeed,researchIntent,conversationContext,conversationPeriod,conversationWindow,clarification,sourcePolicy,hainaQueries,paper,web}。不需追问时 clarification=null；需要澄清时可留空检索参数，同时保留已明确的 sourcePolicy。
+仅输出 JSON {questionMode,dataQuestion,dataNeed,researchIntent,conversationContext,conversationPeriod,conversationWindow,clarification,clarificationOptions,sourcePolicy,hainaQueries,paper,web}。不需追问时 clarification 和 clarificationOptions 均为 null。确需澄清时问最关键的一点，可直接给两至四个简短、有区别、与当前已知范围与许可相符的选项；没有自然选项就把 clarificationOptions 设为 null。用户可自由补充。需要澄清时可留空检索参数，同时保留已明确的 sourcePolicy。
 例如：“IMERG Late 和 Final 有什么区别？”原样保留，dataNeed=null；“这些值是实测还是推算的？”原样保留，检索已谈及对象的来源依据，dataNeed=null；“研究西北太平洋2020—2023年的海表温度、叶绿素和海色变化，可以找到哪些卫星与其他资料？说明变量、版本和入口。”原样保留，可以整理其明确的数据需求。
 hainaQueries 给出一到四个与本轮疑问相符的中文或英文检索短语，不必堆成产品清单。
 paper 为 {name,facets,region,scenario}。明确指定数据集名/DOI 时在 name 写英文名称，否则留空。facets 按实际检索主题给出零到六项，每项为 {need:中文检索主题,queries:一到三个英文短语}；每条 queries 必须为 1—3 个英文词，例如 ["canopy height","tree height"]，不能含中文，不能把问题译成一条长句。name 为空时至少一个主题。need 是文献资料接口的字段名，不代表用户已确认的数据需求，不强行拆成多项。region 是英文地名字符串数组，保留常见名称变体；scenario 也是数组，至多三条，每条 1—3 个英文词。时空条件保留在原问题和 dataNeed 中，检索先找对象与变量，再核对实际覆盖，不把所有条件堆进每条短语。
@@ -228,7 +233,8 @@ export function parseDataSearch(raw:string,query:string,forcedPolicy?:DiscoveryS
   if(value.questionMode==="reframe")return scopedPlan({...fallbackDataSearch(query),questionMode:"reframe",
     dataQuestion:value.dataQuestion.trim(),dataNeed,researchIntent,conversationContext,conversationPeriod,conversationWindow},policy);
   if(clarification && value.questionMode==="preserve")return scopedPlan({
-    ...fallbackDataSearch(query),questionMode:"preserve",clarification:clarification.trim(),researchIntent,conversationContext,conversationPeriod,conversationWindow,
+    ...fallbackDataSearch(query),questionMode:"preserve",clarification:clarification.trim(),
+    clarificationOptions:clarificationOptions(value.clarificationOptions),researchIntent,conversationContext,conversationPeriod,conversationWindow,
   },policy);
   const hainaQueries:unknown=value.hainaQueries;
   const useHaina=allowsDiscoverySource(policy,"haina");
@@ -344,7 +350,9 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
   }
   if(plan.clarification){
     deps.stage("等待补充关键信息");
-    return {plan,clarification:plan.clarification,papers:[],haina:[],searches:[],issues,sourceStatus};
+    return {plan,clarification:plan.clarification,
+      ...(plan.clarificationOptions?{clarificationOptions:plan.clarificationOptions}:{}),
+      papers:[],haina:[],searches:[],issues,sourceStatus};
   }
   deps.stage(decision?"按用户确认的问题检索相关依据":"沿用原问题检索相关依据");
   async function search<T>(source:string,id:string,input:unknown,work:()=>Promise<T>|T,count:(value:T)=>number,issue:(value:T)=>string=()=>"",info:(value:T)=>unknown=()=>undefined):Promise<T|undefined>{

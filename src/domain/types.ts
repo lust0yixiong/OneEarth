@@ -289,6 +289,8 @@ export interface AnswerNotes {
 export type ClarificationReply = {parentTaskId:string};
 export interface Message {
   clarificationReply?: ClarificationReply;
+  clarificationAnswer?: import("./clarification").ClarificationAnswer;
+  clarificationPrompt?: import("./clarification").ClarificationPrompt;
   discoveryClarification?: boolean;
   gridCoverage?: import("./grid-coverage").GridCoverageEvidence;
   researchRegion?:import("./research-region").ResearchRegion|null;
@@ -329,6 +331,7 @@ export interface VisualizationState {
 }
 export interface DiscoveryAttempt {
   clarificationReply?: ClarificationReply;
+  clarificationAnswer?: import("./clarification").ClarificationAnswer;
   questionDecision?:QuestionDecision;
   localOnly?:boolean;
   webSearch?:boolean;
@@ -374,7 +377,9 @@ export interface CapabilityGap {
 export interface DiscoveryResponse {
   workspaceAction?: import("./workspace-view-context").WorkspaceViewAction;
   workspaceOperation?: import("./workspace-operations").WorkspaceOperation;
-  workspacePending?: {question:string;originalQuestion?:string;proposedAction?:import("./workspace-view-context").WorkspaceViewAction};
+  workspacePending?: {question:string;originalQuestion?:string;proposedAction?:import("./workspace-view-context").WorkspaceViewAction;
+    proposalOrigin?:{layerId:string;controlId:string;valueId:string}};
+  clarificationPrompt?:import("./clarification").ClarificationPrompt;
   discoveryClarification?: boolean;
   gridCoverage?: import("./grid-coverage").GridCoverageEvidence;
   researchRegion?:import("./research-region").ResearchRegion|null;

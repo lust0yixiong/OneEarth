@@ -150,7 +150,7 @@ type LocalTaskStore = ReturnType<typeof openTaskStore>;
 export type TaskStore = {
   [Method in Exclude<keyof LocalTaskStore,"materialEvents"|"step"|"clearStep"|"saveStep"|"park"|"cancelStep"|"cancelledSteps">]: (...args: Parameters<LocalTaskStore[Method]>) =>
     ReturnType<LocalTaskStore[Method]> | Promise<ReturnType<LocalTaskStore[Method]>>;
-}&{materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>}&{
+}&{materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>;researchHandoff?:(id:string)=>Promise<Payload|undefined>}&{
   [Method in "step"|"clearStep"|"saveStep"|"park"|"cancelStep"|"cancelledSteps"]?:(...args:Parameters<LocalTaskStore[Method]>)=>ReturnType<LocalTaskStore[Method]>|Promise<ReturnType<LocalTaskStore[Method]>>;
 };
 

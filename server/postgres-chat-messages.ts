@@ -1,6 +1,7 @@
 import {createHash} from "node:crypto";
 import type {Pool, PoolClient} from "pg";
-import {TaskConflict, type Payload, type Task} from "./task-store";
+import {TaskConflict, taskIdPattern, type Payload, type Task} from "./task-store";
+import {validClarificationAnswer} from "../src/domain/clarification";
 
 type ChatStatus = "planning" | "handed_off" | "complete" | "failed" | "cancelled";
 type ChatRow = Omit<Task, "status"> & {status: ChatStatus};
@@ -21,6 +22,10 @@ export const chatSchema = `
     id uuid NOT NULL REFERENCES runtime_chat_messages(id), at bigint NOT NULL, payload jsonb NOT NULL
   );
   CREATE INDEX IF NOT EXISTS runtime_chat_events_replay ON runtime_chat_events(id,seq);
+  CREATE TABLE IF NOT EXISTS runtime_clarification_answers (
+    parent_task_id uuid PRIMARY KEY,
+    answer_id uuid NOT NULL UNIQUE
+  );
 `;
 
 export const submissionFingerprint = (raw: string) => createHash("sha256").update(raw).digest("hex");
@@ -28,6 +33,22 @@ export const submissionFingerprint = (raw: string) => createHash("sha256").updat
 /** Serializes legacy task acceptance and Chat acceptance for the same ID. */
 export async function lockRuntimeSubmission(db: PoolClient, id: string) {
   await db.query("SELECT pg_advisory_xact_lock(hashtextextended(($1::uuid)::text,7142530))", [id]);
+}
+
+/** Called only for first admission, in the same transaction as the receipt. */
+export async function claimClarificationAnswer(db:PoolClient, id:string, input:unknown) {
+  const body=input as {clarificationAnswer?:unknown;clarificationReply?:unknown} | null;
+  const legacy=body?.clarificationAnswer===undefined;
+  const answer=legacy?body?.clarificationReply:body?.clarificationAnswer;
+  if(answer===undefined)return;
+  const parent=(answer as {parentTaskId?:unknown}|null)?.parentTaskId;
+  if(typeof parent!=="string"||!taskIdPattern.test(parent)||
+    (!legacy&&!validClarificationAnswer(answer))||parent.toLowerCase()===id.toLowerCase()){
+    throw new TaskConflict("本轮补充与原追问编号不一致。");
+  }
+  const claim=await db.query(`INSERT INTO runtime_clarification_answers(parent_task_id,answer_id)
+    VALUES($1,$2) ON CONFLICT(parent_task_id) DO NOTHING`,[parent,id]);
+  if(!claim.rowCount)throw new TaskConflict("这条追问已有一份提交，请查看原答复的进度。");
 }
 
 function view(row: ChatRow): Task {
@@ -100,6 +121,7 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
         }
         const {rows} = await db.query<{active: number}>("SELECT count(*)::int AS active FROM runtime_chat_messages WHERE status='planning'");
         if (rows[0].active >= limit) return;
+        await claimClarificationAnswer(db,id,body);
         const now = Date.now();
         const {rows: [saved]} = await db.query<ChatRow>(`
           INSERT INTO runtime_chat_messages(id,body,fingerprint,status,created,updated)

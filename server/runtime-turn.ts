@@ -45,6 +45,7 @@ import { discover } from "../src/domain/discovery";
 import {authorizesWorkspaceViewAction,workspaceViewActionAllowed} from "../src/domain/workspace-view-context";
 import {resolveWorkspaceC40Publication} from "./workspace-c40-publication";
 import {runtimeTurnFingerprint,runtimeTurnHandoff,validRuntimeTurnHandoff,type RuntimeTurnInput,type RuntimeTurnHandoff,type RuntimeTurnOptions,type ForegroundTurnOutcome} from "./runtime-turn-handoff";
+import {createClarificationPrompt,clarificationAnswerText,type ClarificationPrompt} from "../src/domain/clarification";
 export {validRuntimeTurnHandoff} from "./runtime-turn-handoff";
 export type {RuntimeTurnInput,RuntimeTurnHandoff,RuntimeTurnOptions,ForegroundTurnOutcome} from "./runtime-turn-handoff";
 
@@ -58,9 +59,24 @@ export interface RuntimeServices {
   canonicalCache: Map<string,{at:number;names:string[]}>;
 }
 
+export function researchClarificationPrompt(result:import("./data-search").DataSearchResult|undefined,binding:DiscoveryBinding|undefined):ClarificationPrompt|undefined{
+  if(result?.clarificationOptions===undefined||!result.clarification||result.questionCheck||binding?.state!=="TASK_STATE_INPUT_REQUIRED")return;
+  return createClarificationPrompt("research",result.clarification,result.clarificationOptions);
+}
+
 export async function runForegroundTurn(services:RuntimeServices,taskId:string,body:RuntimeTurnInput,signal:AbortSignal,
   emit:(payload:Record<string,unknown>)=>void,options:RuntimeTurnOptions={}):Promise<ForegroundTurnOutcome>{
-  const payload=await executeTurn(services,taskId,body,signal,emit,{...options,foreground:true,semanticDecision:true});
+  const pending=options.pending,answer=pending?.answer,prompt=pending?.clarificationPrompt;
+  const exactConfirmation=prompt?.kind==="confirmation"&&answer?.parentTaskId===pending?.taskId&&
+    body.clarificationAnswer?.parentTaskId===answer?.parentTaskId&&body.clarificationAnswer?.optionId===answer?.optionId&&
+    body.clarificationAnswer?.text===answer?.text&&clarificationAnswerText(prompt,answer!)===body.query;
+  signal.throwIfAborted();
+  if(exactConfirmation&&answer?.optionId==="decline"&&answer.text===undefined){
+    const runTrace:RunTrace={started:Date.now(),stages:[],calls:[{id:"workspace-confirmation",kind:"tool",name:"研究者拒绝原提案",input:pending!.taskId,status:"done",output:"未执行任何界面操作。"}]};
+    emit({call:runTrace.calls[0],traceStarted:runTrace.started});return {kind:"reply",payload:{result:{message:"已取消这次提案，未执行任何界面操作。",runTrace}}};
+  }
+  const payload=await executeTurn(services,taskId,body,signal,emit,{...options,foreground:true,semanticDecision:true,
+    approvedConfirmation:!!exactConfirmation&&answer?.optionId==="approve"&&answer.text===undefined});
   return validRuntimeTurnHandoff(payload.runtimeTurnHandoff)?{kind:"research",checkpoint:payload.runtimeTurnHandoff}:{kind:"reply",payload};
 }
 export async function resumePlannedTurn(services:RuntimeServices,taskId:string,body:RuntimeTurnInput,checkpoint:RuntimeTurnHandoff,
@@ -77,7 +93,7 @@ export async function resumePlannedTurn(services:RuntimeServices,taskId:string,b
 }
 
 export async function executeTurn(services:RuntimeServices,taskId:string,body:RuntimeTurnInput,signal:AbortSignal,
-  publish:(payload:Record<string,unknown>)=>void,internal:RuntimeTurnOptions&{foreground?:boolean;semanticDecision?:boolean;handoff?:RuntimeTurnHandoff}={}):Promise<Record<string,unknown>>{
+  publish:(payload:Record<string,unknown>)=>void,internal:RuntimeTurnOptions&{foreground?:boolean;semanticDecision?:boolean;handoff?:RuntimeTurnHandoff;approvedConfirmation?:boolean}={}):Promise<Record<string,unknown>>{
   const {tasks, push, coverage, researchRegionService, adminBoundaryDir, canonicalCache} = services;
   const cachedPapers=runtimeTurnPapers();
   const haina=runtimeTurnHaina();
@@ -110,8 +126,12 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
   }
   try {
     const clarification=body.clarificationReply?await clarificationParent(tasks,body):undefined;
-    const query=clarification?.original.query??body.query;
+    const archivedPending=internal.handoff?.pending;
+    const chatOriginal=archivedPending?.clarificationPrompt?.kind==="chat"&&body.clarificationAnswer&&
+      archivedPending.answer?.parentTaskId===body.clarificationAnswer.parentTaskId?archivedPending.originalQuestion:undefined;
+    const query=clarification?.original.query??chatOriginal??body.query;
     let history=clarification?.original.history??body.history;
+    if(chatOriginal)history=[...history.slice(-7),{role:"user",text:body.query}];
     const decision=clarification?.original.questionDecision??body.questionDecision;
     if(clarification)context={...clarification.context,workspaceView:body.context.workspaceView};
     const executor=activeExecutor=researchExecutor(body.config,clarification?clarification.original.deepseekTools:body.deepseekTools,signal,
@@ -141,7 +161,8 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         discoveryId:clarification.binding.discoveryId,afterSeq:clarification.binding.lastSeq}),status:"done",output:JSON.stringify(checked)});
       if(checked.action==="new_goal")return {result:{message:"这次补充改变了原委托的目标或范围，请先确认新的研究问题。",
         questionCheck:{originalQuestion:body.query,proposedQuestion:checked.proposedQuestion!},runtimeQuestionCheck:true,runTrace}};
-      if(checked.action==="clarify")return {result:{message:checked.clarification!,clarification:true,runTrace}};
+      if(checked.action==="clarify")return {clarificationContinuation:true,result:{message:checked.clarification!,clarification:true,discoveryClarification:true,
+        clarificationPrompt:createClarificationPrompt("research",checked.clarification!),runTrace}};
     }
     const gridLimits=gridCoverage&&!clarification&&!decision?gridQueryLimits(query):undefined;
     const prior = Object.hasOwn(internal,"priorResult")?internal.priorResult??undefined:await priorResult(tasks,body.conversationId,body.previousTaskId);
@@ -329,7 +350,15 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       }
       return parseTurnPlan(JSON.stringify({...saved,targets:saved.targets.map(target=>target.key),evidenceGap:saved.evidenceGap??null}),planningInput,available);
     }
-    const prepared = internal.handoff?{plan:resumedPlan(),retrieval:undefined as import("./data-search").DataSearchResult|undefined}:clarification?{plan:{action:"search",evidenceNeed:"discover",goal:clarification.goal,targets:[],
+    function approvedPlan(){
+      const goal=(internal.pending?.originalQuestion||query).slice(0,1200),meta=turnMetadata(goal,{history,conversationContext,previousResearchIntent:planningIntent});
+      const plan:TurnPlan={action:"workspace",goal,evidenceNeed:"none",targets:[],reason:"研究者已通过存档确认问题明确批准原具体提案。",clarification:null,
+        ...meta,pendingTaskId:internal.pending!.taskId,pendingApproval:true,workspaceAction:null};
+      report({id:"turn-action",kind:"tool",name:"继续已核验的确认提案",input:JSON.stringify({parentTaskId:internal.pending!.taskId,optionId:"approve"}),status:"done",
+        output:JSON.stringify({...plan,decisionSource:"stored-confirmation",modelPlanning:{attempts:0,pendingTaskId:plan.pendingTaskId,pendingApproval:true,workspaceAction:internal.pending?.proposedAction}})});
+      return {plan,retrieval:undefined as import("./data-search").DataSearchResult|undefined};
+    }
+    const prepared = internal.approvedConfirmation?approvedPlan():internal.handoff?{plan:resumedPlan(),retrieval:undefined as import("./data-search").DataSearchResult|undefined}:clarification?{plan:{action:"search",evidenceNeed:"discover",goal:clarification.goal,targets:[],
       reason:"研究者明确补充原委托，沿已受理发现身份和等待水位继续。",clarification:null,
       ...turnMetadata(query,{previousResearchIntent:planningIntent,history,conversationContext})} as TurnPlan,retrieval:undefined as import("./data-search").DataSearchResult|undefined}:
       navigation ? navigationTurn(navigation) : await prepareTurn(planningInput, signal, {
@@ -337,6 +366,10 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       stage, report,
       search:p=>internal.foreground||scopeUnverified||p.gridIntent==="count"||p.gridIntent==="catalogue"||gridLimits?.currentCoverageOnly||gridLimits?.noDiscovery?Promise.resolve(undefined):find(p),
     });
+    const restrictedConfirmation=internal.pending?.clarificationPrompt?.kind==="confirmation"&&!internal.approvedConfirmation&&
+      (internal.pending.answer!==undefined||prepared.plan.pendingTaskId===internal.pending.taskId||prepared.plan.pendingApproval);
+    if(restrictedConfirmation&&(["read","search"].includes(prepared.plan.action)||prepared.plan.observationUse==="selected"))
+      return {result:{message:"本次答复未批准原提案，也未启动新的研究。若要改变研究目的，请另行明确提出。",clarification:true,runTrace}};
     if(internal.foreground&&(["read","search"].includes(prepared.plan.action)||prepared.plan.observationUse==="selected")){
       signal.throwIfAborted();return {runtimeTurnHandoff:runtimeTurnHandoff(body,prepared.plan,runTrace,internal)};
     }
@@ -415,6 +448,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
           runTrace.searches=[...(material?.searches||[]),...outcome.reads];
           return {result:literatureDisplay({
           message:outcome.clarification,clarification:true,runTrace,researchRegion,
+          ...(researchClarificationPrompt(lastDiscoveryResult,lastBinding)?{clarificationPrompt:researchClarificationPrompt(lastDiscoveryResult,lastBinding)}:{}),
           ...(lastDiscoveryResult?.clarification&&lastBinding?.state==="TASK_STATE_INPUT_REQUIRED"?{discoveryClarification:true}:{}),
           ...(material?.papers.length?{paperRecords:material.papers}:{}),
           hainaRecords:(material?.haina||[]).flatMap(asset=>haina.records().filter(r=>r.id===Number(asset.datasetId.slice(6)))),
@@ -440,11 +474,13 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       const pending=internal.pending??internal.handoff?.pending;
       const boundPending=turn.pendingTaskId&&turn.pendingTaskId===pending?.taskId?pending:undefined;
       const boundProposal=boundPending?.proposedAction;
+      if(restrictedConfirmation&&turn.action==="workspace")return complete({message:"原提案尚未获得确认执行选项的批准，本轮未执行操作。可补充条件后重新确认。",clarification:true,...continuity});
+      const supplementingConfirmation=restrictedConfirmation&&pending?.answer?.text!==undefined;
       if(boundPending&&turn.pendingApproval&&!boundProposal){
         return complete({message:"原待办还没有确定的操作目标，不能仅凭同意替你选择。请明确要操作的对象。",clarification:true,
           workspacePending:{question:boundPending.question,originalQuestion:boundPending.originalQuestion},...continuity});
       }
-      const continuingProposal=!!boundProposal&&(turn.action==="workspace"||turn.workspacePending);
+      const continuingProposal=!!boundProposal&&!supplementingConfirmation&&(turn.action==="workspace"||turn.workspacePending);
       if(continuingProposal){
         if(turn.action==="workspace"&&!turn.pendingApproval||turn.workspaceReply||turn.workspaceOperation||turn.workspaceNavigation)
           return complete({message:"这次决定不符合原待办的具体操作，尚未执行。请明确新的目标或确认原提案。",clarification:true,...continuity});
@@ -469,6 +505,11 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
           if(choice?.id===action.valueId)control.options=[...control.options,choice];
         }
         if(!workspaceViewActionAllowed(context.workspaceView,action))return complete({message:"原提案的控件或发布目录已不可用，尚未执行。",clarification:true,...continuity});
+        if(pending?.clarificationPrompt?.kind==="confirmation"){
+          const origin=pending.proposalOrigin,current=context.workspaceView?.activeLayer;
+          if(!origin||current?.id!==origin.layerId||current.controls.find(control=>control.id===origin.controlId)?.current.id!==origin.valueId)
+            return complete({message:"提出确认后工作台控件已改变，原提案已过期，未执行操作。",clarification:true,...continuity});
+        }
       }
       if(turn.action==="clarify"){
         const proposal=turn.workspacePending?turn.workspaceAction:undefined;
@@ -477,10 +518,14 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         if(proposal)report({id:"workspace-proposal",kind:"tool",name:"保存未执行的界面提案",input:JSON.stringify(proposal),status:"done",output:"仅等待研究者确认，未交付界面动作。"});
         const proposedControl=proposal?context.workspaceView?.activeLayer?.controls.find(control=>control.id===proposal.controlId):undefined;
         const proposedLabel=proposedControl?.options.find(choice=>choice.id===proposal?.valueId)?.label;
-        const question=proposal?turn.clarification!+" 待执行目标："+proposedControl!.label+" → "+proposedLabel+"。":turn.clarification!;
+        const suffix=proposal?" 待执行目标："+proposedControl!.label+" → "+proposedLabel+"。":"";
+        const question=proposal?turn.clarification!.slice(0,Math.max(0,500-suffix.length))+suffix:turn.clarification!;
+        const clarificationPrompt=createClarificationPrompt(proposal?"confirmation":"chat",question,turn.clarificationOptions);
+        if(!clarificationPrompt)throw new TurnPlanningFailure();
         const reply={message:question,clarification:true,...continuity,
+          clarificationPrompt,
           ...(turn.workspacePending?{workspacePending:{question,originalQuestion:boundPending?.originalQuestion??body.query,
-            ...(proposal?{proposedAction:proposal}:{})}}:{})};
+            ...(proposal?{proposedAction:proposal,proposalOrigin:{layerId:context.workspaceView!.activeLayer!.id,controlId:proposedControl!.id,valueId:proposedControl!.current.id}}:{})}}:{})};
         return complete(reply);
       }
       const hasSourceMaterial=turn.targets.length||context.citation||context.attachedScope?.some(item=>item.kind==="dataset"||item.kind==="reference")||
@@ -646,6 +691,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
           researchIntent:retrieved.plan.researchIntent,conversationContext:retrieved.plan.conversationContext,conversationEvidence,conversationAssertionEvidence}
         : {message:retrieved.clarification!,clarification:true,runTrace,researchIntent:retrieved.plan.researchIntent,conversationContext:retrieved.plan.conversationContext,conversationEvidence,conversationAssertionEvidence};
       reply.researchRegion=researchRegion;
+      if(!retrieved.questionCheck){const prompt=researchClarificationPrompt(retrieved,initialBinding);if(prompt)reply.clarificationPrompt=prompt;}
       if(gridCoverage)reply.gridCoverage=gridCoverage;
       if(retrieved.clarification&&initialBinding?.state==="TASK_STATE_INPUT_REQUIRED")Object.assign(reply,{discoveryClarification:true});
       return {result:reply};
