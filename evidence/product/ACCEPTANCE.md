@@ -1,5 +1,14 @@
 # Mac mini 产品验收
 
+本页按发布和候选保存历史证据。当前常驻版本及接口以[架构与接口现状](../../docs/架构与接口现状.md)为准。各节的结论对应所列源码、部署入口和当次测试条件。
+
+| 查找范围 | 从这一节开始 |
+| --- | --- |
+| rc.10 常驻与隔离对照 | [rc.10 正式发布](#mac-mini-rc10-公开网络工具与局域网正式发布) · [公开工具隔离验收](#mac-mini-公开网络工具执行隔离验收) |
+| rc.9 后续交付 | [发现渠道正式发布](#mac-mini-发现渠道范围正式发布) · [目录导航静态发布](#mac-mini-数据触达浏览入口静态发布) · [KEO 文件读取](#mac-mini-日常入口的-keo-文件读取) |
+| rc.9、rc.8、rc.7 快照 | [网格问答引用 rc.9](#mac-mini-网格问答目录引用-v020-rc9) · [论文与投影 rc.8](#mac-mini-论文发布与时空投影-v020-rc8) · [日常入口 rc.7](#mac-mini-日常入口-v020-rc7) |
+| 更早候选和存储基线 | [A2A rc.6](#mac-mini-a2a-与发现模型独立配置候选-v020-rc6) · [研究工作流 rc.5](#mac-mini-研究工作流候选-v020-rc5) · [存储与恢复 dev.1](#mac-mini-存储与恢复历史基线-v020-dev1) · [0.1.0 验收](../ACCEPTANCE.md) |
+
 ## Mac mini rc.10 公开网络工具与局域网正式发布
 
 2026-11-23 11:34:46（上海时间），Mac mini 常驻发布 **v0.2.0-rc.10**，源码 `7d44a0b88e2bfb0f33e3e8f3dfe66005cdf065e7`，源码树 `4bdb200ed9f90dad9b03b0ff89db8abbf7c53019`，发布目录为 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.10-7d44a0b`。前端 3,424 项构建清单 SHA-256 `90634bcaf1d6fac6d3fecb750061ab84b7865118bb4a08310ad221726f24ef0b`，在线首页 SHA-256 `fb2604176d3bf9df199c8c6a1e3c6c7a60f37d67ef6f25e5d20f3db07e9faafe`。设置页显示版本。网关使用 `127.0.0.1:5474` 和 Wi-Fi 接口 `en1` 的 `10.15.48.143:5474`。局域网来源限制在当前直连网段 `10.15.48.0/21`，工作台校验 Host 与同源 Origin。[局域网工作台](http://10.15.48.143:5474/) · [横版实况图](../../docs/diagrams/oneearth-mac-mini-rc10.png)
@@ -11,6 +20,8 @@
 **常驻保存与回退。** 各次切换等待队列排空，用提交锁停止应用后保存三库、5,950 个对象与应用状态。最终切换沿用原 PostgreSQL 与 Garage 进程，原 45 个运行时任务、37 个发现作业及事件指纹前后相同。核对了两笔失败和正式成功研究的归档、原论文和网页记录、KEO 记录、图层目录和森林对象。最终备份在独立 PostgreSQL 套接字上冷恢复，任务与工具回执计数、四个应用 SQLite 快检及森林对象字节均通过。最终备份清单 SHA-256 为 `4b07636ac9d64e31ce88872afe6f3ee0d8044f027b1f1c844b328d9a4c6fb7f3`。旧回环发布、启动项、授权配置与停写备份均保留。回退应用指针使用当时 primary，避免覆盖发布后新增研究。
 
 **局域网与工作台。** 同一台 Mac mini 分别经回环和 LAN IP 验证同版首页、健康、同一 Landsat 归档、森林对象和 123 条同字节任务事件。主程从 `after=6857` 续订，收到终态 6858。工作台正确响应同源 Chat 入口的无效编号校验，非同源 Origin 和伪造 Host 返回 403，内部工具回调路径返回 404。5475、5476、5477、55432、5900 的 LAN 地址连接全部拒绝，同端口仍有正常回环监听。独立 QA 经两个地址用 Chrome 核对设置版本，重开与刷新同一研究，查看保存的 USGS 依据，并从 `after=6853` 续得 5 条事件至原终态。线上 3,424 项文件逐件通过。测试源与目标均为这台 Mac mini，第二台实际设备未验证。LAN 阶段未建立研究任务或执行新工具。独立索引 `independent-rc10-lan-verdict.json` 的 SHA-256 为 `7275a1418805aa36188c1ec0852720dddae7c8c318707a419cd7a4e53976d4e7`。
+
+**发布后的跨设备只读回报。** 在对照归档 `2cd3901` 与现场源码 `7d44a0b` 的复核中，仓库审查会话 `01a2063d-3024-7fb3-bdf8-800c2dd336c9` 报告从另一台 Mac 经 LAN 打开了首页、案例页和含引用的 Landsat 验收归档。该回报未附独立原始截图、SHA 或精确测试时间。跨设备发问、取消和多人访问仍待实测。上段为发布当时的同机验收。
 
 最终构建含类型检查。普通全套 848 项中 842 项通过、6 项需 PostgreSQL 环境。另执行模型兼容和工具关键用例的串行 PostgreSQL 回归，9 项通过。最终定向 70 项通过，含网段拒绝和既有 Host／Origin 行为。发布在已实测的 `2d1fc89` 之上增加可见版本和局域网监听，并保持原生结构化 schema 的每个分支完整。主程证据位于 `~/Library/Application Support/OneEarth Next/iterations/discovery-runtime-web-tools/`，可在此处核对 `lan-primary/evidence/release-rc10.sha256`。测试会话独立证据位于同层的 `discovery-web-tools-primary-independent/`。
 
@@ -452,7 +463,7 @@ npm run test:research-decisions -- direct
 npm run test:research-decisions -- additional
 ```
 
-`test:managed-release` 会受控重启 5474 的应用组，宜在运行任务完成后执行。常驻安装、日志及按需恢复命令见 [README](../../README.md)。[前一阶段已交付的架构 PNG](../../.local/exports/OneEarth-当前技术架构-v0.2.0-dev.1.png) 保存在本机工作区。
+`test:managed-release` 会受控重启 5474 的应用组，宜在运行任务完成后执行。常驻安装、日志及按需恢复命令见[部署与恢复手册](../../docs/部署与恢复.md)。前一阶段架构图 `.local/exports/OneEarth-当前技术架构-v0.2.0-dev.1.png` 是原机工作区的历史导出文件，需从原工作区取得。[图索引](../../docs/diagrams/README.md#历史架构快照)
 
 
 ## Mac mini 存储与恢复历史基线 v0.2.0-dev.1

@@ -7,98 +7,42 @@
 
 让地球可被理解和计算。
 
-新成员从[开发协作规范](CONTRIBUTING.md)开始。产品边界见[目标与架构](docs/spec/01-目标与架构.md)，当前接口及待拆依赖见[架构与接口审查](docs/架构与接口现状.md)，正式图标见[品牌素材说明](public/brand/README.md)。
+OneEarth 用于提出研究问题、核对数据和文献依据，以及在球体上查看数据的空间范围与时相。
 
-OneEarth 用于提出研究问题、核对数据和文献来源，并在球体上查看数据的空间范围与时相。Mac mini 是首个部署环境。历史开发基线保存在 `v0.1.0`，Mac mini 存储与恢复基线为 `v0.2.0-dev.1`，后续候选版本见验收记录。本机入口和实测证据见 [产品验收记录](evidence/product/ACCEPTANCE.md)。开发基线的截图、故障与隔离复测见 [历史验收记录](evidence/ACCEPTANCE.md)。
+## 当前工作台
+
+Mac mini 常驻版本为 **v0.2.0-rc.10**，设置页显示版本。工作台提供[本机入口](http://127.0.0.1:5474/)和[指定局域网入口](http://10.15.48.143:5474/)。案例页保留可视化案例，科学问题案例区保持空白。[现状与访问范围](docs/架构与接口现状.md) · [正式验收](evidence/product/ACCEPTANCE.md#mac-mini-rc10-公开网络工具与局域网正式发布)
+
+[![Mac mini v0.2.0-rc.10 横版架构实况图](docs/diagrams/oneearth-mac-mini-rc10.png)](docs/diagrams/oneearth-mac-mini-rc10.png)
+
+图为 rc.10 的已发布实况。[当前图注与职责](docs/架构与接口现状.md#rc10-图注) · [目标图、历史快照与界面参考索引](docs/diagrams/README.md)
+
+## 从这里开始
+
+| 读者需要 | 入口 |
+| --- | --- |
+| 本机部署、独立复跑、备份或恢复 | [部署与恢复手册](docs/部署与恢复.md) |
+| 当前服务职责、接口和未实现的约束 | [架构与接口现状](docs/架构与接口现状.md) |
+| 运行时、发现与工具调用的请求、回执和兼容规则 | [发现服务 A2A 契约](docs/发现服务-A2A.md) |
+| 开始开发、送审文档或准备发布 | [开发协作规范](CONTRIBUTING.md) |
+| 查验版本、对照实测或了解测试边界 | [产品验收记录](evidence/product/ACCEPTANCE.md) |
 
 ## Mac mini 部署
 
-准备 Node.js 26、带 PostGIS 的 PostgreSQL 18 和实际的 S3 兼容服务。Mac mini 可以使用 [Postgres.app 的 PostgreSQL 与 PostGIS 命令行组件](https://postgresapp.com/downloads.html)和 [Garage 的本地服务](https://garagehq.deuxfleurs.fr/documentation/quick-start/)。部署不需要原型服务或启动项。使用新工程已有的独立基础网格与 IMERG 数据副本，或用 `npm run data:prepare -- <独立数据目录>` 准备新位置所需的包。海纳原始数据仍由上游保存。
-
-从原型沿用上游访问权时，在具备原始授权环境的研发工作区一次性执行 `npm run access:import`。脚本仅将已授权的上游访问配置写到当前用户独占的 `~/Library/Application Support/OneEarth Next/access.json`，并保留本机已授权的执行器登录。独立发布指定该文件或等效凭据注入，生产启动不启用 `ONEEARTH_USE_EXISTING_ACCESS=1`。
-
-```sh
-npm ci
-npm run check
-npm test
-npm run build
-ONEEARTH_PG_BIN_DIR=/path/to/Postgres.app/Contents/Versions/18/bin \
-  node scripts/macos-product-storage.mjs init isolated-first 55442 5940
-oneearth_home="$HOME/Library/Application Support/OneEarth Next"
-deploy_config="$oneearth_home/storage-isolated-first/deployment.env"
-export ONEEARTH_CREDENTIALS_FILE="$oneearth_home/access.json"
-export ONEEARTH_DISCOVERY_CHAT_MODEL='{"executor":"codex","model":"deepseek-flash","provider":"deepseek"}'
-export ONEEARTH_PORT=5894 ONEEARTH_DISCOVERY_PORT=5895 ONEEARTH_SPATIAL_PORT=5896 ONEEARTH_RUNTIME_PORT=5897
-node --env-file="$deploy_config" --import tsx scripts/migrate-paper-catalog.ts --initialize-empty
-node --env-file="$deploy_config" scripts/launch.mjs seed
-node --env-file="$deploy_config" scripts/launch.mjs
-```
-
-首次独立部署选自己的状态目录、数据库、对象存储和未占用的端口。示例的 `isolated-first` 使用新的状态位置。启动发现进程前，按示例从已有授权的独立凭据引用加载 DeepSeek；也可把同名模型变量配置到部署环境。运行时使用其原有的 Codex `gpt-6-luna`。DeepSeek Search/Fetch 沿用既有部署配置与每轮开关。[配置模板](.env.example) · [发现服务接口与兼容用法](docs/发现服务-A2A.md)
-
-5474–5477 属于现有 Mac mini 常驻实例。也可使用 `node --env-file="$deploy_config" scripts/start-isolated-release.mjs <原型目录绝对路径>`，验证运行进程无法读取原型目录和启动项或连接 5174。应用前台用 Ctrl+C 停止。示例数据库与对象存储可以用 `node scripts/macos-product-storage.mjs start isolated-first` 重新启动。
+开发和复跑使用独立目录、独立数据库与对象存储，以及空闲端口。完整的输入清单、构建、种子导入和启动命令见[首次隔离部署](docs/部署与恢复.md#首次隔离部署)。
 
 ### Mac mini 常驻入口
 
-在现有 primary 存储基础上，使用 `launchd` 托管应用、PostgreSQL 和 Garage。Bootstrap 在当前 Mac 用户的 GUI 会话中执行，终端关闭后由系统保持进程。应用本机入口为 `127.0.0.1:5474`。把候选源码与依赖构建到 `~/Library/Application Support/OneEarth Next/releases/` 下的独立目录，基础 H3/S2 数据放在同一专用目录下的 `base-data/`，保留现有 `storage-primary/deployment.env`。
-
-```sh
-oneearth_home="$HOME/Library/Application Support/OneEarth Next"
-node scripts/macos-product-service.mjs install "$oneearth_home/releases/<候选目录>" "$oneearth_home/base-data"
-node scripts/macos-product-service.mjs status
-node scripts/macos-product-service.mjs restart
-```
-
-安装命令只接管 OneEarth Next 的主存储与应用。重新安装不同发布目录时保留主数据库和对象存储。用 `stop` 和 `start` 控制主应用。应用与存储日志写到 `$oneearth_home/logs/`。恢复演练仍通过独立配置按需启动 5574。其他平台可直接通过 `scripts/launch.mjs` 注入同一套服务配置。
-
-需要工作台局域网入口时，在独立部署配置或应用的 `launchd` 环境中设置 `ONEEARTH_LAN_INTERFACE`，并保留 `ONEEARTH_HOST=127.0.0.1`。网关启动时同时监听回环和指定接口的唯一私有 IPv4。访问使用该地址的 5474 端口，经过直连网段、Host 与同源 Origin 校验。指定接口暂无合格地址时，本机入口继续服务，待接口有地址后重启应用可重新识别。发现、运行时内部 API、时空、PostgreSQL 和 Garage 均使用回环。正式部署的实际版本与地址见[架构与接口现状](docs/架构与接口现状.md)。
+常驻应用和存储由 `launchd` 管理。发布目录、启动与切换边界见[常驻运行与发布](docs/部署与恢复.md#常驻运行与发布)。
 
 ## 服务与数据
 
-模块职责、核心接口和 ECS 部署前需要验证的边界见[架构与接口审查](docs/架构与接口现状.md)。
-
-| 程序 | 职责 |
-| --- | --- |
-| 网页入口 | 保留 React 界面、Canvas 球体和来源预览，转发同源任务和图层请求 |
-| 运行时 API 与 worker | PostgreSQL 保存任务、按序事件、用户确认、答复引用、工具回执及结果快照。worker 委托发现和指定来源补读。运行时 API 侧的独立工具队列与适配层执行获准的公开 Search、Fetch 和原站读取。模型根据已返回材料决定回答、补读、补充发现或澄清 |
-| 数据发现 | 独立任务库保存发现任务、事件、线索、渠道状态及可随产品恢复的资料记录。论文断言库始终只读 |
-| 时空服务 | PostgreSQL + PostGIS 保存图层与分块的空间及时间索引，由 S3 API 保存和读取概览与分块。已有计算缓存可由服务重建 |
-
-客户端提交 `POST /api/tasks` 并通过 `GET /api/tasks/:taskId/events?after=<seq>` 订阅。刷新继承原任务号。用户确认绑定历史提议。`?research=<taskId>` 可在浏览器重新打开已结束的同一条研究记录。图层请求走时空服务，问答期间可继续浏览球体。补充发现使用独立子任务编号，沿用已确认问题及 Search/Fetch 配置。
-
-部署验收覆盖已配置的本机及直连局域网入口。机构网页登录与项目授权使用各自的联调和验收流程。
+工作台通过同源网关访问运行时业务接口。发现服务规划找取资料，运行时经适配层执行获准的公开 Search、Fetch，时空服务负责覆盖范围和已发布图层。[现行接口索引](docs/架构与接口现状.md#现行接口索引)
 
 ## 备份和恢复
 
-先等研究任务、目录导入和时空投影同步完成，再停止应用和目录导入进程后备份。格式 3 保存三个产品 PostgreSQL 库和图层对象。发现库包含论文的当前发布映射、原样版本和修订，时空库包含当时可查询的本地论文投影。备份清单分别记下两个库的目录状态。备份含研究记录与论文材料，存放在授权的数据目录。
+产品备份保存三个产品库与图层对象。应用状态和获准原件另行保存。复跑使用独立存储及 5574–5577 四个应用端口。[备份、恢复与兼容迁移](docs/部署与恢复.md#备份和恢复)
 
-初始化独立 PostgreSQL、Garage 和空桶，使用新的空应用状态目录恢复，成功后再启动应用。若恢复中断，保留失败目标用于排查，使用新的空目标重跑。格式 2 直接将封存的 SQLite 发布快照导入目标发现 PostgreSQL，保留当前映射和历史内容 ID。格式 1 只从归档发现任务有限重建，原先发布集合和发布顺序无法由该格式核对。
+## 目标与历史
 
-```sh
-export ONEEARTH_PG_BIN_DIR=/path/to/Postgres.app/Contents/Versions/18/bin
-node --env-file="$deploy_config" scripts/product-backup.mjs export .local/product-backup
-node scripts/macos-product-storage.mjs init restored 55433 5910
-restore_config="$HOME/Library/Application Support/OneEarth Next/storage-restored/deployment.env"
-node --env-file="$restore_config" scripts/product-backup.mjs restore .local/product-backup
-ONEEARTH_PORT=5574 ONEEARTH_DISCOVERY_PORT=5575 ONEEARTH_SPATIAL_PORT=5576 \
-  node --env-file="$restore_config" scripts/launch.mjs
-```
-
-`scripts/accept-product-restore.mjs` 使用干净的浏览器会话比对原始实例和恢复实例中的同一任务、来源和森林图层。产品数据库和对象服务配置可替换为 ECS 的独立 PostgreSQL、PostGIS 与 S3 兼容服务。云环境的连通性、并发、生产认证与切换留待第二阶段实测。
-
-已取得经确认的完整文献目录导出时，可用部署配置向当前产品发布。
-
-```sh
-node --env-file="$deploy_config" --import tsx scripts/sync-assertion-catalog.ts --import /path/to/catalog.json
-```
-
-全量导入和 `scripts/sync-assertion-postgres.ts` 都向配置的发现 PostgreSQL 发布。后者通过原有只读连接从断言库取材。正式发布替换同一数据集键的当前映射，保留历史内容 ID。时空服务按代同步，可用的上一完整投影在同步失败时继续服务。
-
-原地升级先停写，用上一版本生成格式 2 备份。用新发布读取密封包内的 SQLite 快照并迁移到仍在使用的发现库。
-
-```sh
-node --env-file="$deploy_config" --import tsx scripts/migrate-paper-catalog.ts --sqlite /absolute/backup/paper-evidence.sqlite
-node --env-file="$deploy_config" --import tsx scripts/migrate-paper-catalog.ts --status
-```
-
-同一个快照可重试，已初始化的不同发布状态需要先核对。回退前仍须停写。已有新写入时，用新版本的 `--export-sqlite /absolute/new/compatibility.sqlite` 从当前发现库导出兼容快照，将原有文件及其伴随文件留存后换入，再启动原发布。保留当前三库，记录和对象沿用实际已写入数据。
+[目标与架构](docs/spec/01-目标与架构.md)、[两阶段工程交付](docs/spec/02-工程交付.md)和[验收口径](docs/spec/03-验收与证据.md)保存重构目标与验收基线。历史开发版本为 `v0.1.0`，存储与恢复基线为 `v0.2.0-dev.1`。[历史验收记录](evidence/ACCEPTANCE.md) · [品牌素材说明](public/brand/README.md)
