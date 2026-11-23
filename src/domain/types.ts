@@ -374,7 +374,7 @@ export interface CapabilityGap {
 export interface DiscoveryResponse {
   workspaceAction?: import("./workspace-view-context").WorkspaceViewAction;
   workspaceOperation?: import("./workspace-operations").WorkspaceOperation;
-  workspacePending?: {question:string;originalQuestion?:string};
+  workspacePending?: {question:string;originalQuestion?:string;proposedAction?:import("./workspace-view-context").WorkspaceViewAction};
   discoveryClarification?: boolean;
   gridCoverage?: import("./grid-coverage").GridCoverageEvidence;
   researchRegion?:import("./research-region").ResearchRegion|null;

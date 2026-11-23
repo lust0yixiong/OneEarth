@@ -9,7 +9,7 @@ import type {TurnHistory,TurnPlan} from "./turn-planning";
 export type RuntimeTurnInput={query:string;conversationId:string;turnId:string;previousTaskId?:string;context:DiscoveryContext;
   history:TurnHistory;config:ChatModel;questionDecision?:QuestionDecision;deepseekTools?:DeepSeekTools;clarificationReply?:ClarificationReply};
 export type ObservationTurnMaterial={artifactId:string;version:string;title:string;variables:string[]};
-export type RuntimeWorkspacePending={taskId:string;question:string;originalQuestion?:string};
+export type RuntimeWorkspacePending={taskId:string;question:string;originalQuestion?:string;proposedAction?:import("../src/domain/workspace-view-context").WorkspaceViewAction};
 export type RuntimeTurnOptions={observationUnavailable?:boolean;observationAvailable?:boolean;priorResult?:DiscoveryResponse|null;observationMaterials?:ObservationTurnMaterial[];pending?:RuntimeWorkspacePending};
 /** Private server record, never a browser input or a replacement for source authorization. */
 export type RuntimeTurnHandoff={version:1;kind:"runtime-turn-plan";inputFingerprint:string;plannedAt:number;plan:TurnPlan;runTrace:RunTrace;

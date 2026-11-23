@@ -437,9 +437,50 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         return {result:literatureDisplay(reply)};
       };
       const continuity={researchIntent:turn.researchIntent,conversationContext:turn.conversationContext,conversationEvidence,conversationAssertionEvidence};
+      const pending=internal.pending??internal.handoff?.pending;
+      const boundPending=turn.pendingTaskId&&turn.pendingTaskId===pending?.taskId?pending:undefined;
+      const boundProposal=boundPending?.proposedAction;
+      if(boundPending&&turn.pendingApproval&&!boundProposal){
+        return complete({message:"原待办还没有确定的操作目标，不能仅凭同意替你选择。请明确要操作的对象。",clarification:true,
+          workspacePending:{question:boundPending.question,originalQuestion:boundPending.originalQuestion},...continuity});
+      }
+      const continuingProposal=!!boundProposal&&(turn.action==="workspace"||turn.workspacePending);
+      if(continuingProposal){
+        if(turn.action==="workspace"&&!turn.pendingApproval||turn.workspaceReply||turn.workspaceOperation||turn.workspaceNavigation)
+          return complete({message:"这次决定不符合原待办的具体操作，尚未执行。请明确新的目标或确认原提案。",clarification:true,...continuity});
+        if(!turn.workspaceAction&&!turn.workspaceLookup)turn.workspaceAction=structuredClone(boundProposal);
+      }
+      if(turn.workspaceLookup){
+        const resolved=workspaceResolution?.lookup?.(turn.workspaceLookup.query);
+        report({id:"workspace-city-lookup",kind:"tool",name:"核对模型所指城市的发布身份",input:JSON.stringify(turn.workspaceLookup),
+          status:resolved?.choice?"done":"partial",output:JSON.stringify(resolved||{issue:"当前城市目录不可用"})});
+        if(!resolved?.choice||!workspaceResolution?.proof)return complete({message:resolved?.issue||"当前城市目录不可用，本轮未切换城市。",clarification:true,...continuity});
+        const layer=context.workspaceView!.activeLayer!,control=layer.controls.find(control=>control.id==="city")!;
+        if(!control.options.some(option=>option.id===resolved.choice!.id))control.options=[...control.options,resolved.choice];
+        turn.workspaceAction={kind:"set-control",layerId:"c40",controlId:"city",valueId:resolved.choice.id,publicationRevision:workspaceResolution.proof.revision};
+      }
+      if(continuingProposal){
+        const action=turn.workspaceAction,control=context.workspaceView?.activeLayer?.controls.find(control=>control.id===action?.controlId);
+        const tuple=(value:typeof action)=>value?[value.kind,value.layerId,value.controlId,value.valueId,value.publicationRevision??null]:null;
+        if(!action||!isDeepStrictEqual(tuple(action),tuple(boundProposal))||control?.publication?.revision!==action.publicationRevision)
+          return complete({message:"这次目标或目录修订与原提案不一致，尚未执行。请重新提出并确认目标。",clarification:true,...continuity});
+        if(control?.publication&&!control.options.some(choice=>choice.id===action.valueId)){
+          const choice=workspaceResolution?.lookup?.(action.valueId).choice;
+          if(choice?.id===action.valueId)control.options=[...control.options,choice];
+        }
+        if(!workspaceViewActionAllowed(context.workspaceView,action))return complete({message:"原提案的控件或发布目录已不可用，尚未执行。",clarification:true,...continuity});
+      }
       if(turn.action==="clarify"){
-        const reply={message:turn.clarification!,clarification:true,...continuity,
-          ...(turn.workspacePending?{workspacePending:{question:turn.clarification!,originalQuestion:body.query}}:{})};
+        const proposal=turn.workspacePending?turn.workspaceAction:undefined;
+        if(proposal&&(!workspaceViewActionAllowed(context.workspaceView,proposal)||proposal.publicationRevision&&!await workspaceResolution?.revalidate?.(signal)))
+          return complete({message:"提案的控件或目录修订已不可用，尚未形成可确认目标。请刷新后重新选择。",clarification:true,...continuity});
+        if(proposal)report({id:"workspace-proposal",kind:"tool",name:"保存未执行的界面提案",input:JSON.stringify(proposal),status:"done",output:"仅等待研究者确认，未交付界面动作。"});
+        const proposedControl=proposal?context.workspaceView?.activeLayer?.controls.find(control=>control.id===proposal.controlId):undefined;
+        const proposedLabel=proposedControl?.options.find(choice=>choice.id===proposal?.valueId)?.label;
+        const question=proposal?turn.clarification!+" 待执行目标："+proposedControl!.label+" → "+proposedLabel+"。":turn.clarification!;
+        const reply={message:question,clarification:true,...continuity,
+          ...(turn.workspacePending?{workspacePending:{question,originalQuestion:boundPending?.originalQuestion??body.query,
+            ...(proposal?{proposedAction:proposal}:{})}}:{})};
         return complete(reply);
       }
       const hasSourceMaterial=turn.targets.length||context.citation||context.attachedScope?.some(item=>item.kind==="dataset"||item.kind==="reference")||
@@ -450,15 +491,6 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         const reply={message:"已确定当前工作台操作。",workspaceOperation:{kind:turn.workspaceOperation},...continuity};
         report({id:"workspace-action",kind:"tool",name:"确认当前工作台操作",input:JSON.stringify(reply.workspaceOperation),status:"done",output:"交由网页按原工作台状态核验后执行。"});
         return complete(reply);
-      }
-      if(turn.workspaceLookup){
-        const resolved=workspaceResolution?.lookup?.(turn.workspaceLookup.query);
-        report({id:"workspace-city-lookup",kind:"tool",name:"核对模型所指城市的发布身份",input:JSON.stringify(turn.workspaceLookup),
-          status:resolved?.choice?"done":"partial",output:JSON.stringify(resolved||{issue:"当前城市目录不可用"})});
-        if(!resolved?.choice||!workspaceResolution?.proof)return complete({message:resolved?.issue||"当前城市目录不可用，本轮未切换城市。",clarification:true,...continuity});
-        const layer=context.workspaceView!.activeLayer!,control=layer.controls.find(control=>control.id==="city")!;
-        if(!control.options.some(option=>option.id===resolved.choice!.id))control.options=[...control.options,resolved.choice];
-        turn.workspaceAction={kind:"set-control",layerId:"c40",controlId:"city",valueId:resolved.choice.id,publicationRevision:workspaceResolution.proof.revision};
       }
       if(turn.action==="workspace"&&turn.workspaceAction){
         if(!internal.semanticDecision&&!authorizesWorkspaceViewAction(decision?.dataQuestion||query)||!workspaceViewActionAllowed(context.workspaceView,turn.workspaceAction))throw new TurnPlanningFailure();

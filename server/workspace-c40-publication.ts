@@ -4,7 +4,7 @@ import {c40CityManifestPath,c40CityPublicationRevision,type WorkspaceViewContext
 type City={id:string;label:string;aliases:string[]};
 type Publication={revision:string;cities:City[]};
 /** Server-only proof. Never accepted from a browser task body. */
-export type WorkspacePublicationProof={revision:string;ids:string[]};
+export type WorkspacePublicationProof={revision:string;ids:string[];directory?:{checkedTotal:number;namesComplete:boolean;names:string[]}};
 type Resolution={view:WorkspaceViewContext|undefined;proof?:WorkspacePublicationProof;issue?:string;matches?:string[];
   read?:{status:number;bytes:number};
   lookup?:(query:string)=>{choice?:{id:string;label:string};issue?:string};
@@ -95,11 +95,14 @@ export function workspaceC40Publications(options:{origin?:string;fetchImpl?:type
       if(matched.ambiguous&&!options.semanticDecision)throw Error("城市名称对应多个发布条目，请明确城市名称或稳定编号");
       const wanted=new Set([...entries.slice(Math.max(0,current-2),current+3).map(city=>city.id),...(matched.ambiguous?[]:matched.ids)]);
       const choices=entries.filter(city=>wanted.has(city.id)).map(({id,label})=>({id,label}));
+      const names=entries.map(city=>city.label);
+      const namesComplete=names.length<=128&&Buffer.byteLength(JSON.stringify(names))<=4096;
       const resolved:WorkspaceViewContext={...view!,activeLayer:{...layer,controls:layer.controls.map(item=>item!==control?item:{...control,
         current:{id:entries[current].id,label:entries[current].label},options:choices}),
         display:[{label:"城市选项来源",value:"已核对同一发布修订；窗口含当前邻项及本轮原话精确命中项"},
           ...(layer.display||[])].slice(0,16)}};
-      return {view:resolved,proof:{revision:expected.revision,ids:choices.map(choice=>choice.id)},matches:matched.ids,read:publication.read,
+      return {view:resolved,proof:{revision:expected.revision,ids:choices.map(choice=>choice.id),
+        ...(options.semanticDecision?{directory:{checkedTotal:entries.length,namesComplete,names:namesComplete?names:[]}}:{})},matches:matched.ids,read:publication.read,
         lookup:query=>{
           if(!text(query))return {issue:"城市名称无效，本轮未切换城市。"};
           const normalized=normalize(query),matches=entries.filter(city=>city.aliases.some(alias=>{
