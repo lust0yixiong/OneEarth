@@ -530,6 +530,9 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
     return true;
   };
   const resolvePublishedChoice = (publication:WorkspaceViewPublication, id:string) => {
+    if (publication.kind==="forest-frames")
+      return forestLayer && publication.revision===forest.revision && publication.total===forest.dateIndices.size
+        && forest.dateIndices.has(id) ? {id,label:id} : undefined;
     if (!c40Layer || !c40.revision || publication.revision!==c40.revision ||
         publication.total!==c40.cities.size) return;
     const city=c40.cities.get(id);
@@ -571,7 +574,7 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
     if (layerId === "c40" && controlId === "city")
       return switchC40City(valueId);
     if (layerId === "forest" && controlId === "time")
-      return !!forest.manifest?.frames.some(frame=>frame.date===valueId) && chooseForestDate(valueId);
+      return forest.dateIndices.has(valueId) && chooseForestDate(valueId);
     if (layerId === "rain" && controlId === "year") return chooseRainYear(Number(valueId));
     if (layerId === "rain" && controlId === "time")
       return chooseRainFrame(rain?.manifest.months.findIndex(month => month && rainDate(rain.manifest.year, month.month) === valueId) ?? -1);
@@ -631,19 +634,26 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
       } else if (forestLayer && forest.manifest) {
         const {frames:stages,grid,embedding} = forest.manifest;
         const nearby = forest.index < 0 ? [] : stages.slice(Math.max(0,forest.index-10),forest.index+11);
-        const legacy = stages.filter(frame=>/^2023-\d{2}-15$/.test(frame.date));
+        const revision=forest.revision;
+        const legacy = revision ? [] : stages.filter(frame=>/^2023-\d{2}-15$/.test(frame.date));
         const choices = [...new Set([...nearby,...legacy].map(frame=>frame.date))].sort();
+        const current={id:forest.date,label:forest.date};
         activeLayer.display = [
           {label: "图例", value: "大兴安岭森林 · 嵌入 PCA"},
           {label: "原网格", value: grid.resolution + "°"},
           {label: "当前日期", value: forest.date},
-          {label: "日期图层", value: forest.image ? "已显示" : forest.imageError ? "载入失败" : forest.frame ? "正在加载" : "当日无数据"},
+          {label: "已发布日期范围", value: stages[0].date+" 至 "+stages[stages.length-1].date},
+          {label: "日期图层", value: forest.image ? "已载入" : forest.imageError ? "载入失败" : forest.frame ? "正在加载" : "当日无数据"},
           {label: "颜色图例", value: ["R", "G", "B"].map((channel, index) =>
             channel + " · PC" + (index + 1) + " " + (embedding.variance[index]*100).toFixed(1) + "%").join("，")},
           {label: "播放状态", value: animate ? "播放中" : "已暂停"},
         ];
-        activeLayer.controls = layerControl("time", "森林嵌入时相", choices.map(date=>({id:date,label:date})),
-          forest.date, true);
+        if (forest.index>=0) {
+          const options=status==="ready" ? choices.map(date=>({id:date,label:date})) : [];
+          activeLayer.controls=[{id:"time",label:"森林嵌入时相",current,options,ordered:true,
+            ...(options.length && revision && stages.length<=10000
+              ? {publication:{kind:"forest-frames",revision,total:stages.length}} : {})}];
+        }
       } else if (rain) {
         const {year, months} = rain.manifest;
         const month = months[layer.frame];
@@ -725,8 +735,15 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
         <div className="map-controls-row">
         {forestLayer && forest.manifest ? <div className="map-legend forest-legend-bar">
           <span className="forest-legend-title">大兴安岭森林 · 嵌入 PCA</span>
-          {forest.imageError ? <button onClick={forest.retryImage}>当日图层载入失败 · 重试</button>
-            : forest.frame && !forest.image && <small role="status">正在加载当日图层…</small>}
+          {forest.imageError ? <button onClick={forest.retryImage} data-forest-frame={forest.frame?.date}
+            data-image-status="failed">当日图层载入失败 · 重试</button>
+            : forest.frame && <span role="status" data-forest-frame={forest.frame.date}
+                data-image-status={forest.image?"loaded":"loading"}>
+                {forest.image?"当日图层已载入":"正在加载当日图层…"}
+              </span>}
+          <button className="forest-info-toggle" aria-label="刷新森林日期目录" title="刷新森林日期目录"
+            onClick={forest.retryCatalog} disabled={forest.catalogLoading}><RefreshCw size={13}/></button>
+          {forest.catalogError && <span role="status">日期目录暂未更新</span>}
           <span><i className="forest-channel" style={{background:"#d64572"}}/>R · PC1 {(forest.manifest.embedding.variance[0]*100).toFixed(1)}%</span>
           <span><i className="forest-channel" style={{background:"#4f9e6d"}}/>G · PC2 {(forest.manifest.embedding.variance[1]*100).toFixed(1)}%</span>
           <span><i className="forest-channel" style={{background:"#4f7fc4"}}/>B · PC3 {(forest.manifest.embedding.variance[2]*100).toFixed(1)}%</span>

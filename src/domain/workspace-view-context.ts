@@ -3,11 +3,14 @@ import {validWorkspaceOperationKind, workspaceOperationKinds, type WorkspaceCand
 
 export type WorkspaceViewChoice = {id:string;label:string};
 export const c40CityManifestPath="/visualizations/haina/1846639/manifest.json";
-export type WorkspaceViewPublication = {kind:"c40-cities";revision:string;total:number};
+export const forestFrameManifestPath="/visualizations/haina/1846764/manifest.json";
+export type WorkspaceViewPublication = {kind:"c40-cities"|"forest-frames";revision:string;total:number};
 
-export function c40CityPublicationRevision(etag:string|null|undefined) {
+export function workspacePublicationRevision(etag:string|null|undefined) {
   return etag?.match(/^"([0-9a-f]{64})"$/)?.[1];
 }
+
+export const c40CityPublicationRevision=workspacePublicationRevision;
 
 export type WorkspaceViewDisplayFact = {label:string;value:string};
 export type WorkspaceViewControl = {
@@ -97,7 +100,7 @@ function publicationRevision(value:unknown):value is string {
   return typeof value==="string"&&/^[0-9a-f]{64}$/.test(value);
 }
 function publication(v:unknown):v is WorkspaceViewPublication {
-  return object(v,["kind","revision","total"])&&v.kind==="c40-cities"&&
+  return object(v,["kind","revision","total"])&&member(v.kind,["c40-cities","forest-frames"])&&
     publicationRevision(v.revision)&&integer(v.total,1,10000);
 }
 function control(v:unknown):v is WorkspaceViewControl {
@@ -116,7 +119,11 @@ function displayFacts(v:unknown) {
 function activeLayer(v:unknown) {
   return object(v,["id","title","datasetId","status","controls","display"])&&id(v.id)&&label(v.title)&&optional(v.datasetId,id)&&optional(v.display,displayFacts)&&
     member(v.status,["ready","loading","unavailable"])&&Array.isArray(v.controls)&&v.controls.length<=8&&
-    v.controls.every(control)&&v.controls.every(item=>!item.publication||v.id==="c40"&&item.id==="city")&&
+    v.controls.every(control)&&v.controls.every(item=>{
+      if(!item.publication)return true;
+      if(item.publication.kind==="c40-cities")return v.id==="c40"&&item.id==="city";
+      return v.id==="forest"&&item.id==="time"&&item.ordered&&item.options.every(({id})=>/^\d{4}-\d{2}-\d{2}$/.test(id));
+    })&&
     new Set(v.controls.map(item=>item.id)).size===v.controls.length&&
     (v.status==="ready"||v.controls.every(item=>!item.options.length));
 }

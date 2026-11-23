@@ -44,6 +44,7 @@ import { resolveSceneQuery } from "./earth-search";
 import { discover } from "../src/domain/discovery";
 import {authorizesWorkspaceViewAction,workspaceViewActionAllowed} from "../src/domain/workspace-view-context";
 import {resolveWorkspaceC40Publication} from "./workspace-c40-publication";
+import {resolveWorkspaceForestPublication} from "./workspace-forest-publication";
 import {runtimeTurnFingerprint,runtimeTurnHandoff,validRuntimeTurnHandoff,type RuntimeTurnInput,type RuntimeTurnHandoff,type RuntimeTurnOptions,type ForegroundTurnOutcome} from "./runtime-turn-handoff";
 import {createClarificationPrompt,clarificationAnswerText,type ClarificationPrompt} from "../src/domain/clarification";
 export {validRuntimeTurnHandoff} from "./runtime-turn-handoff";
@@ -333,8 +334,20 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         output:JSON.stringify({revision:workspaceResolution.proof?.revision,shortlist:workspaceResolution.proof?.ids,
           matched:workspaceResolution.matches,read:workspaceResolution.read,issue:workspaceResolution.issue})});
     }
+    const forestPublicationRequested=context.workspaceView?.activeLayer?.id==="forest"&&
+      context.workspaceView.activeLayer.controls.some(control=>control.publication?.kind==="forest-frames");
+    const forestResolution=clarification?undefined:await resolveWorkspaceForestPublication(context.workspaceView,signal);
+    if(forestResolution){
+      context={...context,workspaceView:forestResolution.view};
+      if(forestPublicationRequested)report({id:"workspace-forest-publication",kind:"tool",name:"核对当前已发布森林日期",status:forestResolution.issue?"partial":"done",
+        input:JSON.stringify({revision:body.context.workspaceView?.activeLayer?.controls.find(control=>control.id==="time")?.publication?.revision}),
+        output:JSON.stringify({revision:forestResolution.proof?.revision,shortlist:forestResolution.proof?.ids,summary:forestResolution.proof?.summary,
+          read:forestResolution.read,issue:forestResolution.issue})});
+    }
+    const controlResolution=(layerId:string)=>layerId==="forest"?forestResolution:workspaceResolution;
     const planningInput:TurnInput={
       question:decision?.dataQuestion||query,context,history,conversationContext,gridCoverage,workspacePublication:workspaceResolution?.proof,
+      forestPublication:forestResolution?.proof,
       ...(internal.semanticDecision?{semanticDecision:true,pending:internal.pending??internal.handoff?.pending}:{}),...(internal.observationUnavailable?{observationUnavailable:true}:{}),
       ...(internal.observationAvailable?{observationAvailable:true,observationMaterials:internal.observationMaterials}:{}),
       previousResearchIntent:planningIntent,confirmedQuestion:decision?.dataQuestion,numbered:selected,
@@ -484,7 +497,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       if(continuingProposal){
         if(turn.action==="workspace"&&!turn.pendingApproval||turn.workspaceReply||turn.workspaceOperation||turn.workspaceNavigation)
           return complete({message:"这次决定不符合原待办的具体操作，尚未执行。请明确新的目标或确认原提案。",clarification:true,...continuity});
-        if(!turn.workspaceAction&&!turn.workspaceLookup)turn.workspaceAction=structuredClone(boundProposal);
+        if(!turn.workspaceAction&&!turn.workspaceLookup&&!turn.workspaceDateLookup)turn.workspaceAction=structuredClone(boundProposal);
       }
       if(turn.workspaceLookup){
         const resolved=workspaceResolution?.lookup?.(turn.workspaceLookup.query);
@@ -495,13 +508,22 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         if(!control.options.some(option=>option.id===resolved.choice!.id))control.options=[...control.options,resolved.choice];
         turn.workspaceAction={kind:"set-control",layerId:"c40",controlId:"city",valueId:resolved.choice.id,publicationRevision:workspaceResolution.proof.revision};
       }
+      if(turn.workspaceDateLookup){
+        const resolved=forestResolution?.lookup?.(turn.workspaceDateLookup);
+        report({id:"workspace-date-lookup",kind:"tool",name:"核对模型所指的已发布森林日期",input:JSON.stringify(turn.workspaceDateLookup),
+          status:resolved?.choice?"done":"partial",output:JSON.stringify(resolved||{issue:"当前森林日期目录不可用"})});
+        if(!resolved?.choice||!forestResolution?.proof)return complete({message:resolved?.issue||"当前森林日期目录不可用，本轮未切换。",clarification:true,...continuity});
+        const layer=context.workspaceView!.activeLayer!,control=layer.controls.find(control=>control.id==="time")!;
+        if(!control.options.some(option=>option.id===resolved.choice!.id))control.options=[...control.options,resolved.choice];
+        turn.workspaceAction={kind:"set-control",layerId:"forest",controlId:"time",valueId:resolved.choice.id,publicationRevision:forestResolution.proof.revision};
+      }
       if(continuingProposal){
         const action=turn.workspaceAction,control=context.workspaceView?.activeLayer?.controls.find(control=>control.id===action?.controlId);
         const tuple=(value:typeof action)=>value?[value.kind,value.layerId,value.controlId,value.valueId,value.publicationRevision??null]:null;
         if(!action||!isDeepStrictEqual(tuple(action),tuple(boundProposal))||control?.publication?.revision!==action.publicationRevision)
           return complete({message:"这次目标或目录修订与原提案不一致，尚未执行。请重新提出并确认目标。",clarification:true,...continuity});
         if(control?.publication&&!control.options.some(choice=>choice.id===action.valueId)){
-          const choice=workspaceResolution?.lookup?.(action.valueId).choice;
+          const choice=action.layerId==="forest"?forestResolution?.lookup?.({mode:"exact",date:action.valueId}).choice:workspaceResolution?.lookup?.(action.valueId).choice;
           if(choice?.id===action.valueId)control.options=[...control.options,choice];
         }
         if(!workspaceViewActionAllowed(context.workspaceView,action))return complete({message:"原提案的控件或发布目录已不可用，尚未执行。",clarification:true,...continuity});
@@ -513,7 +535,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       }
       if(turn.action==="clarify"){
         const proposal=turn.workspacePending?turn.workspaceAction:undefined;
-        if(proposal&&(!workspaceViewActionAllowed(context.workspaceView,proposal)||proposal.publicationRevision&&!await workspaceResolution?.revalidate?.(signal)))
+        if(proposal&&(!workspaceViewActionAllowed(context.workspaceView,proposal)||proposal.publicationRevision&&!await controlResolution(proposal.layerId)?.revalidate?.(signal)))
           return complete({message:"提案的控件或目录修订已不可用，尚未形成可确认目标。请刷新后重新选择。",clarification:true,...continuity});
         if(proposal)report({id:"workspace-proposal",kind:"tool",name:"保存未执行的界面提案",input:JSON.stringify(proposal),status:"done",output:"仅等待研究者确认，未交付界面动作。"});
         const proposedControl=proposal?context.workspaceView?.activeLayer?.controls.find(control=>control.id===proposal.controlId):undefined;
@@ -540,9 +562,9 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       if(turn.action==="workspace"&&turn.workspaceAction){
         if(!internal.semanticDecision&&!authorizesWorkspaceViewAction(decision?.dataQuestion||query)||!workspaceViewActionAllowed(context.workspaceView,turn.workspaceAction))throw new TurnPlanningFailure();
         const action=turn.workspaceAction,layer=context.workspaceView!.activeLayer!,control=layer.controls.find(c=>c.id===action.controlId)!;
-        if(action.publicationRevision&&!await workspaceResolution?.revalidate?.(signal)){
-          report({id:"workspace-c40-publication-final",kind:"tool",name:"重验城市选择的发布修订",input:action.publicationRevision,status:"partial",output:"目录已变化或暂不可用，未交付切换动作。"});
-          return complete({message:"城市目录已变化或暂不可用，本轮未切换城市。请刷新当前目录后再选择。",clarification:true,...continuity});
+        if(action.publicationRevision&&!await controlResolution(action.layerId)?.revalidate?.(signal)){
+          report({id:action.layerId==="forest"?"workspace-forest-publication-final":"workspace-c40-publication-final",kind:"tool",name:"重验控件选择的发布修订",input:action.publicationRevision,status:"partial",output:"目录已变化或暂不可用，未交付切换动作。"});
+          return complete({message:"发布目录已变化或暂不可用，本轮未切换。请刷新当前目录后再选择。",clarification:true,...continuity});
         }
         const choice=control.options.find(c=>c.id===action.valueId)!;
         report({id:"workspace-action",kind:"tool",name:"确认当前界面控件目标",input:JSON.stringify(action),status:"done",

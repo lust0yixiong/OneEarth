@@ -63,3 +63,20 @@ test("published city actions require the same revision and an exact declared cho
   assert.equal(workspaceViewActionAllowed(snapshot,{...move,publicationRevision:undefined},fromDirectory),false);
   assert.equal(workspaceViewActionAllowed(snapshot,{...move,valueId:"not-published"},fromDirectory),false);
 });
+
+test("forest membership outside the browser window requires its own publication identity",()=>{
+  const revision="5".repeat(64),past={id:"2016-05-14",label:"2016-05-14"};
+  const control={id:"time",label:"森林时相",current:past,options:[past],ordered:true,
+    publication:{kind:"forest-frames" as const,revision,total:4791}};
+  const activeLayer={...view.activeLayer!,controls:[control]};
+  const snapshot:WorkspaceViewContext={...view,activeLayer};
+  const desired={...action,valueId:"2024-03-26",publicationRevision:revision};
+  const published=(publication:{kind:string;revision:string},date:string)=>
+    publication.kind==="forest-frames"&&publication.revision===revision&&date===desired.valueId;
+  assert.ok(validWorkspaceViewContext(snapshot));
+  assert.ok(!validWorkspaceViewContext({...snapshot,activeLayer:{...activeLayer,id:"c40"}}));
+  assert.ok(!validWorkspaceViewContext({...snapshot,activeLayer:{...activeLayer,controls:[{...control,id:"city"}]}}));
+  assert.ok(!workspaceViewActionAllowed(snapshot,desired));
+  assert.ok(workspaceViewActionAllowed(snapshot,desired,published));
+  assert.ok(!workspaceViewActionAllowed(snapshot,{...desired,publicationRevision:"2".repeat(64)},published));
+});

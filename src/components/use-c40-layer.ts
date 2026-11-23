@@ -1,6 +1,7 @@
 import {useEffect, useMemo, useState} from "react";
 import {hainaC40Manifest, type C40City, type C40Manifest} from "../domain/regional-cases";
-import {c40CityManifestPath, c40CityPublicationRevision} from "../domain/workspace-view-context";
+import {c40CityManifestPath} from "../domain/workspace-view-context";
+import {readWorkspacePublication} from "./workspace-publication-client";
 import type {ForestImage} from "../globe/regional-layer";
 
 const cityPath = /^\/visualizations\/haina\/1846639\/(?:full-v1\/)?[a-z0-9-]+\.webp$/;
@@ -21,15 +22,7 @@ function validCity(city: C40City) {
 async function readCatalogue(signal:AbortSignal):Promise<PublishedCities> {
   const response = await fetch(c40CityManifestPath, {signal, cache:"no-cache"});
   if (!response.ok) throw Error("C40 城市目录读取失败");
-  const bytes = await response.arrayBuffer();
-  const etag = response.headers.get("etag");
-  const published = c40CityPublicationRevision(etag);
-  let revision = published;
-  if (globalThis.crypto?.subtle && (published || etag === null)) {
-    const digest = await crypto.subtle.digest("SHA-256", bytes);
-    revision = Array.from(new Uint8Array(digest), value=>value.toString(16).padStart(2,"0")).join("");
-    if (published && published !== revision) throw Error("C40 城市目录校验失败");
-  }
+  const {bytes,revision}=await readWorkspacePublication(response);
   const manifest:C40Manifest = JSON.parse(new TextDecoder().decode(bytes));
   if (manifest?.version !== 1 || manifest.datasetId !== "haina:1846639" ||
       typeof manifest.snapshot !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(manifest.snapshot) ||
