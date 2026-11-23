@@ -1,8 +1,12 @@
 # OneEarth 架构与界面图索引
 
+## 公开逻辑主图
+
+[OneEarth 横版逻辑架构图](oneearth-public-architecture.png)为 [README](../../README.md#当前工作台) 主图。图以 rc.10 的在运关系为基础，灰紫色虚框和连线标出预留的数据处理智能体服务。设计拟由运行时经 A2A 委托处理并接收结果。[逻辑图说明](../架构与接口现状.md#公开逻辑架构)
+
 ## 在运实况
 
-[Mac mini v0.2.0-rc.10 横版实况图](oneearth-mac-mini-rc10.png)对应正式发布源码 `7d44a0b`。它记录现行工作台入口、运行时、独立发现、时空和存储的调用关系。图中任务提交与领取、研究取证和浏览预览各有图注。[架构现状与 rc.10 图注](../架构与接口现状.md#rc10-图注) · [正式验收](../../evidence/product/ACCEPTANCE.md#mac-mini-rc10-公开网络工具与局域网正式发布)
+[Mac mini v0.2.0-rc.10 横版实况图](oneearth-mac-mini-rc10.png)对应正式发布源码 `7d44a0b`。图中仅画 rc.10 已发布的调用关系，工作台入口和内部服务以逻辑名称标记。任务提交与领取、研究取证与浏览预览另有图注。[架构现状与 rc.10 图注](../架构与接口现状.md#rc10-图注) · [正式验收](../../evidence/product/ACCEPTANCE.md#mac-mini-rc10-公开网络工具与局域网正式发布)
 
 ## 目标与阶段设计
 

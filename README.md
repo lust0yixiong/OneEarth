@@ -11,11 +11,11 @@ OneEarth 用于提出研究问题、核对数据和文献依据，以及在球�
 
 ## 当前工作台
 
-Mac mini 常驻版本为 **v0.2.0-rc.10**，设置页显示版本。工作台提供[本机入口](http://127.0.0.1:5474/)和[指定局域网入口](http://10.15.48.143:5474/)。案例页保留可视化案例，科学问题案例区保持空白。[现状与访问范围](docs/架构与接口现状.md) · [正式验收](evidence/product/ACCEPTANCE.md#mac-mini-rc10-公开网络工具与局域网正式发布)
+Mac mini 常驻版本为 **v0.2.0-rc.10**，设置页显示版本。工作台支持本机与获准的局域网访问。案例页保留可视化案例，科学问题案例区保持空白。[现状与访问范围](docs/架构与接口现状.md) · [正式验收](evidence/product/ACCEPTANCE.md#mac-mini-rc10-公开网络工具与局域网正式发布)
 
-[![Mac mini v0.2.0-rc.10 横版架构实况图](docs/diagrams/oneearth-mac-mini-rc10.png)](docs/diagrams/oneearth-mac-mini-rc10.png)
+[![OneEarth 横版逻辑架构图，含预留的数据处理智能体服务，点击查看大图](docs/diagrams/oneearth-public-architecture.png)](docs/diagrams/oneearth-public-architecture.png)
 
-图为 rc.10 的已发布实况。[当前图注与职责](docs/架构与接口现状.md#rc10-图注) · [目标图、历史快照与界面参考索引](docs/diagrams/README.md)
+架构图以 rc.10 在运关系为基础。灰紫色虚框和连线标出预留的数据处理智能体服务及其拟议 A2A 委托。[逻辑图说明](docs/架构与接口现状.md#公开逻辑架构) · [rc.10 实况图注](docs/架构与接口现状.md#rc10-图注) · [图索引](docs/diagrams/README.md)
 
 ## 从这里开始
 

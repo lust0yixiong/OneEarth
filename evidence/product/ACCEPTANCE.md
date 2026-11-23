@@ -11,7 +11,7 @@
 
 ## Mac mini rc.10 公开网络工具与局域网正式发布
 
-2026-11-23 11:34:46（上海时间），Mac mini 常驻发布 **v0.2.0-rc.10**，源码 `7d44a0b88e2bfb0f33e3e8f3dfe66005cdf065e7`，源码树 `4bdb200ed9f90dad9b03b0ff89db8abbf7c53019`，发布目录为 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.10-7d44a0b`。前端 3,424 项构建清单 SHA-256 `90634bcaf1d6fac6d3fecb750061ab84b7865118bb4a08310ad221726f24ef0b`，在线首页 SHA-256 `fb2604176d3bf9df199c8c6a1e3c6c7a60f37d67ef6f25e5d20f3db07e9faafe`。设置页显示版本。网关使用 `127.0.0.1:5474` 和 Wi-Fi 接口 `en1` 的 `10.15.48.143:5474`。局域网来源限制在当前直连网段 `10.15.48.0/21`，工作台校验 Host 与同源 Origin。[局域网工作台](http://10.15.48.143:5474/) · [横版实况图](../../docs/diagrams/oneearth-mac-mini-rc10.png)
+2026-11-23 11:34:46（上海时间），Mac mini 常驻发布 **v0.2.0-rc.10**，源码 `7d44a0b88e2bfb0f33e3e8f3dfe66005cdf065e7`，源码树 `4bdb200ed9f90dad9b03b0ff89db8abbf7c53019`，发布目录为 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.10-7d44a0b`。前端 3,424 项构建清单 SHA-256 `90634bcaf1d6fac6d3fecb750061ab84b7865118bb4a08310ad221726f24ef0b`，在线首页 SHA-256 `fb2604176d3bf9df199c8c6a1e3c6c7a60f37d67ef6f25e5d20f3db07e9faafe`。设置页显示版本。网关提供本机回环和指定网络接口的局域网入口。局域网来源限制在直连网段，工作台校验 Host 与同源 Origin。[横版实况图](../../docs/diagrams/oneearth-mac-mini-rc10.png)
 
 **正式研究门槛。** 11:17:17 先把已签收 `b34fc5c` 切到原回环入口，使用原 primary 和静态页面。独立 Chrome 通过同一自然 Landsat 问法触发生产工作台。首笔 `374eaade-a034-4175-a67f-2824541958bf` 因两次规划包含 `fallback:null` 未启动工具。11:22:36 切到 `418b25f` 后，同题复验 `ee7ed6c1-b9a5-4417-a1af-ce6d210cea9a` 因两次规划用 `scope` 代替 `mode` 未启动工具。两笔研究与等待状态原样保留。修订补齐模型提示的规范对象和字段修复说明，兼容缺省等义的 `null` 及仅出现一次、值合法的 `scope`。双字段、未知来源、额外字段和非法回退组合仍拒绝。两笔四段原始规划分别离线重放，各只执行公开网络，独立验收复跑一致。
 
