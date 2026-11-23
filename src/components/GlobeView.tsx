@@ -9,6 +9,7 @@ import {useCatalogRevision} from "./use-catalog-revision";
 import {answerEvidence} from "../domain/answer-map";
 import {useFieldData} from "./use-field-data";
 import {useC40Layer} from "./use-c40-layer";
+import {useForestLayer} from "./use-forest-layer";
 import {datasetLayers,globeCases,layerFrameCount,type C40City} from "../domain/regional-cases";
 import type {WorkspaceViewAction, WorkspaceViewChoice, WorkspaceViewContext, WorkspaceViewPublication} from "../domain/workspace-view-context";
 import {sampleField,palettes} from "../globe/regional-layer";
@@ -165,12 +166,19 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   useEffect(()=>setAnimate(false),[layer?.id,layer?.year]);
   useEffect(()=>{
     if(!animate || !layer || layerFrameCount(layer.id)<=1 || !fieldData.field || fieldData.field.rain?.loading || fieldData.field.rain?.error)return;
-    const timer=setTimeout(()=>patch({fieldLayer:{...layer,frame:fieldData.field?.rain?fieldData.field.rain.nextMonth(layer.frame):(layer.frame+1)%layerFrameCount(layer.id)}}),layer.id==="rain"?650:layer.id==="forest"?900:240);
+    const timer=setTimeout(()=>patch({fieldLayer:{...layer,frame:fieldData.field?.rain?fieldData.field.rain.nextMonth(layer.frame):(layer.frame+1)%layerFrameCount(layer.id)}}),layer.id==="rain"?650:240);
     return ()=>clearTimeout(timer);
   },[animate,layer,fieldData.field,fieldData.revision,patch]);
   const forestLayer=layer?.id==="forest" ? layer : null;
-  const forest=forestLayer ? fieldData.field?.forest : undefined;
-  const forestMode=!!(forestLayer && forest);
+  const forest=useForestLayer(forestLayer,animate);
+  const forestMode=!!forestLayer;
+  useEffect(()=>{
+    if(!forestLayer || !animate || !forest.image || forest.index<0) return;
+    const next=forest.manifest?.frames[forest.index+1];
+    if(!next){setAnimate(false);return;}
+    const timer=setTimeout(()=>patch({fieldLayer:{...forestLayer,date:next.date}}),900);
+    return ()=>clearTimeout(timer);
+  },[forestLayer,animate,forest.image,forest.index,forest.manifest,patch]);
   const c40Layer=layer?.id==="c40" ? layer : null;
   const c40=useC40Layer(c40Layer);
   const c40Mode=!!c40Layer;
@@ -189,7 +197,7 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
       ...(normalize?{fieldLayer:{...c40Layer,city:city.id}}:{}),
     });
   },[c40Layer,c40.city,patch]);
-  const fieldImage=forest?.images[forestLayer?.frame ?? 0] ?? c40.image;
+  const fieldImage=forest.image ?? c40.image;
   const probe=layer && fieldData.field && (fieldData.field.rain || fieldData.field.data) && s.selection ? sampleField(layer.id,layer.frame,fieldData.field,s.selection.point,s.camera.zoom):null;
   const [basemapId,setBasemapId]=useState<BasemapId|null>(()=>{
     try{const stored=localStorage.getItem("oneearth.basemap.v1");return BASEMAPS.some(style=>style.id===stored)?stored as BasemapId:null;}catch{return null;}
@@ -527,10 +535,10 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
     const city=c40.cities.get(id);
     return city ? {id:city.id,label:city.name} : undefined;
   };
-  const chooseForestFrame = (frame: number) => {
-    if (!forestLayer || !forest?.manifest.frames[frame]) return false;
+  const chooseForestDate = (date: string) => {
+    if (!forestLayer || !forest.manifest) return false;
     setAnimate(false);
-    patch({fieldLayer: {...forestLayer, frame}});
+    patch({fieldLayer: {...forestLayer,date}});
     return true;
   };
   const rain = layer?.id === "rain" ? fieldData.field?.rain : undefined;
@@ -563,7 +571,7 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
     if (layerId === "c40" && controlId === "city")
       return switchC40City(valueId);
     if (layerId === "forest" && controlId === "time")
-      return chooseForestFrame(forest?.manifest.frames.findIndex(frame => frame.date === valueId) ?? -1);
+      return !!forest.manifest?.frames.some(frame=>frame.date===valueId) && chooseForestDate(valueId);
     if (layerId === "rain" && controlId === "year") return chooseRainYear(Number(valueId));
     if (layerId === "rain" && controlId === "time")
       return chooseRainFrame(rain?.manifest.months.findIndex(month => month && rainDate(rain.manifest.year, month.month) === valueId) ?? -1);
@@ -598,6 +606,7 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
     } else if (layer) {
       const status = layer.id === "c40"
         ? c40.catalogError ? "unavailable" : c40.manifest ? "ready" : "loading"
+        : forestLayer ? forest.catalogError ? "unavailable" : forest.manifest ? "ready" : "loading"
         : fieldData.field ? "ready" : fieldData.error ||
           (layer.id === "rain" && (publication.status === "unavailable" || publication.status === "ready" && !rainPeriod))
           ? "unavailable" : "loading";
@@ -619,18 +628,22 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
         ];
         activeLayer.controls = [{id:"city",label:"C40 城市",current,options,ordered:true,
           ...(revision && options.length ? {publication:{kind:"c40-cities",revision,total}} : {})}];
-      } else if (forestLayer && forest) {
-        const stages = forest.manifest.frames;
+      } else if (forestLayer && forest.manifest) {
+        const {frames:stages,grid,embedding} = forest.manifest;
+        const nearby = forest.index < 0 ? [] : stages.slice(Math.max(0,forest.index-10),forest.index+11);
+        const legacy = stages.filter(frame=>/^2023-\d{2}-15$/.test(frame.date));
+        const choices = [...new Set([...nearby,...legacy].map(frame=>frame.date))].sort();
         activeLayer.display = [
           {label: "图例", value: "大兴安岭森林 · 嵌入 PCA"},
-          {label: "原网格", value: forest.manifest.grid.resolution + "°"},
-          {label: "时间轴粒度", value: "月度时相 · 每月一帧"},
+          {label: "原网格", value: grid.resolution + "°"},
+          {label: "当前日期", value: forest.date},
+          {label: "日期图层", value: forest.image ? "已显示" : forest.imageError ? "载入失败" : forest.frame ? "正在加载" : "当日无数据"},
           {label: "颜色图例", value: ["R", "G", "B"].map((channel, index) =>
-            channel + " · PC" + (index + 1) + " " + (forest.manifest.embedding.variance[index]*100).toFixed(1) + "%").join("，")},
+            channel + " · PC" + (index + 1) + " " + (embedding.variance[index]*100).toFixed(1) + "%").join("，")},
           {label: "播放状态", value: animate ? "播放中" : "已暂停"},
         ];
-        activeLayer.controls = layerControl("time", "森林嵌入时相", stages.map(frame => ({id: frame.date, label: frame.date})),
-          stages[forestLayer.frame]?.date ?? "", true);
+        activeLayer.controls = layerControl("time", "森林嵌入时相", choices.map(date=>({id:date,label:date})),
+          forest.date, true);
       } else if (rain) {
         const {year, months} = rain.manifest;
         const month = months[layer.frame];
@@ -680,10 +693,12 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   };
   const footer = <div className={toolsHost && (catalogMode||forestMode||c40Mode) ? "catalog-distribution" : undefined}>
       <div className="map-footer">
-        {forestLayer && forest ? <ForestTimeline manifest={forest.manifest} frame={forestLayer.frame} playing={animate}
-          choose={chooseForestFrame}
-          shift={delta=>chooseForestFrame(Math.max(0,Math.min(forest.manifest.frames.length-1,forestLayer.frame+delta)))}
-          toggle={()=>setAnimate(!animate)}/> :
+        {forestLayer && forest.manifest ? <ForestTimeline manifest={forest.manifest} date={forest.date} playing={animate}
+          choose={chooseForestDate}
+          toggle={()=>setAnimate(!animate)}/> : forestLayer ? <div className="field-controls">
+            {forest.catalogError ? <button onClick={forest.retryCatalog}>日期目录载入失败 · 重试</button>
+              : <small role="status">正在加载森林日期目录…</small>}
+          </div> :
           (catalogMode||c) && !s.visualization && !s.dataView && <GlobeTimeline onAskTime={()=>attachScope(...timeScope(s.filters))} key={pushMode?"scene":c?.id||"catalog"} filters={s.filters} years={years} mode={pushMode?"scene":c?"year":"month"} records={axisRecords} onChange={changes=>setFilters(changes)}/>}
         {layer?.id==="rain" && (rain ? <RainfallControls grid={rain} month={layer.frame} playing={animate} chooseYear={chooseRainYear} point={s.selection?.point}
           toggle={()=>setAnimate(!animate)} choose={chooseRainFrame}/> :
@@ -708,8 +723,10 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
           </> : fieldData.error?<button onClick={fieldData.retry}>载入失败 · 重试</button>:<small>正在载入数据…</small>}
         </div>}
         <div className="map-controls-row">
-        {forestLayer && forest ? <div className="map-legend forest-legend-bar">
+        {forestLayer && forest.manifest ? <div className="map-legend forest-legend-bar">
           <span className="forest-legend-title">大兴安岭森林 · 嵌入 PCA</span>
+          {forest.imageError ? <button onClick={forest.retryImage}>当日图层载入失败 · 重试</button>
+            : forest.frame && !forest.image && <small role="status">正在加载当日图层…</small>}
           <span><i className="forest-channel" style={{background:"#d64572"}}/>R · PC1 {(forest.manifest.embedding.variance[0]*100).toFixed(1)}%</span>
           <span><i className="forest-channel" style={{background:"#4f9e6d"}}/>G · PC2 {(forest.manifest.embedding.variance[1]*100).toFixed(1)}%</span>
           <span><i className="forest-channel" style={{background:"#4f7fc4"}}/>B · PC3 {(forest.manifest.embedding.variance[2]*100).toFixed(1)}%</span>

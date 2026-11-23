@@ -11,7 +11,7 @@ export function useFieldData(layer:{id:RegionalId;frame:number;year?:number}|nul
   const [error,setError]=useState(false),[attempt,retry]=useState(0);
   useEffect(()=>{
     setError(false);
-    if(!id || id==="c40" || (id==="rain" && (!catalog || year===undefined)))return;
+    if(!id || id==="c40" || id==="forest" || (id==="rain" && (!catalog || year===undefined)))return;
     const controller=new AbortController();
     let data:FieldData|undefined;
     let unsubscribe:(()=>void)|undefined;

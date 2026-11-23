@@ -3,6 +3,12 @@ import c40Manifest from "../data/evidence/haina-c40.json";
 
 export const hainaForestManifest = forestManifest;
 export const hainaC40Manifest = c40Manifest;
+
+export function isForestDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const timestamp = Date.parse(value + "T00:00:00Z");
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
+}
 const forestMonth = Math.max(0, forestManifest.frames.findIndex(frame => frame.date === "2023-07-15"));
 
 export const regionalCases = {
@@ -28,9 +34,9 @@ export const regionalCases = {
     extent:[-125,24,-66,50],ceiling:18000,initial:195
   },
   forest: {
-    title:"大兴安岭森林 · 时空嵌入",dataset:"OneEarth/大兴安岭森林时空嵌入数据集 · 64 维",period:"2023 年 12 个月",
-    unit:"嵌入通道",variable:"64 维时空嵌入（PCA 三通道）",intro:"颜色表示森林像元嵌入向量的相对位置，切换月份查看同一片森林的季节变化。",
-    method:"海纳数据集 1846764 的逐日分区，取 2023 年 1–12 月每月 15 日，共 12 个日期。303×370 网格，0.03°；对 30,419 个有效森林像元统一拟合 64 维向量的前三个主成分，按 12 个日期的全局 2%–98% 分位拉伸为 RGB。颜色是嵌入的可视化，不是物理量。",
+    title:"大兴安岭森林 · 时空嵌入",dataset:"OneEarth/大兴安岭森林时空嵌入数据集 · 64 维",period:"按日发布",
+    unit:"嵌入通道",variable:"64 维时空嵌入（PCA 三通道）",intro:"颜色表示森林像元嵌入向量的相对位置，切换日期查看同一片森林的季节和年际变化。",
+    method:"海纳 1846764 的发布日期共用一套 PCA 和颜色范围。303×370 网格，0.03°，每日 30,419 个有效森林像元。64 维嵌入的前三个主成分映射为 RGB，颜色表示嵌入在所选主成分空间中的相对位置。",
     source:"https://cn.zero2x.org/data-hub/portal/dataset?id=1846764",reference:"",
     extent:[119.09,46.34,127.04,53.57],ceiling:1,initial:forestMonth
   },
@@ -60,7 +66,7 @@ export const globeCases={
   rain:{title:"全球降水",dataset:"NASA GPM IMERG · 全球海陆 0.1° 网格",unit:"mm/天",max:15,center:[104,26] as XY,month:6,zoom:1},
   rivers:{title:"巴西河网 · 丰枯交替",dataset:"GloFAS · 巴西 55 个代表河段",effect:"河段流量着色 × 逐日回放",unit:"m³/s",max:240000,center:[-53,-12] as XY,month:105,zoom:1},
   lightning:{title:"美国地闪 · 雷暴足迹",dataset:"NOAA NCEI · 美国本土 0.5° 网格",effect:"累计地闪着色 × 逐日回放",unit:"次",max:18000,center:[-96,36] as XY,month:195,zoom:1},
-  forest:{title:"大兴安岭森林 · 时空嵌入",dataset:"海纳 1846764 · 64 维森林时空嵌入",effect:"PCA 三通道着色 × 2023 年 12 个月",unit:"嵌入通道",max:1,center:[123.06,49.95] as XY,month:forestMonth,zoom:8},
+  forest:{title:"大兴安岭森林 · 时空嵌入",dataset:"海纳 1846764 · 64 维森林时空嵌入",effect:"PCA 三通道着色 × 逐日图层",unit:"嵌入通道",max:1,center:[123.06,49.95] as XY,month:forestMonth,zoom:8},
   c40:{title:"C40 城市 · landuse 嵌入",dataset:"海纳 1846639 · 1024 维 polygon embedding",effect:"PCA 三通道着色 × 城市多边形中心",unit:"嵌入通道",max:1,center:[121.427283,31.195936] as XY,month:0,zoom:110}
 };
 
@@ -84,7 +90,7 @@ export interface HainaForestFrame {
   date:string; partition:string; image:string; validPixels:number; sourceSha256:string;
 }
 export interface HainaForestManifest {
-  version:1; datasetId:string; name:string; description:string;
+  version:1; datasetId:string; name:string; description:string; defaultDate?:string;
   grid:{width:number;height:number;resolution:number;bounds:[number,number,number,number]};
   embedding:{dimensions:number;method:string;components:string[];variance:number[];stretch:[number,number];note:string};
   frames:HainaForestFrame[];

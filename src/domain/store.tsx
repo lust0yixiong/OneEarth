@@ -9,7 +9,7 @@ import {rememberReadEvidence} from "./read-evidence";
 import {conversationReferenceMemory,modelHistoryMessages} from "./reference-memory";
 import {researchRegionCamera,validResearchRegion,sameResearchRegion,type ResearchRegion,type ResearchRegionLayer} from "./research-region";
 import {answerMapBatch,answerFilters,initialAnswerCamera,gridCamera,evidenceCamera,evidenceSelection} from "./answer-map";
-import { globeCases,layerFrameCount,datasetLayers,type RegionalId } from "./regional-cases";
+import { globeCases,layerFrameCount,datasetLayers,isForestDate,type RegionalId } from "./regional-cases";
 import {isRainYear} from "./rain-catalog";
 import { paperId } from "./paper-record";
 import { loadPaperCatalog,readPaperCatalogStatus, type PaperCatalogStatus } from "./paper-catalog-client";
@@ -118,7 +118,7 @@ export interface State {
   search: SearchState;
   overview: "catalog" | "simulation";
   origin: ReturnPoint | null;
-  fieldLayer: {id:RegionalId;frame:number;year?:number;city?:string} | null;
+  fieldLayer: {id:RegionalId;frame:number;year?:number;city?:string;date?:string} | null;
   visualization: VisualizationState | null;
   view: View;
   caseId: string | null;
@@ -336,6 +336,10 @@ function initial(sessionId: string, url = new URL(location.href), saved: Record<
   const requestedLayer=url.searchParams.get("viz");
   const fieldId=requestedLayer && Object.hasOwn(globeCases,requestedLayer) ? requestedLayer as RegionalId : undefined;
   const fieldLayer=fieldId && view==="earth" ? {id:fieldId,frame:restore && saved.fieldLayer?.id===fieldId && Number.isInteger(saved.fieldLayer.frame) && saved.fieldLayer.frame>=0 && saved.fieldLayer.frame<layerFrameCount(fieldId)?saved.fieldLayer.frame:globeCases[fieldId].month} : null;
+  if(fieldLayer?.id==="forest"){
+    const date=url.searchParams.get("forestDate") || (restore ? saved.fieldLayer?.date : undefined);
+    if(isForestDate(date)) Object.assign(fieldLayer,{date});
+  }
   if(fieldLayer?.id==="c40"){
     const city=url.searchParams.get("city") ?? (restore ? saved.fieldLayer?.city : undefined);
     if(typeof city==="string" && /^[a-z0-9][a-z0-9-]{0,79}$/.test(city))Object.assign(fieldLayer,{city});
@@ -884,13 +888,16 @@ function useWorkspaceValue(initialState: State) {
     if(state.view==="earth" && state.fieldLayer?.id==="c40" && state.fieldLayer.city)
       url.searchParams.set("city",state.fieldLayer.city);
     else url.searchParams.delete("city");
+    if(state.view==="earth" && state.fieldLayer?.id==="forest" && state.fieldLayer.date)
+      url.searchParams.set("forestDate",state.fieldLayer.date);
+    else url.searchParams.delete("forestDate");
     if(state.fieldLayer?.id==="rain"){
       if(state.fieldLayer.year!==undefined)url.searchParams.set("rainYear",String(state.fieldLayer.year));
       else url.searchParams.delete("rainYear");
       url.searchParams.set("rainMonth",String(state.fieldLayer.frame+1));
     }else{url.searchParams.delete("rainYear");url.searchParams.delete("rainMonth");}
     history.replaceState({ ...history.state, oneearthSession: state.sessionId, oneearthPath: url.pathname + url.search }, "", url);
-  }, [state.linkStatus, state.sessionId, state.caseId, state.view, state.search.source,state.search.section,state.search.page,state.search.query,state.search.type,state.search.capability,state.search.savedOnly, state.filters.source, state.mapResult, state.dataView, state.visualization,state.fieldLayer?.id,state.fieldLayer?.year,state.fieldLayer?.frame,state.fieldLayer?.city]);
+  }, [state.linkStatus, state.sessionId, state.caseId, state.view, state.search.source,state.search.section,state.search.page,state.search.query,state.search.type,state.search.capability,state.search.savedOnly, state.filters.source, state.mapResult, state.dataView, state.visualization,state.fieldLayer?.id,state.fieldLayer?.year,state.fieldLayer?.frame,state.fieldLayer?.city,state.fieldLayer?.date]);
   useEffect(() => () => {
     for (const entry of requests.current.values()) entry.controller.abort();
     requests.current.clear();
