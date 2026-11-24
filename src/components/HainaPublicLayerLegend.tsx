@@ -1,7 +1,7 @@
 import {useMemo} from "react";
 import {ChevronDown,Info,LocateFixed,MapPin} from "lucide-react";
 import {inPublicBounds,type PublicLayerGrid,type PublicLayerPoint,type PublicLayerSelection} from "../domain/haina-public-layer";
-import {patchForHainaView,type CoveragePublication} from "../domain/haina-published-raster";
+import {patchForHainaView,pointInHainaFootprint,type CoveragePublication} from "../domain/haina-published-raster";
 import type {Coordinate} from "../domain/types";
 import type {HainaPublicLayer} from "./use-haina-public-layer";
 import type {useHainaViirsSample,useHainaViirsTiles} from "./use-haina-viirs";
@@ -27,6 +27,8 @@ function RasterSample({layer,sample}:{layer:HainaPublicLayer;sample:Coordinate|n
     text=grid?.value
       ? sample ? value===undefined?"发布视窗外":value===null?"缺测":"原值 "+value : "点选视窗读取原值"
       : grid ? "原值暂不可用" : "正在加载栅格原值…";
+  }else if(sample&&view.kind==="patch"&&layer.patch){
+    text=pointInHainaFootprint(sample,layer.patch.footprint) ? "已发布图斑内" : "已发布图斑外";
   }else if(sample){
     const index=sampleIndex(data.image,sample);
     text=index!==undefined && data.image.pixels[index*4+3]>0 ? "已发布图斑内" : "已发布图斑外";

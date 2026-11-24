@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pointInHainaFootprint, validHainaFootprint } from "../src/domain/haina-published-raster";
 import { parseArgs } from "node:util";
 import { layerObjects, spatialStore, type Bounds, type Chunk, type Layer } from "../server/spatial-store";
 
@@ -18,7 +19,7 @@ type SafeFiles = typeof verifiedFiles[number];
 type Coverage = {
   version:1;datasetId:1846104;source:string;title:string;period:string;description:string;
   defaultPatch:string;defaultMonth:string;months:string[];
-  patches:{id:string; bounds:Bounds; center:[number,number]; months:string[]}[];
+  patches:{id:string; bounds:Bounds; center:[number,number]; footprint:[number,number][]; months:string[]}[];
   colors:{kind:string; labels:string[]};
 };
 type GroundFrame = {
@@ -73,6 +74,8 @@ async function loadCoverage(root:string) {
     const [x,y] = patch.center;
     const [w,s,e,n] = patch.bounds;
     assert.ok(x>=w && x<=e && y>=s && y<=n);
+    assert.ok(validHainaFootprint(patch.footprint,patch.bounds));
+    assert.ok(pointInHainaFootprint(patch.center,patch.footprint));
     assert.deepEqual(patch.months,[...new Set(patch.months)].sort());
     assert.ok(patch.months.length>0);
     for (const month of patch.months) {

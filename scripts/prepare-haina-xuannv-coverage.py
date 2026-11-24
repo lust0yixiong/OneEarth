@@ -235,8 +235,17 @@ def projection(index, verified):
         row=np.floor((north-v)/20).astype(np.int16)
         inside=(col>=0)&(col<64)&(row>=0)&(row<64)
         require(inside.any(),f"empty EPSG:4326 render footprint for {id}")
+        # Keep the PNG's established envelope. The selection footprint follows
+        # the projected native rectangle, densifying each side before conversion.
+        native_ring=[(west,north),(east,north),(east,south),(west,south),(west,north)]
+        footprint=[]
+        for (start_x,start_y),(end_x,end_y) in zip(native_ring,native_ring[1:]):
+            for fraction in (0,.25,.5,.75):
+                footprint.append(list(to_wgs84.transform(start_x+(end_x-start_x)*fraction,
+                                                         start_y+(end_y-start_y)*fraction)))
+        footprint.append(footprint[0])
         setups[id]={"bounds":bbox,"center":list(to_wgs84.transform((west+east)/2,(south+north)/2)),
-                    "ring":ring,"nativeBounds":rec["nativeBounds"],"row":row,"col":col,"inside":inside}
+                    "ring":ring,"footprint":footprint,"nativeBounds":rec["nativeBounds"],"row":row,"col":col,"inside":inside}
     return setups
 
 def render(array, valid, geo, color):
@@ -363,7 +372,8 @@ def finish(output,receipt,index,verified,geom_problems,inventory,georefs,frames)
         missing=[month for month in inventory["months"] if month not in recs]
         if available:
             geo=georefs[id]
-            patches.append({"id":id,"bounds":geo["bounds"],"center":geo["center"],"months":available})
+            patches.append({"id":id,"bounds":geo["bounds"],"center":geo["center"],
+                            "footprint":geo["footprint"],"months":available})
         ledger.append({"patch":id,"index":index[id],"georeference":verified.get(id),"geometryIssue":geom_problems.get(id),
                        "availableMonths":available,"missingWithinArchiveMonths":missing,"members":recs})
     default_patch="patch_000186" if any(x["id"]=="patch_000186" for x in patches) else patches[0]["id"]

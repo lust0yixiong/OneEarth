@@ -1,6 +1,6 @@
 import {createViirsPainter,type ViirsRaster} from "./haina-viirs-painter";
 import {hainaBoundsOnScreen,type HainaViewport} from "./haina-viewport";
-import type {HainaPatch} from "../domain/haina-published-raster";
+import {pointInHainaFootprint,type HainaPatch} from "../domain/haina-published-raster";
 import {inPublicBounds,type PublicLayerPoint,type PublicLayerSelection} from "../domain/haina-public-layer";
 import {createRainPainter} from "./rain-layer";
 import type {RainTiles} from "./rain-tiles";
@@ -278,7 +278,7 @@ export function createRenderer(
         ctx!.fillStyle=color;ctx!.fill();ctx!.strokeStyle="#fff";ctx!.lineWidth=1;ctx!.stroke();
         ctx!.restore();
       }else{
-        paint({type:"Polygon",coordinates:[[[west,south],[west,north],[east,north],[east,south],[west,south]]]},
+        paint({type:"Polygon",coordinates:[patch.footprint]},
           null,color,0.92,patch.id===selected?1.8:1.2);
       }
       patchTargets.push({patch,x,y,coarse});
@@ -286,7 +286,8 @@ export function createRenderer(
   }
 
   function patchAt(point:Coordinate,x:number,y:number,selected:string|undefined) {
-    const geographic=patchTargets.filter(candidate=>inPublicBounds(point,candidate.patch.bounds));
+    const geographic=patchTargets.filter(({patch})=>
+      inPublicBounds(point,patch.bounds)&&pointInHainaFootprint(point,patch.footprint));
     if(geographic.length){
       return geographic.find(candidate=>candidate.patch.id===selected)?.patch
         ?? geographic.reduce((closest,item)=>Math.hypot(item.x-x,item.y-y)<Math.hypot(closest.x-x,closest.y-y)?item:closest).patch;

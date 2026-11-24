@@ -7,7 +7,7 @@ const coveragePath="/visualizations/haina/1846104/coverage-v1";
 type Publication={version:1;revision:string;title:string;period:string;description:string;source:string};
 export type ViirsPublication=Publication & {mode:"viirs";datasetId:1835833;sourceBounds:PublicBounds;
   tileSize:256;maxZoom:8;defaultView:{center:Coordinate;zoom:number}};
-export type HainaPatch={id:string;bounds:PublicBounds;center:Coordinate;months:string[]};
+export type HainaPatch={id:string;bounds:PublicBounds;center:Coordinate;footprint:Coordinate[];months:string[]};
 export type CoveragePublication=Publication & {mode:"coverage";datasetId:1846104;defaultPatch:string;defaultMonth:string;
   months:string[];patches:HainaPatch[];colors:{kind:"shared-pca"|"per-frame-pca";labels:[string,string,string]}};
 export type HainaPublication=(PublicLayerManifest & {mode:"legacy"})|ViirsPublication|CoveragePublication;
@@ -68,6 +68,21 @@ export function readViirsPublication(raw:unknown):ViirsPublication {
   return {...m,mode:"viirs"};
 }
 
+export function pointInHainaFootprint([longitude,latitude]:Coordinate,ring:Coordinate[]) {
+  let inside=false;
+  for(let i=1;i<ring.length;i++){
+    const [west,south]=ring[i-1], [east,north]=ring[i];
+    if((south>latitude)!==(north>latitude) &&
+      longitude<(east-west)*(latitude-south)/(north-south)+west) inside=!inside;
+  }
+  return inside;
+}
+
+export function validHainaFootprint(value:unknown,bounds:PublicBounds):value is Coordinate[] {
+  if(!Array.isArray(value)||value.length!==17||!value.every(point=>validPublicCoordinate(point)&&inPublicBounds(point,bounds)))return false;
+  return value[0][0]===value[16][0]&&value[0][1]===value[16][1];
+}
+
 export function readCoveragePublication(raw:unknown):CoveragePublication {
   const m=raw as CoveragePublication;
   if(!commonPublication(m)||m.datasetId!==1846104||!validPatchId(m.defaultPatch)||!validHainaMonth(m.defaultMonth)
@@ -80,6 +95,7 @@ export function readCoveragePublication(raw:unknown):CoveragePublication {
   for(const patch of m.patches){
     if(!patch||!validPatchId(patch.id)||ids.has(patch.id)||!validPublicBounds(patch.bounds)
       ||!validPublicCoordinate(patch.center)||!inPublicBounds(patch.center,patch.bounds)
+      ||!validHainaFootprint(patch.footprint,patch.bounds)||!pointInHainaFootprint(patch.center,patch.footprint)
       ||!validMonths(patch.months)||!patch.months.every(month=>months.has(month)))
       throw Error("图斑发布范围或月份格式不正确");
     ids.add(patch.id);
