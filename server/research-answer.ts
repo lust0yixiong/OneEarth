@@ -28,7 +28,7 @@ import {webMaterial} from "../src/domain/web-material";
 import type { TurnHistoryEntry as Turn } from "./turn-history";
 import type { ParentResearchEvidence } from "./parent-research-evidence";
 import {withCurrentAssertionReadings,rememberCurrentAssertionReadings,type CurrentAssertionReading} from "./runtime-assertion-evidence";
-import {compareSourceReadings,validateSourceChanges,sourceChangeInstructions,sourceChangeSchema,readSourceIdentity,type SourceReadHistory} from "./source-read-comparison";
+import {compareSourceReadings,validateSourceChanges,sourceChangeInstructions,sourceChangeSchema,readSourceIdentity,type SourceReadComparison,type SourceReadHistory} from "./source-read-comparison";
 import {modelTurnContext,modelResultBatch,type RuntimeTurnContext} from "./runtime-turn-context";
 import type {ResultBatch} from "../src/domain/turn-context";
 import {modelSafeText} from "./model-context-safety";
@@ -246,7 +246,11 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     const start=Date.now();
     const policy=retrieval?.plan.sourcePolicy;
     const restricted=scopedDiscoverySources(retrieval);
-    const selectedOnly=turn?new Set(turn.plan.targets.flatMap(t=>t.id?[t.id]:[])):
+    const selectedOnly=turn?new Set([
+      ...turn.plan.targets.flatMap(t=>t.id?[t.id]:[]),
+      ...(retrieval?.papers||[]).map(paper=>paper.id),
+      ...(retrieval?.haina||[]).map(asset=>asset.id),
+    ]):
       restricted?new Set(restricted.includes("constellation")?base.catalogMatch?.ids:[]):undefined;
     const selectedUrls=turn?new Set(turn.plan.targets.flatMap(t=>t.url?[t.url]:[])):undefined;
     if(turn&&!base.gridCoverage){context={...context,filters:{...context.filters,source:onlySource(query)||""}};}
@@ -286,7 +290,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     const fresh=[...new Map([...selectedWeb,...mergeWebEvidence(searches)].map(hit=>[hit.url,hit])).values()]
       .map(h=>userSources.has(h.url)?{...h,discoveredBy:"user" as const}:h);
     const memoryOptions={query:target,focusUrls:[...userSources,...(/刚才|此前|这份|前面|继续|你提到|这个|该/.test(query)?history.filter(t=>t.role==="assistant").at(-1)?.conversationReferences?.flatMap(r=>r.kind==="web"?[r.url]:[])||[]:[])]};
-    const webHits=restricted?(restricted.includes("web")?mergeWebEvidence(searches):[]):
+    const webHits=restricted?(restricted.includes("web")?mergeWebEvidence(searches):mergeWebEvidence(turn?.plan.action==="read"?turn.searches:[])):
       source?[]:withPreviousReadings(fresh,priorReadings,memoryOptions);
     const sourceReadComparisons=compareSourceReadings(webHits,sourceHistory,priorReadings,rows.length);
     const answerSchema=sourceReadComparisons.length?{...synthesisResponseSchema,required:[...synthesisResponseSchema.required,"sourceChanges"],
@@ -313,7 +317,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     function verifyExecutionAndReferences(answer:SynthesisAnswer){
       if(answer.references.some(ref=>{const index=references.findIndex(source=>ref.kind==="asset"?source.kind==="asset"&&source.id===ref.id:source.kind==="web"&&source.url===ref.url);return index<0||!packet.allowedRefs.has("S"+(index+1));}))throw new SourceReadClaimError("引用未包含在本次有界证据输入中，不能猜测省略材料。保留原编号，只引用实际提供的来源。");
       validateSourceReadClaim(answer,readReceipts,!!retrieval);
-      validateSourceChanges(answer,sourceReadComparisons);
+      validateSourceChanges(answer,deliveredComparisons);
       validateAnswerMaterialClaims(answer,accessLinks);
       if(exactReadRefs.length&&!answer.references.some(ref=>ref.kind==="web"&&exactReadRefs.some(source=>source.url===ref.url)))
         throw new SourceReadClaimError("定向读取已经返回材料，为核查结论或证据限制加上实际所读原站引用 "+
@@ -325,8 +329,9 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     const instructions=synthesisInstructions+(turnContext?"\nturnContext是按原轮次归属的服务器上下文。history.assistantText只是历史答复，不能当执行回执；旧批次只据其原query/conditions引用，不冒称本轮查获；currentResultBatch若存在才是本轮实际受托返回的批次，含真实原query/渠道/条件及有界成员，与旧批分开；渠道完成不等于读过数据文件。当前工具/新材料仍以本轮executionScope和readAt为准。workspace.operation是原目标，receipt是原操作的历史报告，applied仅提交变更；匹配目标的rendered只证明当次已呈现。atSubmission/browserObservations是原发问快照（capturedAt为其采集时点），即使合成前刷新了receipt也不能用迟到观察替换它，更不能将原目标当次已呈现说成当前仍显示该条目。loading/失败/被替代/unknown如实说明，拒因及recovery说明不是执行或再次授权；本次不自动重试、夺回手动视图或扩大范围。浏览器可见数量不是新检索事实。\n":"")+(context.workspaceView?"\nworkspace.workspaceView 是发问当刻的工作台可见状态。可据此回答当前图层、选择、期次和显示信息；与用户研究附件分开，不把显示标签或图例冒充来源原文、科学观测或QC结论，不声称执行了未记录的切换或外查。\n":"")+(sourceReadComparisons.length?"\n"+sourceChangeInstructions:"");
     const synthesisInput={question:query,materialMatchingHints:sourceMatchHints.length?{regionAliases:sourceMatchHints,notice:"仅辅助对应已取得材料，不改原研究区、不授予范围，也不证明空间覆盖。"}:undefined,questionMode:retrieval?.plan.questionMode,turnContext:modelTurnContext(turnContext),currentResultBatch:currentBatch?modelResultBatch(currentBatch):undefined,
       turnAction:turn&&{action:turn.plan.action,goal:turn.plan.goal,evidenceNeed:turn.plan.evidenceNeed,targets:turn.plan.targets.map(({excerpt,...t})=>t),
-        rule:"本轮没有执行数据发现检索。只围绕指定对象、已提供摘录和相关历史证据回答；通用原理可解释，但不能伪称本轮查获。未读来源不能说已读，缺少具体事实时明确边界，不补造数据集、论文事实或观测数。不要把本轮问题重新改成找数据。"},
-      sourceConstraint:restricted||source?{sources:restricted||[source],rule:"用户明确限定本轮的来源范围。正文、引用和结论只能依据本轮提供的各指定渠道记录。没有匹配材料时说明缺项；如需要扩大来源，询问用户是否同意。"}:undefined,
+        rule:(retrieval?"本轮先处理指定对象，另有实际独立补查。按本轮实际来源、批次和读取回执分别报告；新增候选不能代替指定对象，也不能冒充已读原文。":
+          "本轮未取得独立发现材料。尝试与失败以工具回执为准；围绕指定对象、已提供摘录和相关历史证据回答。通用原理可解释，但不能伪称本轮查获。")+"未读来源不能说已读，缺少具体事实时明确边界，不补造数据集、论文事实或观测数。"},
+      sourceConstraint:restricted||source?{sources:restricted||[source],rule:"用户明确限定本轮的来源范围。补查只能依据获准渠道的材料；原已授权的精确读据仍按实际回执引用。没有匹配材料时说明缺项；如需要扩大来源，询问用户是否同意。"}:undefined,
       researchIntent:retrieval?.plan.researchIntent||turn?.plan.researchIntent,conversationContext:retrieval?.plan.conversationContext||turn?.plan.conversationContext,
       dataQuestion:retrieval?.plan.dataQuestion,dataNeed:retrieval?.plan.dataNeed,mandatorySearches:retrieval?.sourceStatus,history:modelHistory,
       referenceProvenance:restricted?[]:conversationReferenceProvenance(history),
@@ -358,6 +363,8 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       lookups:base.catalogMatch?.lookups?.map(l=>({matched:l.matched,point:l.point})),gap:base.gap?.missing}};
     const pinnedRefs=[...exactReadRefs,...parentCitations].map(ref=>ref.token.replace(/[\[\]]/g,""));
     const packet=packSynthesisContext(instructions,synthesisInput,{question:query,matchHints:sourceMatchHints,areaTerms:[retrieval?.plan.researchIntent?.region||"",...sourceMatchHints],time:retrieval?.plan.researchIntent?.time,pinnedRefs,maxBytes:budgetPolicy.promptBytes});
+    const comparisonIdentities=new Map(sourceReadComparisons.map(entry=>[entry.ref,entry.identity]));
+    const deliveredComparisons=((packet.payload.sourceReadComparisons||[]) as SourceReadComparison[]).map(entry=>({...entry,identity:comparisonIdentities.get(entry.ref)!}));
     const prompt=packet.prompt,budget=answerTimeBudget(signal,budgetPolicy.answerMs);
     let modelCalls=0;const sentPromptBytes:number[]=[];
     const runModel=(value:string,schema:Record<string,unknown>=answerSchema,extraSignal?:AbortSignal)=>budget.run(modelSignal=>{
@@ -378,7 +385,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       diagnostic=>{repaired=true;repairInput=JSON.stringify(diagnostic);onStage?.("正在重新核对回答中的资料引用",searches);onTool?.({id:"synthesis-repair",kind:"tool",name:"回答引用与结构核对",status:"running",input:repairInput});},
       calculation=>{actualCalculations.push(calculation);onStage?.(calculation.status==="completed"?"已完成受控数值核算，正在核对解释":"数值核算条件未通过，保留待核边界",searches);
         onTool?.({id:"calculation-"+crypto.randomUUID(),kind:"tool",name:"受控数值核算",input:calculation.arguments||"未提供有效参数",status:calculation.status==="completed"?"done":"failed",output:JSON.stringify(calculation),...(calculation.error?{error:calculation.error}:{})});},
-      {allowedSourceRefs:packet.allowedRefs,validateAnswer:verifyExecutionAndReferences,enforceCalculations:true,onCalculationPlan:status=>{onStage?.(status==="running"?"正在核对具体演算的计算参数":status==="failed"?"核算参数准备未完成，正在保留已有内容":status==="done"?"已形成核算请求，继续处理答复":"未形成新增演算请求，继续整理答复",searches);onTool?.({id:"calculation-plan",kind:"tool",name:"核对数值演算参数",input:"草稿含具体演算，先形成有界计算请求",status:status==="running"?"running":status==="done"?"done":status==="failed"?"failed":"partial",...(status!=="running"?{output:status==="done"?"已形成计算请求；计算状态见受控数值核算记录。":status==="failed"?"核算参数准备未完成，保留已有内容。":"未形成新增演算请求；继续回答原问题，来源报告的指标仍按原出处保留。"}:{})});},
+      {allowedSourceRefs:packet.allowedRefs,sourceReadComparisons:deliveredComparisons,validateAnswer:verifyExecutionAndReferences,enforceCalculations:true,onCalculationPlan:status=>{onStage?.(status==="running"?"正在核对具体演算的计算参数":status==="failed"?"核算参数准备未完成，正在保留已有内容":status==="done"?"已形成核算请求，继续处理答复":"未形成新增演算请求，继续整理答复",searches);onTool?.({id:"calculation-plan",kind:"tool",name:"核对数值演算参数",input:"草稿含具体演算，先形成有界计算请求",status:status==="running"?"running":status==="done"?"done":status==="failed"?"failed":"partial",...(status!=="running"?{output:status==="done"?"已形成计算请求；计算状态见受控数值核算记录。":status==="failed"?"核算参数准备未完成，保留已有内容。":"未形成新增演算请求；继续回答原问题，来源报告的指标仍按原出处保留。"}:{})});},
       onNodeFailure:({node,error,retained})=>{
         if(node==="answer-repair")repairFailed=true;
         const id=node==="answer-repair"?"synthesis-repair":node==="calculation-plan"?"calculation-plan":"answer-generation";
@@ -387,8 +394,8 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       }});
     }catch(error){
       signal.throwIfAborted();let retained=retainedSourceAnswer(references,webHits,packet.retained,!!retrieval);if(!retained)throw error;
-      if(sourceReadComparisons.length){const statement="本轮未核对新旧材料差异，不能判断事实新增。";retained.limitation+="\n"+statement;
-        retained.sourceChanges=sourceReadComparisons.filter(comparison=>retained!.references.some(ref=>ref.kind==="web"&&readSourceIdentity(ref.url)===comparison.identity)).map(comparison=>({ref:comparison.ref,statement,status:"unknown" as const,historyWindow:null,historyQuote:null,currentWindow:null,currentQuote:null}));}
+      if(deliveredComparisons.length){const statement="本轮未核对新旧材料差异，不能判断事实新增。";retained.limitation+="\n"+statement;
+        retained.sourceChanges=deliveredComparisons.filter(comparison=>retained!.references.some(ref=>ref.kind==="web"&&readSourceIdentity(ref.url)===comparison.identity)).map(comparison=>({ref:comparison.ref,statement,status:"unknown" as const,historyWindow:null,historyQuote:null,currentWindow:null,currentQuote:null}));}
       try{verifyExecutionAndReferences(retained);}catch(rejected){
         onTool?.({id:"retained-evidence-validation",kind:"tool",name:"核对保留片段的引用与动作层级",input:"不发布未通过既有证据校验的降级内容",status:"failed",error:modelSafeText(rejected instanceof Error?rejected.message:"保留片段未通过校验。")});
         retained=retainedSourceAnswer(references,webHits,[],!!retrieval)!;
@@ -404,7 +411,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     // reliable enough to add its latency and incomplete-review notices to every answer.
     if(budget.remainingMs()>0&&!answer.recovery&&process.env.ONEEARTH_ANSWER_EVIDENCE_AUDIT==="1" && shouldReviewAnswerEvidence(answer,query,actualCalculations)){
       onStage?.("正在对照具体陈述与已取得的来源",searches);
-      const reviewed=await reviewAnswerEvidence({parsedAnswer:answer,catalogue:rows,references,webHits,sourceReadComparisons,question:query,originalSynthesisPrompt:prompt,
+      const reviewed=await reviewAnswerEvidence({parsedAnswer:answer,catalogue:rows,references,webHits,sourceReadComparisons:deliveredComparisons,question:query,originalSynthesisPrompt:prompt,
         calculations:actualCalculations,parentSignal:budget.signal,
         run:(p,schema,reviewSignal)=>runModel(p,schema===synthesisResponseSchema?answerSchema:schema,reviewSignal),onTool});
       signal.throwIfAborted();

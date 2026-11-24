@@ -24,7 +24,7 @@ import {researchExecutor,discoveryProtocol} from "./research-executor";
 import {discoveryConfirmation} from "./discovery-bindings";
 import {assertDiscoveryWaiting,queryPapers,type DiscoveryBinding,type DiscoveryA2AInput} from "./discovery-a2a-client";
 import {clarificationParent,guardClarification,clarificationGuardSchema,type ClarificationReply} from "./clarification-guard";
-import {continueResearch, evidenceDecisionSchema, scopedDiscoverySources} from "./research-evidence";
+import {continueResearch, evidenceDecisionSchema, scopedDiscoverySources,researchEvidenceAuthority} from "./research-evidence";
 import type {DiscoveryInput} from "./discovery-contract";
 import {rememberConversationReferences} from "../src/domain/reference-memory";
 import {conversationScope,scopedReply} from "./conversation-scope";
@@ -279,7 +279,9 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     }
     let initialDiscoveryId:string|undefined,initialBinding:DiscoveryBinding|undefined,lastBinding:DiscoveryBinding|undefined,actualDiscoveryQuery:string|undefined;
     let lastDiscoveryResult:import("./data-search").DataSearchResult|undefined;
-    async function find(turn:TurnPlan,continuation?:DiscoveryInput["continuation"]){
+    async function find(turn:TurnPlan,continuation?:DiscoveryInput["continuation"],evidenceGap?:string){
+      if(continuation)continuation={...continuation,focus:modelSafeText(continuation.focus)};
+      if(evidenceGap!==undefined)evidenceGap=modelSafeText(evidenceGap);
       const messageId=continuation?randomUUID():taskId;
       const a2a=discoveryProtocol()==="a2a";
       let discoveryId=a2a?undefined:messageId;
@@ -304,7 +306,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
           query:clarification?clarification.delegation.query:newTarget??query,
           decision:clarification?clarification.delegation.decision:newTarget?undefined:decision, continuation,
           continuedFrom:clarification?undefined:confirmation?.continuedFrom,
-          researchGoal:clarification?clarification.goal:newTarget??decision?.dataQuestion??turn.goal, evidenceGap:continuation?.focus||turn.evidenceGap,
+          researchGoal:clarification?clarification.goal:newTarget??decision?.dataQuestion??turn.goal, evidenceGap:(continuation?.focus||evidenceGap||turn.evidenceGap)?modelSafeText(continuation?.focus||evidenceGap||turn.evidenceGap!):undefined,
           conversationContext, previousResearchIntent:planningIntent,
           history, currentDatasets, conversationEvidence,
           scope:{filters:context.filters,selection:context.selection,caseId:context.caseId,citation:context.citation,attachedScope:context.attachedScope},
@@ -440,9 +442,23 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     if(gridCoverage&&gridLimits?.noDiscovery&&turn.action==="search")return {result:{message:"本轮已限定不另行搜索，尚未执行新发现。可依据已有材料继续，或明确要读取的具体来源。",clarification:true,gridCoverage,runTrace}};
     let retrieved=prepared.retrieval;
     let readRuns:SearchRun[]=[];
-    const readTargets=(plan:TurnPlan,question:string,callPrefix?:string)=>executor.read(plan,question,{stage,report,callPrefix,
+    const evidenceAuthority=researchEvidenceAuthority(decision?.dataQuestion||query,turn,prior);
+    let readIssues:string[]=[];
+    const readTargets=async(plan:TurnPlan,question:string,callPrefix?:string)=>{
+      readIssues=[];
+      const policy=evidenceAuthority.sourcePolicy;
+      const sources=policy?.mode==="restricted"?(policy.fallback?scopedDiscoverySources(retrieved)||policy.sources.slice(0,1):policy.sources):undefined;
+      const allowed=plan.targets.filter(target=>!sources||(target.kind==="asset"&&target.id&&paperId(target.id)?sources.includes("paper"):!target.url||sources.includes("web")));
+      if(allowed.length!==plan.targets.length){
+        const message="原来源范围不允许读取这些对象；未对被排除的来源发出请求。";readIssues.push(message);
+        report({id:(callPrefix||"initial-")+"read-scope",kind:"tool",name:"核对原读取范围",input:JSON.stringify({allowed:allowed.map(t=>t.key)}),status:"partial",error:message});
+      }
+      const progress:SearchRun[]=[];
+      const searches=await executor.read({...plan,targets:allowed},question,{stage,report,callPrefix,onFailure:message=>{readIssues.push(message);},
       options:{onAccepted:async binding=>{await tasks.append(taskId,{sourceReadBinding:binding});},
-        onCheckpoint:async binding=>{await tasks.append(taskId,{sourceReadBinding:binding});}},onResult:retainMaterials});
+        onCheckpoint:async binding=>{await tasks.append(taskId,{sourceReadBinding:binding});}},onResult:async material=>{readIssues.push(...material.issues);await retainMaterials(material);progress.push(...material.searches);}});
+      return [...new Map([...progress,...searches].map(run=>[JSON.stringify(run),run])).values()];
+    };
     await regionTask;
     if(gridCoverage&&!gridCoverage.summary&&(turn.action==="search" || turn.action==="clarify" || turn.action==="read")){
       return {result:literatureDisplay({message:gridCoverageSummary(gridCoverage),clarification:true,gridCoverage,runTrace,
@@ -466,25 +482,31 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     }
     if(!retrieved?.questionCheck&&!retrieved?.clarification&&(retrieved||turn.action==="read")){
       const targetQuery=decision?.dataQuestion||query;
-      if(turn.action==="read")readRuns=await readTargets(turn,targetQuery);
+      if(turn.action==="read"){
+        readRuns=await readTargets(turn,targetQuery);
+        if(!readRuns.length&&!currentAssertionReadings.length&&!readIssues.length)readIssues.push("本轮未取得新的网页或文献资料节选，未确认成功读取正文。");
+      }
       // Workspace and exact reference routing retain their existing scope. A review
       // receives actual results from each action, never a hypothetical tool result.
-      if(retrieved||readRuns.length||currentAssertionReadings.length){
-        const outcome=await continueResearch(targetQuery,turn,{retrieval:retrieved,reads:readRuns,assertionReadings:currentAssertionReadings},signal,{
+      if(turn.action==="read"||retrieved||readRuns.length||currentAssertionReadings.length||readIssues.length){
+        const outcome=await continueResearch(targetQuery,turn,{retrieval:retrieved,reads:readRuns,assertionReadings:currentAssertionReadings,issues:readIssues,
+          attemptedReadTargets:turn.action==="read"?turn.targets.flatMap(target=>target.url?[target.url]:[]):[]},signal,{
           model:prompt=>executor.model(prompt,{outputSchema:evidenceDecisionSchema}),
-          read:(targets,focus,step)=>readTargets({...turn,action:"read",targets},targetQuery+"\n"+focus,"research-read-"+step+"-"),
+          read:async(targets,focus,step)=>{const searches=await readTargets({...turn,action:"read",targets},targetQuery+"\n"+focus,"research-read-"+step+"-");return {searches,issues:readIssues};},
           discover:focus=>{
-            if(!initialDiscoveryId)throw Error("本轮发现没有已确认的服务任务身份，不能猜测补查父任务。");
-            return find(turn,{previousId:initialDiscoveryId,focus});
+            if(!evidenceAuthority.allowDiscovery||scopeUnverified||gridLimits?.currentCoverageOnly||gridLimits?.noDiscovery)
+              throw Error("原任务没有允许独立补查的范围，本轮未启动新的发现。");
+            return initialDiscoveryId?find(turn,{previousId:initialDiscoveryId,focus}):find(turn,undefined,focus);
           },stage,report,
-        },decision);
+        },decision,{...evidenceAuthority,allowDiscovery:evidenceAuthority.allowDiscovery&&!scopeUnverified&&!gridLimits?.currentCoverageOnly&&!gridLimits?.noDiscovery});
         if(outcome.clarification){
-          const material=outcome.retrieval;
+          const material=outcome.retrieval??lastDiscoveryResult;
           if(material?.papers.length)cachedPapers.remember(material.papers);
           runTrace.searches=[...(material?.searches||[]),...outcome.reads];
           return {result:literatureDisplay({
           message:outcome.clarification,clarification:true,runTrace,researchRegion,
-          ...(material?{resultBatch:discoveryResultBatch(batchOwner,actualDiscoveryQuery||query,material)}:{}),
+          ...(lastDiscoveryResult?.questionCheck?{questionCheck:lastDiscoveryResult.questionCheck}:{}),
+          ...(material?{resultBatch:discoveryResultBatch(batchOwner,actualDiscoveryQuery||query,lastDiscoveryResult??material)}:{}),
           ...(researchClarificationPrompt(lastDiscoveryResult,lastBinding)?{clarificationPrompt:researchClarificationPrompt(lastDiscoveryResult,lastBinding)}:{}),
           ...(lastDiscoveryResult?.clarification&&lastBinding?.state==="TASK_STATE_INPUT_REQUIRED"?{discoveryClarification:true}:{}),
           ...(material?.papers.length?{paperRecords:material.papers}:{}),
@@ -497,6 +519,8 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         }
         retrieved=outcome.retrieval;
         readRuns=outcome.reads;
+        readIssues=outcome.issues||[];
+        report({id:"research-assessment",kind:"tool",name:"记录有界取证判断的实际结果",input:"不把停止或无效输出当作证据充分",status:outcome.assessment==="answer"?"done":"partial",output:JSON.stringify({assessment:outcome.assessment,issues:readIssues})});
       }
     }
     if(turn && turn.action!=="search"){
@@ -749,15 +773,22 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
           ?{message:(workspaceResolution?.issue||"没有确定当前界面中的可选城市")+"。本轮未切换城市；请明确目录中的城市名称或刷新后选择。",clarification:true}
           :{message:"本轮没有执行界面切换。可点击引用打开预览，或明确指定要切换的网格、时段或图层。"}:{}),...continuity});
       }
-      let summary="本轮只处理已指定对象和已有内容，没有执行数据发现检索。";
+      let summary=retrieved?"本轮先读取指定对象，再按原研究目的取得了独立发现的实际材料。":"本轮只处理已指定对象和已有内容，没有执行数据发现检索。";
+      if(readIssues.length)summary+="\n"+readIssues.join("\n");
       const priorEvidence=context.citation||context.attachedScope?.some(item=>item.kind!=="reference")
         ?undefined:parentResearchEvidence(prior,turn,targetQuery);
       if(gridCoverage)summary+="\n"+gridCoverageSummary(gridCoverage);
       if(pinnedIds.length)report({id:"referenced-material",kind:"tool",name:"采用所引资料的已存内容",input:pinnedIds.join("、"),
-        status:pinnedIds.every(id=>assetById.has(id))?"done":"partial",output:"已存资料身份 "+pinnedIds.filter(id=>assetById.has(id)).length+" 项；没有重新检索文献库或海纳。"});
+        status:pinnedIds.every(id=>assetById.has(id))?"done":"partial",output:"已存资料身份 "+pinnedIds.filter(id=>assetById.has(id)).length+" 项；这条所引资料的身份来自已存记录。"});
+      const combinedSearches=[...new Map([...(retrieved?.searches||[]),...readRuns].map(run=>[JSON.stringify(run),run])).values()];
+      const acquired=retrieved?{...retrieved,searches:combinedSearches,issues:[...new Set([...retrieved.issues,...readIssues])]}:undefined;
+      const papers=[...new Map([...pinnedPapers,...(acquired?.papers||[])].map(paper=>[paper.id,paper])).values()];
+      const currentBatch=acquired?discoveryResultBatch(batchOwner,actualDiscoveryQuery||query,acquired):undefined;
+      if(currentBatch)event({resultBatch:currentBatch});
       const reply=await modelReply(targetQuery,context,{message:summary,gridCoverage},history,executor,signal,
-        stage,pinnedPapers,"",undefined,undefined,report,{plan:turn,searches:readRuns,priorEvidence},currentAssertionReadings,{record:prior,searches:archived.searches},await synthesisContext());
-      if(pinnedPapers.length)reply.paperRecords=literatureDisplay(pinnedPapers);
+        stage,papers,"",undefined,acquired,report,{plan:turn,searches:readRuns,priorEvidence},currentAssertionReadings,{record:prior,searches:archived.searches},await synthesisContext(),currentBatch);
+      if(currentBatch)reply.resultBatch=currentBatch;
+      if(papers.length)reply.paperRecords=literatureDisplay(papers);
       reply.hainaRecords=pinnedIds.flatMap(id=>id.startsWith("haina:")?haina.records().filter(r=>String(r.id)===id.slice(6)):[]);
       if(reply.answerNotes)reply.answerNotes.elapsedMs=Date.now()-runTrace.started;
       return complete(reply);

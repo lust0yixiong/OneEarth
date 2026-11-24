@@ -144,6 +144,7 @@ export function packSynthesisContext(instructions:string,input:Record<string,any
     packed={...base,catalogue:views.filter(row=>payload.catalogue?.some((item:Row)=>item.ref===row.ref)),
       webResults:views.filter(row=>payload.webResults?.some((item:Row)=>item.ref===row.ref)),
       sourceReadComparisons:(payload.sourceReadComparisons||[]).filter((entry:any)=>selectedRefs.has(entry.ref)).map((entry:any)=>({...entry,
+        omittedHistory:entry.omittedHistory+Math.max(0,entry.history.length-2),
         history:entry.history.slice(0,2).map((old:any)=>({...old,excerpt:utf8Prefix(old.excerpt,Math.max(450,quota)),truncated:old.truncated||Buffer.byteLength(old.excerpt)>Math.max(450,quota)})),
         current:entry.current.slice(0,2).map((now:any)=>({...now,excerpt:utf8Prefix(now.excerpt,Math.max(450,quota)),truncated:now.truncated||Buffer.byteLength(now.excerpt)>Math.max(450,quota)}))})),
       contextBudget:{partial:true,omittedSources:rows.length-chosen.length,notice:"保留原目的/条件与可核身份。节选不完整时仅给有限结论；不得将省略、目录关键词或部分时空相交当作完整适用性证据。"}};

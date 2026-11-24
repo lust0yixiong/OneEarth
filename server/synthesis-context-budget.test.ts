@@ -99,3 +99,17 @@ test("an omitted valid source number cannot authorize calculation by guessing it
  const result=await synthesizeAnswer("bounded evidence",refs,[],async()=>{calls++;return JSON.stringify({message:"原记录有单位说明。[S1]",calculationRequests:[{operation:"arithmetic",arguments:"1+2",scope:"source",sourceRefs:["S2"]}]});},new AbortController().signal,undefined,()=>{reports++;},{allowedSourceRefs:new Set(["S1"])});
  assert.equal(calls,2,"one repair remains within the original budget");assert.equal(reports,0);assert.match(result.message,/单位说明/);assert.ok(result.recovery);
 });
+
+test("comparison packing marks omitted history rather than treating the visible windows as the whole archive",()=>{
+ const history=Array.from({length:3},(_,index)=>({id:"H"+(index+1),excerpt:"Archived text "+index+". ".repeat(2000),truncated:false}));
+ const current=[{id:"C1",excerpt:original,truncated:false}];
+ const packet=packSynthesisContext("rules",{...input(),sourceReadComparisons:[{ref:read.ref,history,current,omittedHistory:1}]},
+  {...options,pinnedRefs:[read.ref]});
+ assert.equal(packet.blocked,false);
+ assert.ok(packet.stats.partial);
+ const delivered=packet.payload.sourceReadComparisons[0];
+ assert.deepEqual(delivered.history.map((entry:any)=>entry.id),["H1","H2"]);
+ assert.equal(delivered.omittedHistory,2);
+ assert.ok(delivered.history.every((entry:any)=>entry.truncated));
+ assert.deepEqual(delivered.current,current);
+});

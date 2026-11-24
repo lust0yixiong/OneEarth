@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {continueResearch} from "./research-evidence";
+import {DiscoveryA2AError} from "./discovery-a2a-client";
+import {continueResearch,researchEvidenceAuthority} from "./research-evidence";
 import type {DataSearchResult} from "./data-search";
 import type {TurnPlan} from "./turn-planning";
 import type {SearchRun,ToolCall} from "../src/domain/types";
@@ -39,9 +40,9 @@ test("a completed confirmation cannot be requested again by the evidence reviewe
     },
     read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:call=>trace.push(call),
   },{choice:"proposed",originalQuestion:confirmedPlan.goal,dataQuestion:question,checkMessageId:"ca419cd3-a9a1-4947-9a6b-1ac3dbd984c6"});
-  assert.equal(result.retrieval,start);
-  assert.equal(result.clarification,undefined);
-  assert.equal(JSON.parse(trace.at(-1)!.output!).fallback,"answer-with-available-materials");
+  assert.equal(result.retrieval?.plan,start.plan);
+  assert.equal(result.assessment,"unresolved");assert.equal(result.clarification,undefined);
+  assert.equal(JSON.parse(trace.at(-1)!.output!).assessment,"unresolved");
 });
 
 test("the next decision sees materials actually returned by the selected source",async()=>{
@@ -124,9 +125,9 @@ for(const fallback of [false,true])test("a Haina search cannot read a prior web 
     stage:()=>{},report:call=>trace.push(call),
   });
   assert.deepEqual(result.reads,[]);
-  assert.equal(result.retrieval,retrieval);
+  assert.equal(result.retrieval?.plan,retrieval.plan);assert.equal(result.assessment,"unresolved");
   assert.equal(trace.at(-1)?.status,"failed");
-  assert.equal(JSON.parse(trace.at(-1)!.output!).fallback,"answer-with-available-materials");
+  assert.equal(JSON.parse(trace.at(-1)!.output!).assessment,"unresolved");
 });
 
 for(const marker of ["W1","[w1]"," w1 "])test("only an existing W marker can normalize to an exact read: "+marker,async()=>{
@@ -141,7 +142,7 @@ for(const marker of ["1","S1",address,"W99"])test("invalid reference syntax does
  await continueResearch(question,plan,{retrieval:{...start,searches:[{engine:"DeepSeek Search",query:question,status:"done",hits:[{url:address,title:"Known",snippet:"units"}]}]},reads:[]},new AbortController().signal,{
   model:async()=>{modelCalls++;return JSON.stringify({action:"read",reason:"units",gap:"units",targets:[marker],clarification:null});},
   read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:call=>trace.push(call),
- });assert.equal(modelCalls,1);assert.equal(trace.at(-1)?.status,"failed");
+ });assert.equal(modelCalls,2);assert.equal(trace.at(-1)?.status,"failed");
 });
 
 test("a conflicting extra action field is rejected without guessing the original failed output",async()=>{
@@ -150,4 +151,107 @@ test("a conflicting extra action field is rejected without guessing the original
   model:async()=>JSON.stringify({action:"answer",reason:"enough",gap:null,targets:[],clarification:null,read:"W1"}),
   read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:call=>trace.push(call),
  });assert.equal(trace.at(-1)?.status,"failed");
+});
+
+const choice=(action:string,targets:string[]=[],gap:string|null=null)=>JSON.stringify({action,reason:"bounded next step",targets,gap,clarification:null});
+const readPlan={...plan,action:"read" as const,evidenceNeed:"read" as const,targets:[{key:"web:"+address,kind:"web" as const,title:"Selected original",basis:"citation" as const,url:address}]};
+const acquired:SearchRun={engine:"原站读取",query:address,status:"done",hits:[{url:address,title:"Selected original",snippet:"",pageExcerpt:"A partial literal method paragraph.",stage:"page-excerpt"}]};
+
+test("an invalid W label gets one real-error reassessment and no read before correction",async()=>{
+ let calls=0,reads=0;const trace:ToolCall[]=[];
+ const result=await continueResearch(question,plan,{retrieval:{...start,searches:[{engine:"DeepSeek Search",query:question,status:"done",hits:[{url:address,title:"Actual allowed source",snippet:"unit clue"}]}]},reads:[]},new AbortController().signal,{
+  model:async prompt=>{
+   const input=JSON.parse(prompt.slice(prompt.lastIndexOf("\n{")+1));
+   if(++calls===1)return choice("read",["W99"],"unit field");
+   assert.equal(reads,0);assert.equal(input.previousFailure.kind,"decision");assert.equal(input.previousFailure.toolAttempted,false);
+   assert.equal(input.previousFailure.diagnostic.code,"target-not-allowed");assert.deepEqual(input.previousFailure.diagnostic.invalidTargets,["W99"]);assert.equal(input.remainingCorrections,0);return answer;
+  },read:async()=>{reads++;return [];},discover:async()=>assert.fail(),stage:()=>{},report:row=>trace.push(row),
+ });assert.equal(calls,2);assert.equal(reads,0);assert.equal(result.assessment,"answer");assert.equal(trace[0].status,"running");assert.ok(trace.some(r=>r.status==="failed"));
+});
+
+test("a failed model receives a fixed diagnostic, not its raw invalid JSON or an implicit answer",async()=>{
+ let calls=0;const trace:ToolCall[]=[];
+ const result=await continueResearch(question,plan,{retrieval:start,reads:[]},new AbortController().signal,{
+  model:async prompt=>{if(++calls===2)assert.match(prompt,/证据决策不是有效JSON/);return "PRIVATE_INVALID_PAYLOAD";},read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:row=>trace.push(row),
+ });assert.equal(calls,2);assert.equal(result.assessment,"unresolved");assert.ok(result.issues?.length);assert.ok(!JSON.stringify(trace).includes("PRIVATE_INVALID_PAYLOAD"));assert.ok(!JSON.stringify(trace).includes("answer-with-available"));
+});
+
+test("authorized read-first research creates its first discovery without a fictitious previous result",async()=>{
+ let calls=0,finds=0;
+ const result=await continueResearch(question,readPlan,{reads:[acquired]},new AbortController().signal,{
+  model:async prompt=>{if(++calls===1){assert.match(prompt,/partial literal method/);return choice("discover",[],"independent validation");}assert.match(prompt,/new independently returned source/);return answer;},
+  read:async()=>assert.fail(),discover:async focus=>{finds++;assert.equal(focus,"independent validation");return {...start,searches:[{engine:"DeepSeek Search",query:focus,status:"done",hits:[{url:"https://example.org/independent",title:"new independently returned source",snippet:"actual clue"}]}]};},stage:()=>{},report:()=>{},
+ },undefined,{allowDiscovery:true});
+ assert.equal(finds,1);assert.equal(calls,2);assert.equal(result.reads[0],acquired);assert.equal(result.retrieval?.searches[0].hits[0].title,"new independently returned source");
+});
+
+test("same-source-only can ask about expansion but cannot execute discovery",async()=>{
+ let calls=0;
+ const result=await continueResearch("只根据这份资料解释原文。",readPlan,{reads:[acquired]},new AbortController().signal,{
+  model:async prompt=>{const input=JSON.parse(prompt.slice(prompt.lastIndexOf("\n{")+1));assert.ok(!input.actions.includes("discover"));return ++calls===1?choice("discover",[],"more sources"):JSON.stringify({action:"clarify",reason:"scope choice",gap:null,targets:[],clarification:"原来源不足，是否允许增加独立来源？"});},
+  read:async()=>assert.fail(),discover:async()=>assert.fail("not authorized"),stage:()=>{},report:()=>{},
+ },undefined,researchEvidenceAuthority("只根据这份资料解释原文。",readPlan));assert.equal(result.assessment,"clarify");assert.equal(calls,2);assert.equal(result.reads[0],acquired);
+});
+
+test("only an actual successful partial read permits one different-gap reread of the same authorized URL",async()=>{
+ let calls=0,reads=0;
+ const result=await continueResearch(question,readPlan,{reads:[acquired],attemptedReadTargets:[address]},new AbortController().signal,{
+  model:async prompt=>{const input=JSON.parse(prompt.slice(prompt.lastIndexOf("\n{")+1));if(++calls===1){assert.equal(input.materials.exactReadTargets[0].purpose,"bounded-reread");return choice("read",["W1"],"the uncertainty definition not present in the first window");}assert.deepEqual(input.materials.exactReadTargets,[]);return answer;},
+  read:async targets=>{reads++;assert.equal(targets[0].url,address);return [{...acquired,hits:[{...acquired.hits[0],pageExcerpt:"The second actual window defines uncertainty."}]}];},discover:async()=>assert.fail(),stage:()=>{},report:()=>{},
+ },undefined,{allowDiscovery:false,allowReread:true});assert.equal(reads,1);assert.equal(calls,2);assert.equal(result.reads.length,2);
+});
+
+test("the original question is not a new reread gap, and unknown/failed reads never authorize a resend",async()=>{
+ let reads=0,calls=0;
+ const result=await continueResearch(question,readPlan,{reads:[acquired],attemptedReadTargets:[address]},new AbortController().signal,{
+  model:async()=>++calls===1?choice("read",["W1"],question):answer,read:async()=>{reads++;return [];},discover:async()=>assert.fail(),stage:()=>{},report:()=>{},
+ },undefined,{allowDiscovery:false,allowReread:true});assert.equal(reads,0);assert.equal(result.assessment,"answer");
+ await continueResearch(question,readPlan,{reads:[acquired],issues:["accepted Task connection ended before final receipt"],attemptedReadTargets:[address]},new AbortController().signal,{
+  model:async prompt=>{const input=JSON.parse(prompt.slice(prompt.lastIndexOf("\n{")+1));assert.deepEqual(input.materials.exactReadTargets,[]);assert.match(input.previousFailure.message,/connection ended/);return answer;},read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:()=>{},
+ },undefined,{allowDiscovery:false,allowReread:true});
+});
+
+test("a tool error is reassessed with original materials and attempted identities within the shared budget",async()=>{
+ let calls=0,reads=0;const retrieval={...start,searches:[{engine:"DeepSeek Search" as const,query:question,status:"done" as const,hits:[{url:address,title:"Known source",snippet:"clue"}]}]};
+ const result=await continueResearch(question,plan,{retrieval,reads:[]},new AbortController().signal,{
+  model:async prompt=>{if(++calls===1)return choice("read",["W1"],"units");const input=JSON.parse(prompt.slice(prompt.lastIndexOf("\n{")+1));assert.equal(input.previousFailure.kind,"read");assert.match(input.previousFailure.message,/controlled upstream failure/);assert.ok(input.materials.web.some((r:any)=>r.title==="Known source"));assert.deepEqual(input.materials.exactReadTargets,[]);return answer;},
+  read:async()=>{reads++;throw Error("controlled upstream failure");},discover:async()=>assert.fail(),stage:()=>{},report:()=>{},
+ });assert.equal(calls,2);assert.equal(reads,1);assert.equal(result.retrieval?.searches[0],retrieval.searches[0]);assert.equal(result.assessment,"answer");assert.match(result.issues!.join(" "),/controlled upstream failure/);
+});
+
+test("original channel restrictions and referenced prior server policy never become attachment-based discovery permission",()=>{
+ const noSearch=researchEvidenceAuthority("只读取这份附件，不要搜索。",readPlan);assert.equal(noSearch.allowDiscovery,false);
+ const haina=researchEvidenceAuthority("只在海纳查找独立数据资料，并读取这条。",readPlan);assert.equal(haina.allowDiscovery,true);assert.deepEqual(haina.sourcePolicy,{mode:"restricted",sources:["haina"]});
+ const prior={message:"old result",answerNotes:{references:[{kind:"web" as const,title:"old",url:address}],sources:[],searches:[],webSources:[],limitation:"",followUp:"",reviewed:0,elapsedMs:0,executor:"Codex"},runTrace:{started:1,stages:[],calls:[{id:"data-question",kind:"tool" as const,name:"stored discovery",input:"",status:"done" as const,output:JSON.stringify({sourcePolicy:{mode:"restricted",sources:["haina"]}})}]}};
+ const inherited=researchEvidenceAuthority("查找独立数据并核对旧引用。",readPlan,prior);assert.equal(inherited.allowDiscovery,false);assert.deepEqual(inherited.sourcePolicy,{mode:"restricted",sources:["haina"]});
+ const other={...readPlan,targets:[{...readPlan.targets[0],url:"https://example.org/another",key:"web:https://example.org/another"}]};assert.equal(researchEvidenceAuthority("查找独立数据并核对新的引用。",other,prior).allowDiscovery,true);
+});
+
+test("cancellation and material persistence errors are not converted into another decision",async()=>{
+ const controller=new AbortController();let calls=0;
+ await assert.rejects(continueResearch(question,plan,{retrieval:{...start,searches:[{engine:"DeepSeek Search",query:question,status:"done",hits:[{url:address,title:"Known",snippet:"clue"}]}]},reads:[]},controller.signal,{
+  model:async()=>{calls++;return choice("read",["W1"],"units");},read:async()=>{controller.abort(Error("explicit cancel"));throw Error("stopped");},discover:async()=>assert.fail(),stage:()=>{},report:()=>{},
+ }),/explicit cancel/);assert.equal(calls,1);
+});
+
+test("the real supplied excerpt length and layer prevent treating a 420-character window as full text",async()=>{
+ const full="Opening bounded text. ".repeat(30)+"Figure A contains a displacement comparison.";
+ await continueResearch(question,readPlan,{reads:[{...acquired,hits:[{...acquired.hits[0],pageExcerpt:full,readAt:"2026-01-02T00:00:00Z"}]}]},new AbortController().signal,{
+  model:async prompt=>{const input=JSON.parse(prompt.slice(prompt.lastIndexOf("\n{")+1)),entry=input.materials.web[0];assert.equal(entry.excerpt.length,420);assert.equal(entry.excerptChars,full.length);assert.equal(entry.excerptTruncated,true);assert.equal(entry.stage,"page-excerpt");assert.equal(entry.readAt,"2026-01-02T00:00:00Z");assert.match(entry.notice,/窗口未见不等于/);assert.ok(!entry.excerpt.includes("Figure A"));return answer;},
+  read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:()=>{},
+ });
+});
+
+test("material persistence failures abort the loop without another model or tool",async()=>{
+ let calls=0;
+ await assert.rejects(continueResearch(question,plan,{retrieval:{...start,searches:[{engine:"DeepSeek Search",query:question,status:"done",hits:[{url:address,title:"Known",snippet:"clue"}]}]},reads:[]},new AbortController().signal,{
+  model:async()=>{calls++;return choice("read",["W1"],"unit");},read:async()=>{throw new DiscoveryA2AError("material save failed",false,undefined,"RUNTIME_PERSISTENCE_FAILED");},discover:async()=>assert.fail(),stage:()=>{},report:()=>{},
+ }),/material save failed/);assert.equal(calls,1);
+});
+
+test("trusted preferred history keeps research capability while unbound historical restriction stays explicit",()=>{
+ const parent=(mode:string)=>({message:"server record",answerNotes:{references:[{kind:"web" as const,url:address,title:"prior"}],sources:[],webSources:[],limitation:"",followUp:"",reviewed:0,elapsedMs:0,executor:"Codex"},runTrace:{started:1,stages:[],calls:[{id:"data-question",kind:"tool" as const,name:"saved",input:"",status:"done" as const,output:JSON.stringify({sourcePolicy:{mode,sources:["haina"]}})}]}});
+ const preferred=researchEvidenceAuthority("这张图缺少的误差依据会影响结论吗？",readPlan,parent("preferred"));assert.equal(preferred.allowDiscovery,true);assert.equal(preferred.sourcePolicy?.mode,"preferred");
+ const restricted=researchEvidenceAuthority("这张图缺少的误差依据会影响结论吗？",readPlan,parent("restricted"));assert.equal(restricted.allowDiscovery,false);assert.match(restricted.discoveryLimit!,/无法.*重验/);
+ const rebound=researchEvidenceAuthority("这张图缺少的误差依据会影响结论吗？只在海纳补充。",readPlan,parent("restricted"));assert.equal(rebound.allowDiscovery,true);assert.deepEqual(rebound.sourcePolicy,{mode:"restricted",sources:["haina"]});
 });

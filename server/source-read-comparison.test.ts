@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {compareSourceReadings,validateSourceChanges,readSourceIdentity,type SourceChangeAssessment} from "./source-read-comparison";
+import {compareSourceReadings,parseSourceChanges,SourceChangeValidationError,validateSourceChanges,readSourceIdentity,type SourceChangeAssessment} from "./source-read-comparison";
 import {modelReply} from "./research-answer";
 import {synthesisResponseSchema,parseSynthesis} from "./scientific-answer";
 import {buildAnswerEvidenceInput} from "./review-answer-evidence";
@@ -107,4 +107,77 @@ test("limited PDF typography matching preserves numeric ranges and negative-sign
     assert.equal(comparison.difference.currentTextSeenBefore,false);
     assert.equal(comparison.history[0].excerpt,before);assert.equal(comparison.current[0].excerpt,after);
   }
+});
+
+test("comparison reports the exact field and value type without echoing the rejected value",()=>{
+  const invalid={...assessment(correctStatement,"reverified"),currentQuote:{text:"PRIVATE-SAMPLE"}};
+  assert.throws(()=>parseSourceChanges([invalid]),error=>{
+    assert.ok(error instanceof SourceChangeValidationError);
+    assert.deepEqual(error.comparison,{path:"sourceChanges[0].currentQuote",expected:"string (nonempty, up to 2400 characters) or null",actualType:"object",reference:"S1"});
+    assert.doesNotMatch(JSON.stringify(error),/PRIVATE-SAMPLE/);
+    return true;
+  });
+  assert.throws(()=>parseSourceChanges([null]),error=>{
+    assert.ok(error instanceof SourceChangeValidationError);
+    assert.equal(error.comparison.path,"sourceChanges[0]");
+    assert.equal(error.comparison.actualType,"null");
+    return true;
+  });
+});
+
+test("one field repair keeps the independently supported prose and an explicit missing locator",async()=>{
+  const limitation="现有节选未能确认这些站点对应的图表编号；重算还缺共同时间窗及逐站的成对观测值";
+  const message=correctStatement+"。[S1]\n\n"+limitation+"。[S1]";
+  const unset={ref:"S1",statement:limitation,status:"unknown",historyWindow:null,historyQuote:null,currentWindow:null,currentQuote:null};
+  let calls=0;
+  const result=await assemble(async prompt=>{
+    calls++;
+    const valid=assessment(correctStatement,"reverified");
+    if(calls===1)return JSON.stringify({...template,message,sourceChanges:[{...valid,historyWindow:["H1"]},unset]});
+    assert.equal(calls,2);
+    const repair=decoded(prompt);
+    assert.equal(repair.issue.comparison.path,"sourceChanges[0].historyWindow");
+    assert.equal(repair.issue.comparison.actualType,"array");
+    assert.deepEqual(repair.allowedReferences,["S1"]);
+    assert.equal(JSON.parse(repair.previousReply).message,message);
+    return JSON.stringify({...template,message,sourceChanges:[valid,unset]});
+  });
+  assert.equal(calls,2);
+  assert.equal(result.message,message.replace("[S1]","〔1〕").replace("[S1]","〔1〕"));
+  assert.equal(result.answerNotes?.references?.length,1);
+});
+
+test("failed repair keeps an independently checked answer unit and removes the damaged unit",async()=>{
+  const known="所给局部材料可以重新核对四站分组";
+  const gap="现有节选未能确认对应图表编号和重算所需的成对观测日期";
+  const unsupported="本轮首次得出了额外站点和差值";
+  const unknown={ref:"S1",statement:gap,status:"unknown",historyWindow:null,historyQuote:null,currentWindow:null,currentQuote:null};
+  const message=known+"。[S1]\n\n"+unsupported+"。[S1]";
+  const original={...template,message,sections:[{heading:"缺项",text:gap+"。[S1]"}],
+    sourceChanges:[assessment(known,"reverified"),{...assessment(unsupported,"added_in_supplied_material"),currentQuote:17},unknown]};
+  let calls=0;
+  const result=await assemble(async prompt=>{
+    calls++;
+    if(calls===2){
+      assert.equal(decoded(prompt).issue.comparison.path,"sourceChanges[1].currentQuote");
+      return JSON.stringify({...original,sourceChanges:[assessment(known,"reverified"),unknown]});
+    }
+    return JSON.stringify(original);
+  });
+  assert.equal(calls,2);
+  assert.match(result.message,new RegExp(known));
+  assert.match(result.message,new RegExp(gap));
+  assert.doesNotMatch(result.message,new RegExp(unsupported));
+  assert.match(result.answerNotes!.limitation,/部分新旧材料判断未通过校验/);
+  assert.deepEqual(result.answerNotes?.references?.map(ref=>ref.kind==="web"&&ref.url),[url]);
+});
+
+test("an unassignable field error prevents recovery of prose that may contain the damaged claim",async()=>{
+  const draft={...template,message:correctStatement+"。另有无法证实的全新差值。[S1]",
+    sourceChanges:[assessment(correctStatement,"reverified"),{...assessment("","reverified"),statement:42}]};
+  let calls=0;
+  const result=await assemble(async()=>{calls++;return JSON.stringify(draft);});
+  assert.equal(calls,2);
+  assert.doesNotMatch(result.message,/另有无法证实的全新差值|四站分组在此前保存的图注中已齐全/);
+  assert.match(result.message,/回答整理未能完成/);
 });

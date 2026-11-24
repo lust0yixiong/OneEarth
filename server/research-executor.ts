@@ -12,7 +12,7 @@ import {webGrantInput,type RuntimeWebToolContext} from "./runtime-web-tool-autho
 import {modelSafeText,modelSafeValue,assertModelContextSafe} from "./model-context-safety";
 
 type ReadDependencies={stage:(text:string,searches?:SearchRun[])=>void;report:(call:ToolCall)=>void;callPrefix?:string;
-  options?:DiscoveryA2AOptions;onResult?:(result:SourceReadResult)=>Promise<void>};
+  options?:DiscoveryA2AOptions;onFailure?:(message:string)=>void;onResult?:(result:SourceReadResult)=>Promise<void>};
 
 export function discoveryProtocol():"a2a"|"v1"{
   const protocol=process.env.ONEEARTH_DISCOVERY_PROTOCOL||"a2a";
@@ -84,7 +84,7 @@ export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|un
       }catch(error){
         signal.throwIfAborted();if(error instanceof DiscoveryA2AError&&error.reason==="RUNTIME_PERSISTENCE_FAILED")throw error;
         const message=error instanceof Error?error.message:"发现服务未完成精确补读。";
-        deps.report({...call,status:"failed",error:message});
+        deps.report({...call,status:"failed",error:message});deps.onFailure?.(modelSafeText(message));
         deps.stage("发现服务尚未交付本轮精确读取材料");return [];
       }finally{await revoke(grant);}
     },
