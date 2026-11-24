@@ -12,7 +12,7 @@ const hit:WebHit={url:"https://example.org/data?sig=controlled-fixture",title:"N
 const retrieval=(hits:WebHit[]=[hit]):DataSearchResult=>({plan:{questionMode:"preserve",dataQuestion:question,dataNeed:null,paper:{name:"",facets:[],region:["Northern Basin"]},web:[],hainaQueries:[],researchIntent:{purpose:question,task:question,region:"Northern Basin",time:"2020–2023",months:[]}},papers:[],haina:[],issues:[],sourceStatus:[],searches:[{engine:"原站读取",status:"done",query:hit.url,requestUrl:hit.url,hits}]});
 const output=(message:string)=>JSON.stringify({message,sections:[],limitation:"",followUp:"",researchNotes:[],calculationRequests:[]});
 const fake=(model:ReturnType<typeof researchExecutor>["model"]):ReturnType<typeof researchExecutor>=>({name:"codex",model,discover:async()=>assert.fail("no discovery"),read:async()=>assert.fail("no reading"),close:async()=>{}});
-const call=(executor:ReturnType<typeof researchExecutor>,trace:ToolCall[],data:DataSearchResult|undefined=retrieval(),signal=new AbortController().signal,ms=1000)=>modelReply(question,context,{message:""},[],executor,signal,undefined,[],"",undefined,data,item=>trace.push(item),undefined,[],{},undefined,undefined,{answerMs:ms});
+const call=(executor:ReturnType<typeof researchExecutor>,trace:ToolCall[],data:DataSearchResult|undefined=retrieval(),signal=new AbortController().signal,ms=1000,promptBytes?:number)=>modelReply(question,context,{message:""},[],executor,signal,undefined,[],"",undefined,data,item=>trace.push(item),undefined,[],{},undefined,undefined,{answerMs:ms,promptBytes});
 
 test("a timed-out generation sends one bounded prompt, retains real source identities and records failure separately",async()=>{
  const trace:ToolCall[]=[];let count=0;
@@ -47,9 +47,17 @@ test("the server deadline does not discard already acquired material or start an
  assert.equal(calls,1);assert.match(result.message,/nominal year is 2021/);
 });
 
-test("appending a large repair draft cannot bypass the whole-prompt byte cap",async()=>{
+test("a repair whose instructions cannot fit the remaining budget never reaches the executor",async()=>{
+ let initialBytes=0;
+ await call(fake(async prompt=>{initialBytes=Buffer.byteLength(prompt);return output("该元数据的名义年为2021。[S1]");}),[]);
  let calls=0;const trace:ToolCall[]=[];
- const result=await call(fake(async()=>{calls++;return output("待核字".repeat(7000)+" [S999]");}),trace);
- assert.equal(calls,1,"oversized repair rejected before executor.model");assert.match(result.message,/回答整理未能完成/);
- assert.equal(JSON.parse(trace.find(row=>row.id==="answer-generation"&&row.status==="failed")!.output!).modelCalls,1);
+ const result=await call(fake(async prompt=>{
+  calls++;assert.equal(Buffer.byteLength(prompt),initialBytes);
+  return output("待核字".repeat(7000)+" [S999]");
+ }),trace,retrieval(),new AbortController().signal,1000,initialBytes+8);
+ assert.equal(calls,1,"repair rejected even after removing its previous draft");
+ assert.match(result.message,/回答整理未能完成/);
+ const failure=trace.find(row=>row.id==="answer-generation"&&row.status==="failed")!;
+ assert.match(failure.error!,/字节预算/);
+ assert.equal(JSON.parse(failure.output!).modelCalls,1);
 });
