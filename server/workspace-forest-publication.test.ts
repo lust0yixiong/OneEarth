@@ -99,8 +99,10 @@ async function runtime(t:TestContext){
   const readCalls=()=>existsSync(calls)?readFileSync(calls,"utf8").trim().split("\n").filter(Boolean).map(v=>JSON.parse(v)):[];
   return {value,revision,requests,changeAfterModel(){changeAfterModel=true;},unavailable(){unavailable=true;},async run(query:string,workspaceAction:unknown,options:{current?:string;action?:string;clarification?:string;reply?:string;legacy?:boolean;workspacePending?:boolean;pending?:RuntimeTurnOptions["pending"];pendingApproval?:boolean}={}){
     const before=readCalls().length,snapshot=view(value,options.current);if(options.legacy)delete snapshot.activeLayer!.controls[0].publication;
-    writeFileSync(reply,JSON.stringify({action:options.action||"workspace",goal:null,targets:[],clarification:options.clarification??null,
-      workspaceAction,pendingTaskId:options.pending?.taskId??null,pendingApproval:options.pendingApproval??false,workspacePending:options.workspacePending??false,reply:options.reply??null}));
+    const kind=options.action||"workspace",question=options.clarification??"请明确日期。";
+    const decide=kind==="clarify"?workspaceAction?{kind:"propose-workspace",question,action:workspaceAction}:
+      {kind,subject:"workspace",question,choices:null}:kind==="workspace"?{kind,action:workspaceAction}:{kind,targets:[],reply:options.reply??null};
+    writeFileSync(reply,JSON.stringify({decide}));
     const body:RuntimeTurnInput={query,clarificationAnswer:options.pending?.answer,context:{caseId:null,filters:emptyFilters(),selection:null,citation:null,gridSystem:"h3",layer:"all",camera:{center:[0,0],zoom:1,reason:"view"},workspaceView:snapshot},history:[],config:{executor:"codex",model:""},conversationId:randomUUID(),turnId:randomUUID(),previousTaskId:options.pending?.taskId};
     const result=await runForegroundTurn(services,randomUUID(),body,signal(),()=>{},{pending:options.pending});assert.equal(result.kind,"reply");if(result.kind!=="reply")throw Error("unexpected background work");
     return {payload:result.payload,result:result.payload.result as any,calls:readCalls().slice(before)};
@@ -143,9 +145,9 @@ test("old forest controls retain their exact typed action without requiring a ne
 test("a far-date proposal remains unexecuted and can only resume that same verified date",async t=>{
   const f=await runtime(t),proposal=await f.run("先确认再换到明确日期",selection("exact","2016-05-14"),{action:"clarify",clarification:"要换到这一天吗？",workspacePending:true});
   assert.equal(proposal.result.workspaceAction,undefined);assert.equal(proposal.result.workspacePending.proposedAction.valueId,"2016-05-14");
-  const pending={taskId:randomUUID(),...proposal.result.workspacePending},approved=await f.run("确定",null,{pending,pendingApproval:true});
+  const taskId=randomUUID(),pending={taskId,...proposal.result.workspacePending,clarificationPrompt:proposal.result.clarificationPrompt,answer:{parentTaskId:taskId,optionId:"approve"}},approved=await f.run("确认执行",null,{pending});
   assert.equal(approved.result.workspaceAction.valueId,"2016-05-14");assert.equal(approved.result.workspaceAction.publicationRevision,f.revision);
-  const changed=await f.run("确定",selection("exact","2024-03-26"),{pending,pendingApproval:true});assert.equal(changed.result.workspaceAction,undefined);
+  const changed=await f.run("确定",selection("exact","2024-03-26"),{pending:{...pending,answer:{parentTaskId:taskId,text:"确定"}}});assert.equal(changed.result.workspaceAction,undefined);
 });
 
 test("a forest layer still permits explicit coordinate navigation without a date mutation",async t=>{

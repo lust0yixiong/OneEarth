@@ -72,9 +72,13 @@ export async function prepareRuntimeChat(services: RuntimeServices, id: string, 
   const workspacePending = previous?.workspacePending;
   const eligible=parentId&&(answered?.prompt.kind==="chat"||await latestCompleted(original.conversationId)===parentId);
   const prompt=previous?.clarificationPrompt;
-  const storedParent=parentBody??(eligible&&prompt?JSON.parse((await tasks.get(parentId!))!.body) as RuntimeTurnInput:undefined);
+  const storedParent=parentBody??(eligible&&(prompt||workspacePending)?JSON.parse((await tasks.get(parentId!))!.body) as RuntimeTurnInput:undefined);
+  const proposal=workspacePending?.proposedAction,originLayer=storedParent?.context.workspaceView?.activeLayer;
+  const originControl=proposal&&originLayer?.id===proposal.layerId?originLayer.controls.find(control=>control.id===proposal.controlId):undefined;
+  const proposalOrigin=workspacePending?.proposalOrigin??(proposal&&originControl?{layerId:proposal.layerId,controlId:proposal.controlId,valueId:originControl.current.id}:undefined);
   const pending=eligible&&(workspacePending||prompt)?{taskId:parentId!,question:prompt?.question??workspacePending!.question,
     originalQuestion:workspacePending?.originalQuestion??originalQuestion?.query??storedParent?.query,...workspacePending,
+    ...(proposalOrigin?{proposalOrigin}:{}),
     ...(prompt?{clarificationPrompt:prompt}:{}),...(answered?{answer:answered.answer}:{})}:undefined;
 
   return {
