@@ -3300,6 +3300,9 @@ html[data-panel-interaction="move"] * {
   cursor: not-allowed;
 }
 .haina-public-mode :is(.map-footer, .earth-side-controls, .earth-location) { z-index: 4; }
+@media (max-width: 760px) {
+  .haina-public-mode.haina-docked .earth-side-controls { bottom: 12px; }
+}
 .haina-public-legend { min-width: 0; }
 .haina-point-switch select { max-width: min(194px, 50vw); }
 .haina-sample { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0 6px; overflow-wrap: anywhere; }

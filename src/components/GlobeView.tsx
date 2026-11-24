@@ -946,7 +946,7 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
   </div>;
   return (
     <section
-      className={"earth-view" + (publicLayer ? " haina-public-mode" : "") + (s.visualization ? " wind-mode" : "")+((catalogMode||forestMode||c40Mode||publicLayer)?" catalog-distribution":"")}
+      className={"earth-view" + (publicLayer ? (toolsHost ? " haina-public-mode haina-docked" : " haina-public-mode") : "") + (s.visualization ? " wind-mode" : "")+((catalogMode||forestMode||c40Mode||publicLayer)?" catalog-distribution":"")}
       data-wind-theme={s.visualization ? windTheme : undefined}
       aria-label="数据地球"
     >
