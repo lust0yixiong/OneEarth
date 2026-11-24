@@ -29,7 +29,7 @@ export function createGeoImagePainter() {
     height: number,
     moving: boolean,
   ) => {
-    if (!frame.pixels.length || frame.width < 1 || frame.height < 1) return;
+    if (!frame.pixels.length || frame.width < 1 || frame.height < 1) return false;
     const [west, south, east, north] = frame.bounds;
     const corners: [number, number][] = [
       [west, north],
@@ -53,14 +53,14 @@ export function createGeoImagePainter() {
       top = Math.min(top, point[1]);
       bottom = Math.max(bottom, point[1]);
     }
-    if (!Number.isFinite(left)) return;
+    if (!Number.isFinite(left)) return false;
     left = Math.max(0, Math.floor(left) - 2);
     top = Math.max(0, Math.floor(top) - 2);
     right = Math.min(width, Math.ceil(right) + 2);
     bottom = Math.min(height, Math.ceil(bottom) + 2);
     const dw = right - left,
       dh = bottom - top;
-    if (dw <= 0 || dh <= 0) return;
+    if (dw <= 0 || dh <= 0) return false;
     const scale = moving
       ? Math.min(1, 640 / Math.max(dw, dh))
       : Math.min(devicePixelRatio, 2, 1600 / Math.max(dw, dh));
@@ -106,6 +106,7 @@ export function createGeoImagePainter() {
     const target = buffer.getContext("2d")!;
     if (!image || image.width !== w || image.height !== h) image = target.createImageData(w, h);
     const output = image.data;
+    let visible=false;
     const {pixels, width: sourceWidth, height: sourceHeight} = frame;
     for (let y = 0; y < h; y++)
       for (let x = 0; x < w; x++) {
@@ -136,18 +137,22 @@ export function createGeoImagePainter() {
           output[outputOffset + 3] = 0;
           continue;
         }
+        visible=true;
         output[outputOffset] = pixels[p00] * a + pixels[p10] * b + pixels[p01] * c + pixels[p11] * d;
         output[outputOffset + 1] = pixels[p00 + 1] * a + pixels[p10 + 1] * b + pixels[p01 + 1] * c + pixels[p11 + 1] * d;
         output[outputOffset + 2] = pixels[p00 + 2] * a + pixels[p10 + 2] * b + pixels[p01 + 2] * c + pixels[p11 + 2] * d;
         output[outputOffset + 3] = alpha;
       }
-    target.putImageData(image, 0, 0);
     const previousAlpha = ctx.globalAlpha;
+    const alpha = previousAlpha * Math.max(0, Math.min(1, frame.opacity ?? 0.94));
+    if (!visible || !alpha) return false;
+    target.putImageData(image, 0, 0);
     const previousSmoothing = ctx.imageSmoothingEnabled;
-    ctx.globalAlpha = previousAlpha * Math.max(0, Math.min(1, frame.opacity ?? 0.94));
+    ctx.globalAlpha = alpha;
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(buffer, left, top, dw, dh);
     ctx.globalAlpha = previousAlpha;
     ctx.imageSmoothingEnabled = previousSmoothing;
+    return true;
   };
 }

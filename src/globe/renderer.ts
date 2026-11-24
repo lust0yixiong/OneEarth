@@ -1,3 +1,4 @@
+import type {PublishedRasterTarget} from "../domain/published-raster-observation";
 import {createViirsPainter,type ViirsRaster} from "./haina-viirs-painter";
 import {hainaBoundsOnScreen,type HainaViewport} from "./haina-viewport";
 import {pointInHainaFootprint,type HainaPatch} from "../domain/haina-published-raster";
@@ -66,7 +67,7 @@ import type {
 type PublicOverlay=Pick<Scene,"publicPoints"|"publicImage"|"publicRaster"|"publicSample"|"publicPick"|"publicPatches"|"publicViirs">;
 export type GlobeLayerRender=
   | (PublicOverlay & {id:string;kind:"public";selection:PublicLayerSelection})
-  | {id:string;kind:"field";selection:{id:string;frame:number};image?:GeoImageFrame|null;texture?:Uint8ClampedArray|null;rain?:RainTiles|null}
+  | {id:string;kind:"field";selection:{id:string;frame:number};image?:GeoImageFrame|null;publishedRaster?:PublishedRasterTarget;texture?:Uint8ClampedArray|null;rain?:RainTiles|null}
   | {id:string;kind:"wind";selection:VisualizationState}
   | {id:string;kind:"data";selection:DataView;filters:Filters;gridSelection:Selection|null};
 
@@ -93,6 +94,7 @@ export interface Scene {
   publicViirs?:ViirsRaster;
   fieldTexture?:Uint8ClampedArray|null;
   fieldImage?:GeoImageFrame|null;
+  fieldRaster?:PublishedRasterTarget;
   basemap?:GeoImageFrame|null;
   basemapId?:string;
   fieldRain?:RainTiles|null;
@@ -112,6 +114,7 @@ export interface Scene {
   dataView: DataView | null;
 }
 export interface FrameInfo {
+  paintedRasters?:PublishedRasterTarget[];
   publicPoints?:PublicLayerPoint[];
   publicMarkers?:{id:string;label:string;x:number;y:number}[];
   publicViewport?:HainaViewport;
@@ -345,6 +348,7 @@ export function createRenderer(
       layer.kind==="wind"&&layer.selection.color&&windData).length;
     const opacity=rasterCount>1?.66:1;
     const drawn:string[]=[];
+    const paintedRasters:PublishedRasterTarget[]=[];
     let visibleCells=0;
     ctx!.save();
     ctx!.beginPath();ctx!.rect(0,0,focusWidth,height);ctx!.clip();
@@ -356,7 +360,8 @@ export function createRenderer(
       if(frameImage){
         let painter=imagePainters.get(layer.id);
         if(!painter){painter=createGeoImagePainter();imagePainters.set(layer.id,painter);}
-        painter(ctx!,projection,frameImage,focusWidth,height,interacting);
+        const visible=painter(ctx!,projection,frameImage,focusWidth,height,interacting);
+        if(visible && layer.kind==="field" && layer.publishedRaster)paintedRasters.push(layer.publishedRaster);
         rendered=true;
       }
       if(layer.kind==="public"){
@@ -436,7 +441,7 @@ export function createRenderer(
     for(const id of imagePainters.keys())if(!stack.some(layer=>layer.id===id))imagePainters.delete(id);
     canvas.dataset.globeLayers=JSON.stringify(drawn);
     if(focus?.kind==="wind")visibleCells=windData?windManifest.width*windManifest.height:0;
-    return {visibleCells,loading:focus?.kind==="wind"&&!windData?"正在载入真实 GFS 风场…":""};
+    return {visibleCells,paintedRasters,loading:focus?.kind==="wind"&&!windData?"正在载入真实 GFS 风场…":""};
   }
 
   function draw() {
@@ -493,7 +498,7 @@ export function createRenderer(
     let coloredSelection: string | undefined;
     let productCell: FrameInfo["productCell"];
     let loading = "",
-      visibleCells = 0;
+      visibleCells = 0, paintedRasters:PublishedRasterTarget[]=[];
     const publicMarkers:FrameInfo["publicMarkers"]=[];
     const focusWidth=Math.max(1,width-(scene.rightInset||0));
     publicViewport=mapViewport(scene,focusWidth,height);
@@ -503,7 +508,7 @@ export function createRenderer(
     delete canvas.dataset.publicTileLevel;
     delete canvas.dataset.globeLayers;
     if(stack?.length){
-      ({visibleCells,loading}=drawStack(scene,stack,focusWidth,g,showMesh,publicMarkers));
+      ({visibleCells,loading,paintedRasters}=drawStack(scene,stack,focusWidth,g,showMesh,publicMarkers));
     } else if(scene.publicLayer){
       paint({type:"Sphere"},"#dcebf2","#9bb6c3");
       paint(land,"#f5f8f4","#b4c6bf");
@@ -538,7 +543,8 @@ export function createRenderer(
       paint({type:"Sphere"},"#dcebf2","#9bb6c3");
       paint(land,"#f5f8f4","#b4c6bf");
       if(scene.basemap)drawGeoImage(ctx!,projection,scene.basemap,width,height,interacting);
-      if(scene.fieldImage)drawGeoImage(ctx!,projection,scene.fieldImage,width,height,interacting);
+      if(scene.fieldImage && drawGeoImage(ctx!,projection,scene.fieldImage,focusWidth,height,interacting) && scene.fieldRaster)
+        paintedRasters.push(scene.fieldRaster);
       if(zoom<15)paint(graticule,null,"#bad0d7",0.55);
       drawPolitical?.(ctx!,projection,interacting?1:zoom);
       if(showMesh)drawGrid(ctx!,projection,center,g,width,height,zoom);
@@ -1003,7 +1009,7 @@ export function createRenderer(
         anchor = { x: p[0], y: p[1] };
     }
     const focusedPublic=stack?.find(layer=>layer.id===scene.datasetFocus&&layer.kind==="public");
-    onFrame({ publicPoints:focusedPublic?.kind==="public" ? focusedPublic.publicPoints : scene.publicPoints, publicMarkers, publicViewport, answerPins,clusterKeys, coloredProducts, coloredSelection, coverageSelection, productCell, gridLabel: g.label, level: band, visibleCells, loading, anchor });
+    onFrame({ paintedRasters, publicPoints:focusedPublic?.kind==="public" ? focusedPublic.publicPoints : scene.publicPoints, publicMarkers, publicViewport, answerPins,clusterKeys, coloredProducts, coloredSelection, coverageSelection, productCell, gridLabel: g.label, level: band, visibleCells, loading, anchor });
     canvas.dataset.painted = "true";
     canvas.dataset.focusWidth = String(width - (scene.rightInset || 0));
   }

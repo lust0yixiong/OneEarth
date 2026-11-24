@@ -1,3 +1,4 @@
+import {workspaceReceiptAdvances} from "./published-raster-observation";
 import type { Message } from "./types";
 import type { WorkspaceSnapshot } from "./store";
 
@@ -62,9 +63,10 @@ export function mergeMessages(existing: Message[], incoming: Message[]) {
   for (const message of incoming) {
     const previous = messages.get(message.id);
     const receipt=matchingWorkspaceReceipt(message);
+    const prior=previous && matchingWorkspaceReceipt(previous);
     if (!previous || (previous.failed && !message.failed) ||
       (previous.failed && previous.retry && message.failed && !message.retry && previous.replyTo===message.replyTo) ||
-      (receipt && previous.replyTo===message.replyTo && !matchingWorkspaceReceipt(previous))) {
+      (receipt && previous.replyTo===message.replyTo && (!prior || workspaceReceiptAdvances(prior,receipt)))) {
       messages.set(message.id, message);
       changed = true;
     }
@@ -125,7 +127,8 @@ export async function writeSession(
       const existing=records.get([id,message.id]);
       existing.onsuccess=()=>{
         const previous:Message|undefined=existing.result?.message;
-        if(previous && matchingWorkspaceReceipt(previous))return;
+        const prior=previous&&matchingWorkspaceReceipt(previous),next=matchingWorkspaceReceipt(message);
+        if(prior && (!next || !workspaceReceiptAdvances(prior,next)))return;
         records.put(row);
       };
     }

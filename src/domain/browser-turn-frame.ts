@@ -72,7 +72,7 @@ export function readBrowserBatch(s:State,reading?:WorkspaceSurfaceReading) {
 export function browserTurnFrame(
   s:State, reading:WorkspaceSurfaceReading|undefined, batch:CandidateSet|null, expanded:boolean, localBatchId:string|undefined,
 ):BrowserTurnFrame {
-  const panels:NonNullable<BrowserTurnFrame["panels"]>=[];
+  const capturedAt=Date.now(),panels:NonNullable<BrowserTurnFrame["panels"]>=[];
   if(s.chatOpen)panels.push("chat");
   if(reading?.panels?.inspector)panels.push("inspector");
   if(reading?.panels?.evidence)panels.push("evidence");
@@ -80,12 +80,16 @@ export function browserTurnFrame(
   if(reading?.panels?.layerMenu)panels.push("layer-menu");
   const layers=s.globeLayers.filter(layer=>safeId(layer.id)).slice(0,16).map(layer=>{
     const selection=text(layerSelection(layer).filter(v=>v!==undefined).join(" · "),160);
-    return {id:layer.id,label:text(layer.label,200)||layer.id,visible:layer.visible,...(selection?{selection}:{})};
+    const actual=layer.visible && reading?.rasterPresentations?.find(item=>item.datasetId===layer.id);
+    const presentation=actual ? {valueId:actual.valueId,publicationRevision:actual.publicationRevision,
+      state:actual.state,observedAt:actual.observedAt} : undefined;
+    return {id:layer.id,label:text(layer.label,200)||layer.id,visible:layer.visible,
+      ...(selection?{selection}:{}),...(presentation?{presentation}:{})};
   });
   const origin=batch?.resultBatch?.kind ?? (batch?.originKind==="catalog" ? "catalogue" :
     batch?.originKind==="research"||batch?.researchRecord ? "research" : "workspace");
   const answerId=batch?.resultBatch?.taskId ?? batch?.answerId ?? batch?.researchRecord?.messageId;
-  return {version:1,panels,
+  return {version:1,capturedAt,panels,
     ...(s.view==="earth" ? {globe:{layers,focusId:layers.some(layer=>layer.id===s.globeLayerFocus && layer.visible)
       ? s.globeLayerFocus : null}} : {}),
     ...(batch ? {batch:{...(batch.resultBatch ? {batchId:batch.resultBatch.batchId} : localBatchId ? {localBatchId} : {}),
@@ -113,6 +117,8 @@ export function browserTurnRelations(
     : s.messages.some(m=>m.role==="assistant" && m.id===candidate?.answerId) ? candidate?.answerId : undefined;
   append(sourceTask(citation),"reference");
   append(sourceTask(batch),"visible-batch");
+  const controls=s.messages.filter(m=>m.role==="assistant" && m.workspaceReceipt && m.workspaceEffect).slice(-2).reverse();
+  for(const item of controls)append(item.id,"workspace-action",item.replyTo);
   for(const active of inFlight)append(active.id,"in-flight",active.userMessageId);
   return related;
 }

@@ -47,6 +47,7 @@ import {resolveWorkspaceC40Publication} from "./workspace-c40-publication";
 import {resolveWorkspaceForestPublication} from "./workspace-forest-publication";
 import {resolveWorkspacePublishedLayer} from "./workspace-published-layer";
 import {runtimeTurnContext,boundTurnContext} from "./runtime-turn-context";
+import {refreshWorkspaceObservations} from "./runtime-workspace-state";
 import {discoveryResultBatch,gridCatalogueBatch} from "./runtime-result-batch";
 import {modelSafeValue,modelSafeText} from "./model-context-safety";
 import {runtimeTurnFingerprint,runtimeTurnHandoff,validRuntimeTurnHandoff,type RuntimeTurnInput,type RuntimeTurnHandoff,type RuntimeTurnOptions,type ForegroundTurnOutcome} from "./runtime-turn-handoff";
@@ -131,6 +132,13 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     const i=runTrace.calls.findIndex(old=>old.id===call.id);
     if(i<0)runTrace.calls.push(call);else runTrace.calls[i]=call;
     event({call,traceStarted:runTrace.started});
+  }
+  async function synthesisContext(){
+    const latest=await refreshWorkspaceObservations(tasks,turnContext);
+    if(latest.history.some(record=>record.execution.workspace.effectId))report({id:"workspace-observation-refresh",kind:"tool",name:"读取原操作的最新已存浏览器回执",input:"仅刷新已经核验归属的原操作回执，不替换冻结意图或浏览快照",status:"done",
+      output:JSON.stringify({frame:"原发问快照保持冻结",capturedAt:latest.browserObservations?.capturedAt,
+        operations:latest.history.filter(record=>record.execution.workspace.effectId).map(record=>({taskId:record.taskId,workspace:record.execution.workspace}))})});
+    return latest;
   }
   async function readCoverage(scope:typeof context) {
     const evidence = await questionGridEvidence(scope,coverage,signal);
@@ -748,7 +756,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       if(pinnedIds.length)report({id:"referenced-material",kind:"tool",name:"采用所引资料的已存内容",input:pinnedIds.join("、"),
         status:pinnedIds.every(id=>assetById.has(id))?"done":"partial",output:"已存资料身份 "+pinnedIds.filter(id=>assetById.has(id)).length+" 项；没有重新检索文献库或海纳。"});
       const reply=await modelReply(targetQuery,context,{message:summary,gridCoverage},history,executor,signal,
-        stage,pinnedPapers,"",undefined,undefined,report,{plan:turn,searches:readRuns,priorEvidence},currentAssertionReadings,{record:prior,searches:archived.searches},turnContext);
+        stage,pinnedPapers,"",undefined,undefined,report,{plan:turn,searches:readRuns,priorEvidence},currentAssertionReadings,{record:prior,searches:archived.searches},await synthesisContext());
       if(pinnedPapers.length)reply.paperRecords=literatureDisplay(pinnedPapers);
       reply.hainaRecords=pinnedIds.flatMap(id=>id.startsWith("haina:")?haina.records().filter(r=>String(r.id)===id.slice(6)):[]);
       if(reply.answerNotes)reply.answerNotes.elapsedMs=Date.now()-runTrace.started;
@@ -790,10 +798,12 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     report({...catalogCall,status:gridCoverage?.status==="unknown"?"partial":"done",output:result.message});
     {
       const paperTrace=retrieved!.sourceStatus.map(s=>s.source+" "+(s.status==="done"?"完成":s.status==="partial"?"部分完成":s.status==="not_requested"?"未请求":"未完成")+" · "+s.count+" 项").join("；");
+      const currentBatch=discoveryResultBatch(batchOwner,actualDiscoveryQuery||query,retrieved!);
+      event({resultBatch:currentBatch});
       const reply:DiscoveryResponse=await modelReply(decision?.dataQuestion||query,scopedContext,result,history,executor,signal,
         stage,retrieved!.papers,paperTrace,
-        !context.filters.source || context.filters.source==="constellation"?constellationFeed:undefined,retrieved,report,undefined,currentAssertionReadings,{record:prior,searches:archived.searches},turnContext);
-      reply.resultBatch=discoveryResultBatch(batchOwner,actualDiscoveryQuery||query,retrieved!);
+        !context.filters.source || context.filters.source==="constellation"?constellationFeed:undefined,retrieved,report,undefined,currentAssertionReadings,{record:prior,searches:archived.searches},await synthesisContext(),currentBatch);
+      reply.resultBatch=currentBatch;
       if(retrieved!.papers.length)reply.paperRecords=literatureDisplay(retrieved!.papers);
       reply.hainaRecords=retrieved!.haina.flatMap(asset=>{
         const recordId=Number(asset.datasetId.slice(6));

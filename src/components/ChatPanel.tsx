@@ -2,7 +2,7 @@ import { loadRemoteAssetIds } from "../domain/datasets";
 import {QuestionScope} from "./QuestionScope";
 import {ObservationCatalogueContext,usePublishedObservationCatalogue} from "./observation-catalogue";
 import {GridCoverageRecord} from "./GridCoverageRecord";
-import {isWorkspaceEffect} from "../domain/workspace-effect";
+import {isWorkspaceEffect,workspaceObservationLabel} from "../domain/workspace-effect";
 import {scopeKey} from "../domain/question-scope";
 import {useWebPreview} from "./use-web-preview";
 import {CopyButton,RunDetails} from "./RunDetails";
@@ -373,8 +373,16 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
               {hasCoverageRecord(m,questions.get(m.id)) && <GridCoverageRecord coverage={m.gridCoverage}/>}
               {isWorkspaceEffect(m.activity) && <div className="answer-reply-context">
                 <span>{m.activity?.scope}</span>
+                {m.workspaceReceipt?.observation && <span role="status" data-workspace-observation={m.workspaceReceipt.observation.state}>
+                  {workspaceObservationLabel(m.workspaceReceipt.observation.state,historyIds.has(m.id)||!!m.historicalReply)}
+                </span>}
                 <CopyButton text={new URL("?research="+m.id,location.href).href} label="复制操作记录链接"/>
               </div>}
+              {m.workspaceReceipt && "recovery" in m.workspaceReceipt && m.workspaceReceipt.recovery &&
+                <p className="answer-reply-context" role="status">
+                  {m.workspaceReceipt.recovery.message ||
+                    (m.workspaceReceipt.recovery.state==="running" ? "正在核对可行的下一步。" : "本轮未取得新的操作建议。")}
+                </p>}
               {(m.gridCoverage || (m.answerNotes && m.runTrace && !m.failed)) &&
                 <CopyButton text={new URL("?research="+m.id,location.href).href} label="复制研究记录链接"/>}
               {m.catalogMatch && !m.answerNotes && m.candidates?.ids.map(id => (

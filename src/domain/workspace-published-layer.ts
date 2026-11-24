@@ -1,3 +1,4 @@
+import type {DiscoveryResponse} from "./types";
 import {datasetLayers, globeCases, isForestDate} from "./regional-cases";
 
 /** Capabilities provided by the existing published-layer viewers. */
@@ -29,4 +30,23 @@ export function validWorkspacePublishedLayerAction(value: unknown): value is Wor
   return publishedWorkspaceLayerRecipes[action.datasetId].controlId==="city"
     ? /^[a-z0-9][a-z0-9-]{0,79}$/.test(action.valueId)
     : isForestDate(action.valueId);
+}
+
+
+/** Resolve the only layer identity that can be attributed to this particular operation. */
+export function workspaceObservationTarget(result: Pick<DiscoveryResponse,"workspaceLayerOpen"|"workspaceAction">|undefined) {
+  const opened=result?.workspaceLayerOpen;
+  const action=result?.workspaceAction;
+  let target=opened;
+  if(!target&&action?.kind==="set-control"){
+    const datasetId=(Object.keys(publishedWorkspaceLayerRecipes) as PublishedWorkspaceLayerId[]).find(id=>{
+      const recipe=publishedWorkspaceLayerRecipes[id];
+      return recipe.layerId===action.layerId&&recipe.controlId===action.controlId;
+    });
+    if(datasetId&&action.publicationRevision)target={kind:"open-published-layer",datasetId,valueId:action.valueId,
+      publicationRevision:action.publicationRevision};
+  }
+  if(!validWorkspacePublishedLayerAction(target))return;
+  const {datasetId,valueId,publicationRevision}=target;
+  return {datasetId,valueId,publicationRevision};
 }

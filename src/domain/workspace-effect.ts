@@ -1,5 +1,5 @@
 import type {EvidenceDocument,DiscoveryResponse} from "./types";
-import type {BrowserWorkspaceReceipt,WorkspaceEffect} from "./turn-context";
+import type {BrowserWorkspaceReceipt,WorkspaceEffect,WorkspaceObservation} from "./turn-context";
 import type {State} from "./store";
 import {datasetLayerFromView} from "./globe-dataset-layers";
 
@@ -76,5 +76,14 @@ export function workspaceReceiptDetail(state:BrowserWorkspaceReceipt["state"]|un
     case "stale": return "收到操作时工作台或当前轮次已变化，原浏览器未应用。";
     case "failed": return "原浏览器无法应用运行时提出的工作台操作。";
     default: return "此记录未保存原浏览器的应用回执。";
+  }
+}
+
+export function workspaceObservationLabel(state:WorkspaceObservation["state"],archived:boolean) {
+  switch(state){
+    case "rendered": return "图层已绘制在画布上";
+    case "load-failed": return "图层图像载入失败";
+    case "superseded": return "工作台已变化，停止等待本次图层";
+    default: return archived ? "当时尚未确认图层成像" : "等待图层在画布显示";
   }
 }

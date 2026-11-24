@@ -30,6 +30,7 @@ test("Chat receipt and research handoff retain identity while the existing worke
   const seen = new Map<string, number>();
   const resumed: string[] = [];
   const pending = latch();
+  let modelReviews=0;
   const chat = await runtimeChatChannel(app, tasks, async (_id, raw): Promise<ChatPreparation> => ({
     kind: "foreground",
     async run(id, signal, emit) {
@@ -45,7 +46,17 @@ test("Chat receipt and research handoff retain identity while the existing worke
       if (query !== "show next city") return {kind: "research", handoff: {query}};
       return {kind: "reply", payload: {result: {message: "next city", camera: {center: [116.4, 39.9], zoom: 165}}}};
     },
-  }));
+  }),async review=>{
+    modelReviews++;
+    assert.equal(review.original.query,"load published layer");
+    assert.equal(review.refusal.reason,"publication-unverified");
+    assert.equal(review.result.workspaceLayerOpen?.valueId,"shanghai-chn");
+    assert.equal(review.current.workspaceView.surface,"earth");
+    assert.ok(review.current.browserTurnFrame.capturedAt);
+    assert.equal(review.turnContext?.current.taskId,review.taskId);
+    await delay(30);
+    return {nextStep:"explain",message:"原城市图层未打开。请刷新发布目录，然后确认原城市。"};
+  });
   taskRoutes(app, "/api/tasks", tasks, () => undefined, {researchRecords: true, onCancelled: id => chat.cancel(id)});
   const stop = await workTasks(tasks, async task => {
     resumed.push(task.id);
@@ -121,7 +132,7 @@ test("Chat receipt and research handoff retain identity while the existing worke
   assert.deepEqual(tail.at(-1)?.result, cityRecord.result);
 
   const effect = {effectId: "workspace:" + city, conversationId, turnId: cityInput.turnId, state: "applied"};
-  const acknowledge = (body: typeof effect, id = city) => fetch(base + "/api/chat/messages/" + id + "/workspace-receipt", {
+  const acknowledge = (body: Record<string,unknown>, id = city) => fetch(base + "/api/chat/messages/" + id + "/workspace-receipt", {
     method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
   });
   assert.equal((await acknowledge({...effect, conversationId: randomUUID()})).status, 404);
@@ -195,6 +206,40 @@ test("Chat receipt and research handoff retain identity while the existing worke
   const reopened=await (await fetch(task(publishedId)+"/record")).json();
   assert.deepEqual(reopened.result.workspaceLayerOpen,publishedRecord.result.workspaceLayerOpen);
   assert.equal(reopened.workspaceReceipt.state,"applied");assert.equal(seen.get(publishedId),1);
+
+  const baseObservation={datasetId:"haina:1846639",valueId:"shanghai-chn",publicationRevision:"a".repeat(64),
+    observedAt:Date.now(),state:"loading"};
+  assert.equal((await acknowledge({...publishedReceipt,observation:{...baseObservation,valueId:"beijing-chn"}},publishedId)).status,404);
+  assert.equal((await acknowledge({...publishedReceipt,observation:baseObservation},publishedId)).status,200);
+  const rendered=await (await acknowledge({...publishedReceipt,observation:{...baseObservation,state:"rendered"}},publishedId)).json();
+  assert.equal(rendered.observation.state,"rendered");
+  assert.deepEqual(await (await acknowledge({...publishedReceipt,observation:baseObservation},publishedId)).json(),rendered);
+  assert.equal((await acknowledge({...publishedReceipt,observation:{...baseObservation,state:"load-failed"}},publishedId)).status,409);
+  assert.deepEqual((await (await fetch(task(publishedId)+"/record")).json()).workspaceReceipt,rendered);
+
+  const refused=randomUUID(),workspaceView={version:1,surface:"earth"},browserTurnFrame={version:1,capturedAt:Date.now(),
+    globe:{layers:[],focusId:null}};
+  const refusedInput={...input("load published layer"),context:{workspaceView,browserTurnFrame},history:[]};
+  assert.equal((await submit(refused,refusedInput)).status,202);
+  await until(async()=>(await tasks.get(refused))?.status==="complete");
+  const descriptor={effectId:"workspace:"+refused,conversationId,turnId:refusedInput.turnId};
+  const recover=(body:unknown)=>fetch(base+"/api/chat/messages/"+refused+"/workspace-recovery",{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),
+  });
+  const current={...descriptor,workspaceView,browserTurnFrame:{...browserTurnFrame,capturedAt:Date.now()}};
+  assert.equal((await recover(current)).status,409);
+  assert.equal((await acknowledge({...descriptor,state:"failed",reason:"publication-unverified"},refused)).status,200);
+  assert.equal((await recover({...current,workspaceView:{...workspaceView,surface:"discover"}})).status,409);
+  assert.equal((await recover({...current,browserTurnFrame:{...browserTurnFrame,capturedAt:Date.now()-31000}})).status,409);
+  const [firstRecovery,secondRecovery]=await Promise.all([recover(current),recover(current)]);
+  assert.equal(firstRecovery.status,200);assert.equal(secondRecovery.status,200);
+  assert.equal(modelReviews,1);
+  const recovery=await (await fetch(task(refused)+"/record")).json();
+  assert.equal(recovery.workspaceReceipt.state,"failed");assert.equal(recovery.workspaceReceipt.recovery.state,"complete");
+  assert.equal(recovery.workspaceReceipt.recovery.nextStep,"explain");
+  assert.equal((await audit.query("SELECT id FROM runtime_tasks WHERE id=$1",[refused])).rowCount,0);
+  assert.deepEqual(await (await recover(current)).json(),recovery.workspaceReceipt);
+  assert.equal(seen.get(refused),1);assert.equal(modelReviews,1);
 
   await chat.close();
   await tasks.chat.admit(interrupted, input("interrupted"), 4);

@@ -4,8 +4,10 @@ import {submissionFingerprint} from "./postgres-chat-messages";
 import {requestPerformance, type ExecutorTiming} from "./request-performance";
 import {TaskCancelled} from "./task-cancellation";
 import {TaskConflict, taskIdPattern, type Payload, type TaskStore} from "./task-store";
-import {validBrowserWorkspaceReceipt, type WorkspaceEffect} from "../src/domain/turn-context";
+import {validBrowserWorkspaceReceipt,validWorkspaceRecoveryInput,type WorkspaceEffect} from "../src/domain/turn-context";
 import type {DiscoveryResponse} from "../src/domain/types";
+import {runtimeTurnContext} from "./runtime-turn-context";
+import {reconcileWorkspaceRefusal} from "./workspace-recovery";
 
 export type ChatPreparation = {error: string} | {kind: "research"; checkpoint?: Payload} |
   {kind: "foreground"; run(id: string, signal: AbortSignal, emit: (event: Payload) => void): Promise<
@@ -29,10 +31,11 @@ function workspaceReply(id: string, payload: Payload): Payload {
 }
 
 export async function runtimeChatChannel(app: Router, tasks: TaskStore & {chat: PostgresChatMessages},
-  prepare: (id: string, input: unknown) => Promise<ChatPreparation>) {
+  prepare: (id: string, input: unknown) => Promise<ChatPreparation>, reconcile = reconcileWorkspaceRefusal) {
   const {chat} = tasks;
   await chat.acquire();
   const active = new Map<string, {controller: AbortController; done: Promise<void>}>();
+  const recoveries=new Map<AbortController,Promise<unknown>>();
   let stopping = false;
 
   function start(id: string, run: Extract<ChatPreparation, {kind: "foreground"}>["run"]) {
@@ -125,12 +128,51 @@ export async function runtimeChatChannel(app: Router, tasks: TaskStore & {chat: 
     }
   });
 
+  app.post("/api/chat/messages/:id/workspace-recovery",async (req,res)=>{
+    const id=String(req.params.id).toLowerCase();
+    if(!req.is("application/json")||!taskIdPattern.test(id)||!validWorkspaceRecoveryInput(req.body)){
+      res.status(400).json({error:"工作台复核格式无效。"});return;
+    }
+    if(stopping){res.status(503).json({error:"工作台正在关闭。"});return;}
+    const current=req.body;
+    const claim=await chat.claimWorkspaceRecovery(id,current);
+    if(!claim){res.status(409).json({error:"原操作或当前视图不符合复核条件。"});return;}
+    res.set("Cache-Control","no-store");
+    if(!("body" in claim)){res.json(claim.receipt);return;}
+    const {body,result,receipt}=claim;
+    const controller=new AbortController();
+    const abort=()=>controller.abort();
+    res.once("close",abort);
+    if(res.destroyed||stopping)abort();
+    const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(20000)]);
+    const recovery=(async()=>{
+      try{
+        signal.throwIfAborted();
+        const turnContext=await runtimeTurnContext(tasks,id,body);
+        const advice=await reconcile({taskId:id,original:body,result,refusal:receipt,current,turnContext},{signal});
+        signal.throwIfAborted();
+        return await chat.finishWorkspaceRecovery(id,advice);
+      }catch {
+        return await chat.finishWorkspaceRecovery(id);
+      }
+    })();
+    recoveries.set(controller,recovery);
+    try {
+      const finished=await recovery;
+      if(!res.destroyed)res.json(finished??receipt);
+    }finally{
+      recoveries.delete(controller);
+      res.off("close",abort);
+    }
+  });
+
   return {
     cancel(id: string) { active.get(id.toLowerCase())?.controller.abort(new TaskCancelled()); },
     async close() {
       stopping = true;
       for (const {controller} of active.values()) controller.abort();
-      await Promise.all([...active.values()].map(({done}) => done));
+      for(const controller of recoveries.keys())controller.abort();
+      await Promise.allSettled([...active.values()].map(({done})=>done).concat([...recoveries.values()].map(done=>done.then(()=>{}))));
     },
   };
 }

@@ -1,3 +1,4 @@
+import type {PublishedRasterPresentation} from "./published-raster-observation";
 import {caseById} from "./catalog";
 import {initialAccessSection} from "./data-access";
 import {assetById} from "./datasets";
@@ -16,6 +17,7 @@ export type WorkspacePanelReading = {
 export type WorkspaceSurfaceReading = {
   surface: View;
   camera?: Camera;
+  rasterPresentations?: PublishedRasterPresentation[];
   activeLayer?: WorkspaceViewContext["activeLayer"];
   case?: WorkspaceViewContext["case"];
   focus?: WorkspaceViewContext["focus"];

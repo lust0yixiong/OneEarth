@@ -1,14 +1,15 @@
 import {resolvePublishedFieldLayer,type PublishedFieldCatalogues} from "../components/published-field-layer";
-import {publishedWorkspaceLayerRecipes,validWorkspacePublishedLayerAction} from "./workspace-published-layer";
+import {publishedWorkspaceLayerRecipes,validWorkspacePublishedLayerAction,workspaceObservationTarget} from "./workspace-published-layer";
 import {boundResultBatch, browserPanelKey, browserTurnFrame, browserTurnRelations, previousChatAnswer, readBrowserBatch, resultBatchCandidates} from "./browser-turn-frame";
 import { datasetLayerFromView, decodeGlobeLayers, encodeGlobeLayers, focusedDatasetLayer, globeDatasetLayer, setDatasetLayer, type FieldLayerSelection, type GlobeDatasetLayer } from "./globe-dataset-layers";
 import {submitsWorkspaceFields, workspaceEffectActivity, workspaceEffectFor, workspaceReceiptDetail} from "./workspace-effect";
-import type {BrowserWorkspaceReceipt} from "./turn-context";
+import type {BrowserWorkspaceReceipt,WorkspaceReceipt,WorkspaceRejectionReason} from "./turn-context";
+import {samePublishedRaster,type PublishedRasterPresentation,type PublishedRasterTarget} from "./published-raster-observation";
 import {availableChatOperations, chatCandidateBatch, chatCandidateItems, chatCandidateKey, saveChatResearchList} from "./chat-workspace-operations";
 import {validWorkspaceOperationKind, workspaceCandidateOperationAllowed} from "./workspace-operations";
 import {projectWorkspaceView, workspaceActionState, type WorkspaceSurfaceReading, type WorkspacePanelReading} from "./workspace-view-projection";
 import {authorizesWorkspaceViewAction, workspaceViewActionAllowed, type WorkspaceViewPublication} from "./workspace-view-context";
-import { answeredClarificationIds, messageClarificationPrompt, discoveryClarificationResult, loadResearchRecord, openTaskEvents, chatMessagesPath, researchRecordId, cancelChatRequest, readWorkspaceReceipt, reportWorkspaceReceipt, isClarificationAttempt } from "./runtime-client";
+import { answeredClarificationIds, messageClarificationPrompt, discoveryClarificationResult, loadResearchRecord, openTaskEvents, chatMessagesPath, researchRecordId, cancelChatRequest, readWorkspaceReceipt, reportWorkspaceReceipt, requestWorkspaceRecovery, isClarificationAttempt } from "./runtime-client";
 import {clarificationAnswerText,validClarificationPrompt,type ClarificationAnswer} from "./clarification";
 import {datasetScope,mergeScope,scopedQuestionContext,scopeDetail,scopeLabel,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
@@ -554,7 +555,10 @@ async function loadInitialSession(): Promise<State> {
     const cachedResearch=researchId?state.messages.find(message=>message.id===researchId):undefined;
     const needsArchivedCatalogue=cachedResearch?.answerNotes?.references
       ?.some(reference=>reference.kind==="asset"&&reference.evidenceLevel==="catalogue-record");
-    if(researchId&&(!cachedResearch||needsArchivedCatalogue)){
+    const cachedReceipt=cachedResearch?.workspaceReceipt;
+    const needsReceipt=!!cachedResearch?.workspaceEffect && (!cachedReceipt || cachedReceipt.observation?.state==="loading" ||
+      cachedReceipt.reason==="publication-unverified" && (!("recovery" in cachedReceipt) || cachedReceipt.recovery?.state==="running"));
+    if(researchId&&(!cachedResearch||needsArchivedCatalogue||needsReceipt)){
       try{
         const saved=await loadResearchRecord(researchId);
         const reply=saved.result;
@@ -596,6 +600,13 @@ async function loadInitialSession(): Promise<State> {
           state.sessionId=saved.conversationId;
           state.messages=mergeMessages(stored?.messages||[],messages);
           await writeSession(state.sessionId,saved.question,captureWorkspace(state),state.messages);
+        }else if(needsReceipt && saved.conversationId===state.sessionId && saved.turnId===cachedResearch.replyTo){
+          const receipt=readWorkspaceReceipt(saved.workspaceReceipt,saved.id,saved.conversationId,saved.turnId);
+          if(receipt && receipt.effectId===cachedResearch.workspaceEffect?.effectId){
+            const updated={...cachedResearch,workspaceReceipt:receipt};
+            state.messages=mergeMessages(state.messages,[updated]);
+            await writeSession(state.sessionId,saved.question,undefined,[updated]);
+          }
         }
       }catch(error){
         state.sessionError=error instanceof Error?error.message:"研究记录暂时无法打开。";
@@ -1456,14 +1467,52 @@ function useWorkspaceValue(initialState: State) {
       update({cancelling:false,cancelError:error instanceof Error ? error.message : "暂时无法取消本轮。"});
     }
   },[publishChatProgress]);
-  const receiptUploads=useRef(new Set<string>());
+  const persistReceiptUpdate=useCallback(async(id:string,receipt:BrowserWorkspaceReceipt|WorkspaceReceipt)=>{
+    const session=receipt.conversationId;
+    const message=await readSessionMessage(session,id).catch(()=>null)
+      ?? (latest.current.sessionId===session ? latest.current.messages.find(m=>m.id===id) : undefined);
+    if(!message?.workspaceEffect || message.workspaceEffect.effectId!==receipt.effectId || message.replyTo!==receipt.turnId)return;
+    const updated={...message,workspaceReceipt:receipt};
+    dispatch({type:"messages",sessionId:session,messages:[updated]});
+    await recordWrite(writeSession(session,"",undefined,[updated]).then(()=>{
+      channel.current?.postMessage({sessionId:session,id});
+    }),()=>{
+      if(latest.current.sessionId===session)failedMessages.current.set(id,updated);
+    });
+  },[recordWrite]);
+  const receiptUploads=useRef(new Map<string,{key:string;done:Promise<WorkspaceReceipt|undefined>}>());
   const uploadReceipt=useCallback((id:string,receipt:BrowserWorkspaceReceipt)=>{
-    if(receiptUploads.current.has(id))return;
-    receiptUploads.current.add(id);
-    void reportWorkspaceReceipt(id,receipt).then(final=>{
-      if(!final)receiptUploads.current.delete(id);
-    },()=>receiptUploads.current.delete(id));
-  },[]);
+    const key=JSON.stringify(receipt),prior=receiptUploads.current.get(id);
+    if(prior?.key===key)return prior.done;
+    const done=Promise.resolve(prior?.done).then(()=>reportWorkspaceReceipt(id,receipt))
+      .catch(()=>undefined).then(async response=>{
+        if(!response?.settled && receiptUploads.current.get(id)?.key===key)receiptUploads.current.delete(id);
+        if(response?.receipt)await persistReceiptUpdate(id,response.receipt);
+        return response?.receipt;
+      });
+    receiptUploads.current.set(id,{key,done});
+    return done;
+  },[persistReceiptUpdate]);
+  const watchingRasters=useRef(new Map<string,{receipt:BrowserWorkspaceReceipt;version:number;ready:Promise<void>}>());
+  const observePublishedRasters=useCallback((presentations:PublishedRasterPresentation[])=>{
+    for(const [id,watch] of watchingRasters.current){
+      const start=watch.receipt.observation!;
+      const now=latest.current;
+      const superseded=now.sessionId!==watch.receipt.conversationId || serial.current!==watch.version || now.view!=="earth";
+      const observation=presentations.find(item=>samePublishedRaster(item,start));
+      const state=superseded ? "superseded" : observation?.state;
+      if(!state || state==="loading" || state==="rendered" && observation!.observedAt<start.observedAt)continue;
+      watchingRasters.current.delete(id);
+      const observedAt=state==="superseded" ? Date.now() : observation!.observedAt;
+      const receipt:BrowserWorkspaceReceipt={...watch.receipt,observation:{...start,state,observedAt}};
+      void watch.ready.then(async()=>{
+        void uploadReceipt(id,watch.receipt);
+        await persistReceiptUpdate(id,receipt);
+        await uploadReceipt(id,receipt);
+      }).catch(()=>{});
+    }
+  },[persistReceiptUpdate,uploadReceipt]);
+  useEffect(()=>{ observePublishedRasters([]); },[state.view,state.sessionId,observePublishedRasters]);
   useEffect(()=>{
     const session=state.sessionId;
     const resend=()=>{
@@ -1568,11 +1617,16 @@ function useWorkspaceValue(initialState: State) {
       };
       const version = serial.current;
       let effect:ReturnType<typeof workspaceEffectFor>;
-      const effectReceipt=(state:BrowserWorkspaceReceipt["state"]):BrowserWorkspaceReceipt|undefined =>
-        effect ? {effectId:effect.effectId,conversationId:session,turnId:attempt.userMessageId,state} : undefined;
+      const effectReceipt=(state:BrowserWorkspaceReceipt["state"],reason?:WorkspaceRejectionReason,target?:PublishedRasterTarget):BrowserWorkspaceReceipt|undefined =>
+        effect ? {effectId:effect.effectId,conversationId:session,turnId:attempt.userMessageId,state,
+          ...(state==="stale" ? {reason:"workspace-changed" as const} : reason ? {reason} : {}),
+          ...(state==="applied" && target ? {observation:{...target,state:"loading" as const,observedAt:Date.now()}} : {})} : undefined;
       const completeWorkspace=async (message:string,extra:Partial<Message>,receipt?:BrowserWorkspaceReceipt)=>{
-        await complete(message,{...extra,workspaceEffect:effect,workspaceReceipt:receipt});
-        if(receipt)uploadReceipt(delivery.id,receipt);
+        const ready=complete(message,{...extra,workspaceEffect:effect,workspaceReceipt:receipt});
+        if(receipt?.observation?.state==="loading")
+          watchingRasters.current.set(delivery.id,{receipt,version:serial.current,ready});
+        await ready;
+        if(receipt)void uploadReceipt(delivery.id,receipt);
       };
       let keepDelivery=false;
       let regionFlight:{id:string;camera:Camera;kind:"research-region"}|undefined;
@@ -1586,6 +1640,20 @@ function useWorkspaceValue(initialState: State) {
         const question = latestQuestion();
         return version===serial.current && (!question || question.id===attempt.userMessageId)
           && workspaceKey(ownCamera?{...now,camera:current.camera}:now)===attempt.workspaceKey;
+      };
+      const recoverUnverifiedPublication=async(receipt:BrowserWorkspaceReceipt|undefined)=>{
+        if(receipt?.reason!=="publication-unverified")return;
+        const saved=await uploadReceipt(delivery.id,receipt);
+        if(saved?.state!=="failed" || saved.reason!=="publication-unverified" || saved.recovery ||
+          latest.current.sessionId!==session || !workspaceCurrent())return;
+        const now=latest.current;
+        const {workspaceView,browserTurnFrame}=chatRequestSnapshot(now,chatCandidateBatch(now));
+        if(browserTurnFrame.capturedAt===undefined)return;
+        const result=await requestWorkspaceRecovery(delivery.id,{
+          effectId:receipt.effectId,conversationId:session,turnId:attempt.userMessageId,workspaceView,
+          browserTurnFrame:{...browserTurnFrame,capturedAt:browserTurnFrame.capturedAt},
+        },AbortSignal.timeout(125000)).catch(()=>undefined);
+        if(result?.recovery)await persistReceiptUpdate(delivery.id,result);
       };
       const receiveRegion=(region:ResearchRegion|null)=>{
         if(regionReceived || !isCurrent() || restoring)return;
@@ -1665,7 +1733,7 @@ function useWorkspaceValue(initialState: State) {
           const claimed=await claimWorkspaceEffect(session,delivery.id).catch(()=>null);
           if(!isCurrent() || claimed===false)return;
           if(claimed===null){
-            const receipt=effectReceipt("failed");
+            const receipt=effectReceipt("failed","local-storage-unavailable");
             await completeWorkspace("浏览器无法保存本轮操作。",{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,
               activity:workspaceEffectActivity(delivery.id,effect,"failed",r.message,"本地会话存储不可用，操作未提交。",receipt)},receipt);
             return;
@@ -1681,10 +1749,12 @@ function useWorkspaceValue(initialState: State) {
             : undefined;
           if(!isCurrent())return;
           const stale=!workspaceCurrent();
-          const receipt=effectReceipt(stale?"stale":selection?"applied":"failed");
+          const receipt=effectReceipt(stale?"stale":selection?"applied":"failed",
+            !selection && !stale ? (authorized?"publication-unverified":"unsupported-action") : undefined,
+            workspaceObservationTarget(r));
           if(selection && !stale)openFieldLayer(selection.field,selection);
           const message=stale ? "工作台已变化，本轮操作未应用。"
-            : selection ? "已在数据地球打开「"+publishedWorkspaceLayerRecipes[action.datasetId].title+"」 · "+selection.label+"。"
+            : selection ? "已在数据地球选择「"+publishedWorkspaceLayerRecipes[action.datasetId].title+"」 · "+selection.label+"。"
             : "当前发布目录无法验证该图层或选项，本轮未打开图层。";
           await completeWorkspace(message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,
             workspacePending:r.workspacePending,conversationContext:r.conversationContext,
@@ -1694,6 +1764,7 @@ function useWorkspaceValue(initialState: State) {
               selection&&!stale ? message+" 图层载入状态见球面。" : message,receipt),
             ...(stale ? {historicalReply:true} : {}),
           },receipt);
+          if(receipt?.reason==="publication-unverified")void recoverUnverifiedPublication(receipt);
           return;
         }
         if (r.workspaceOperation !== undefined) {
@@ -1793,7 +1864,7 @@ function useWorkspaceValue(initialState: State) {
             : stale ? "工作台已变化，本轮操作未应用。"
             : "当前视图无法应用这项操作。";
           const raster=action?.layerId==="forest" || action?.layerId==="c40";
-          const receipt=effectReceipt(stale?"stale":target?"applied":"failed");
+          const receipt=effectReceipt(stale?"stale":target?"applied":"failed",undefined,workspaceObservationTarget(r));
           await completeWorkspace(target && raster ? message+" 图层载入状态见球面。" : message, {id:delivery.id, replyTo:attempt.userMessageId,
             activity:workspaceEffectActivity(delivery.id,action,receipt?.state ?? (target?"applied":"not-applied"),r.message,
               target ? "已向浏览器控件提交「"+target.label+"」。"+(raster?"图层载入结果独立显示。":"") : message,receipt),
@@ -2174,7 +2245,7 @@ function useWorkspaceValue(initialState: State) {
         }
       }
     },
-    [add, inspectAsset, leaveDetail, patch, publishChatProgress,readWorkspaceSurface,uploadReceipt,rememberClarificationDelivery,openFieldLayer],
+    [add, inspectAsset, leaveDetail, patch, publishChatProgress,readWorkspaceSurface,uploadReceipt,rememberClarificationDelivery,openFieldLayer,chatRequestSnapshot,persistReceiptUpdate],
   );
   const attachScope=(...items:ScopeItem[])=>{
     const previous=latest.current.draftScope || [];
@@ -2381,7 +2452,7 @@ function useWorkspaceValue(initialState: State) {
     add,
     send,
     attachScope,confirmQuestion,answerClarification,cancelChat,
-    registerWorkspaceSurface, registerWorkspacePanel, noteManualNavigation,
+    registerWorkspaceSurface, registerWorkspacePanel, noteManualNavigation, observePublishedRasters,
     retry,recoverableClarifications,
     openCase,
     inspectAsset,

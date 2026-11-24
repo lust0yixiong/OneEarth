@@ -1,8 +1,10 @@
+import {validWorkspaceViewContext,type WorkspaceViewContext} from "./workspace-view-context";
+
 // Browser observations are separate from server-owned execution evidence.
 export type TurnRelation = {
   taskId: string;
   turnId?: string;
-  relation: "reply" | "reference" | "visible-batch" | "in-flight";
+  relation: "reply" | "reference" | "visible-batch" | "in-flight" | "workspace-action";
 };
 
 export type BrowserBatchRef = {
@@ -18,10 +20,11 @@ export type BrowserBatchRef = {
 
 export type BrowserTurnFrame = {
   version: 1;
+  capturedAt?: number;
   batch?: BrowserBatchRef;
   related?: TurnRelation[];
   globe?: {
-    layers: {id: string; label: string; visible: boolean; selection?: string}[];
+    layers: {id: string; label: string; visible: boolean; selection?: string; presentation?: BrowserLayerPresentation}[];
     focusId: string | null;
   };
   panels?: ("chat" | "inspector" | "evidence" | "research-lists" | "layer-menu")[];
@@ -52,25 +55,60 @@ export type WorkspaceEffect = {
   fields: string[];
 };
 
+export type BrowserLayerPresentation = {
+  valueId: string;
+  publicationRevision: string;
+  state: "loading" | "rendered" | "load-failed";
+  observedAt: number;
+};
+
+export type WorkspaceObservation = Omit<BrowserLayerPresentation,"state"> & {
+  datasetId: string;
+  state: BrowserLayerPresentation["state"] | "superseded";
+};
+
+export type WorkspaceRejectionReason = "workspace-changed" | "publication-unverified" | "unsupported-action" | "local-storage-unavailable";
 export type BrowserWorkspaceReceipt = {
   effectId: string;
   conversationId: string;
   turnId: string;
   state: "applied" | "stale" | "failed";
+  reason?: WorkspaceRejectionReason;
+  observation?: WorkspaceObservation;
 };
+
+export type WorkspaceRecoveryAdvice = {message:string;nextStep:"explain"|"ask-confirmation"|"unavailable"};
 
 export type WorkspaceReceipt = BrowserWorkspaceReceipt & {
   taskId: string;
   reportedAt: number;
+  observationReportedAt?: number;
+  recovery?: {state:"running"|"complete"|"failed";observedAt:number} & Partial<WorkspaceRecoveryAdvice>;
 };
 
+export type WorkspaceRecoveryInput = Pick<BrowserWorkspaceReceipt,"effectId"|"conversationId"|"turnId"> & {
+  workspaceView: WorkspaceViewContext;
+  browserTurnFrame: BrowserTurnFrame & {capturedAt:number};
+};
+
+function effectIdentity(value: Record<string,unknown>) {
+  return typeof value.effectId==="string" && value.effectId.startsWith("workspace:") &&
+    uuid(value.effectId.slice("workspace:".length)) && uuid(value.conversationId) && uuid(value.turnId);
+}
+
 export function validBrowserWorkspaceReceipt(value: unknown): value is BrowserWorkspaceReceipt {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const v=value as Partial<BrowserWorkspaceReceipt>;
-  return Object.keys(v).length===4 && typeof v.effectId==="string" &&
-    v.effectId.startsWith("workspace:") && uuid(v.effectId.slice("workspace:".length)) &&
-    uuid(v.conversationId) && uuid(v.turnId) &&
-    (v.state==="applied" || v.state==="stale" || v.state==="failed");
+  if(!object(value)||!keys(value,["effectId","conversationId","turnId","state","reason","observation"])||!effectIdentity(value))return false;
+  const {state,reason,observation}=value;
+  if(state==="applied")return reason===undefined&&(observation===undefined||validWorkspaceObservation(observation));
+  if(observation!==undefined)return false;
+  if(state==="stale")return reason===undefined||reason==="workspace-changed";
+  return state==="failed"&&(reason===undefined||reason==="publication-unverified"||reason==="unsupported-action"||reason==="local-storage-unavailable");
+}
+
+export function validWorkspaceRecoveryInput(value: unknown): value is WorkspaceRecoveryInput {
+  return object(value)&&keys(value,["effectId","conversationId","turnId","workspaceView","browserTurnFrame"])&&
+    effectIdentity(value)&&validWorkspaceViewContext(value.workspaceView)&&validBrowserTurnFrame(value.browserTurnFrame)&&
+    timestamp(value.browserTurnFrame.capturedAt);
 }
 
 const uuid = (value: unknown): value is string => typeof value==="string" &&
@@ -84,8 +122,24 @@ const object = (value: unknown): value is Record<string, unknown> =>
 const keys = (value: Record<string, unknown>, expected: string[]) =>
   Object.keys(value).every(key=>expected.includes(key));
 
+const timestamp=(value:unknown):value is number=>typeof value==="number"&&Number.isSafeInteger(value)&&value>0;
+const revision=(value:unknown)=>typeof value==="string"&&/^[a-f0-9]{64}$/.test(value);
+const presentationState=(value:unknown)=>value==="loading"||value==="rendered"||value==="load-failed";
+
+function validPresentation(value:unknown) {
+  return object(value)&&keys(value,["valueId","publicationRevision","state","observedAt"])&&identity(value.valueId)&&
+    revision(value.publicationRevision)&&presentationState(value.state)&&timestamp(value.observedAt);
+}
+
+export function validWorkspaceObservation(value:unknown): value is WorkspaceObservation {
+  return object(value)&&keys(value,["datasetId","valueId","publicationRevision","state","observedAt"])&&
+    identity(value.datasetId)&&identity(value.valueId)&&revision(value.publicationRevision)&&
+    (presentationState(value.state)||value.state==="superseded")&&timestamp(value.observedAt);
+}
+
 export function validBrowserTurnFrame(value: unknown): value is BrowserTurnFrame {
-  if(!object(value)||value.version!==1||!keys(value,["version","batch","related","globe","panels"]))return false;
+  if(!object(value)||value.version!==1||!keys(value,["version","capturedAt","batch","related","globe","panels"])||
+    value.capturedAt!==undefined&&!timestamp(value.capturedAt))return false;
   const {batch,related,globe,panels}=value;
   if(batch!==undefined&&(!object(batch)||!keys(batch,["batchId","localBatchId","answerId","title","visibleIds","origin","expanded"])||
     batch.batchId!==undefined&&!uuid(batch.batchId)||batch.answerId!==undefined&&!uuid(batch.answerId)||
@@ -98,12 +152,13 @@ export function validBrowserTurnFrame(value: unknown): value is BrowserTurnFrame
     typeof batch.origin!=="string"||!["research","catalogue","workspace","unknown"].includes(batch.origin)))return false;
   if(related!==undefined&&(!Array.isArray(related)||related.length>8||related.some(v=>
     !object(v)||!keys(v,["taskId","turnId","relation"])||!uuid(v.taskId)||v.turnId!==undefined&&!uuid(v.turnId)||
-    typeof v.relation!=="string"||!["reply","reference","visible-batch","in-flight"].includes(v.relation))))return false;
+    typeof v.relation!=="string"||!["reply","reference","visible-batch","in-flight","workspace-action"].includes(v.relation))))return false;
   if(globe!==undefined&&(!object(globe)||!keys(globe,["layers","focusId"])||
     globe.focusId!==null&&!identity(globe.focusId)||!Array.isArray(globe.layers)||globe.layers.length>16||
-    globe.layers.some(layer=>!object(layer)||!keys(layer,["id","label","visible","selection"])||
+    globe.layers.some(layer=>!object(layer)||!keys(layer,["id","label","visible","selection","presentation"])||
       !identity(layer.id)||!described(layer.label,200)||typeof layer.visible!=="boolean"||
-      layer.selection!==undefined&&!described(layer.selection,160))))return false;
+      layer.selection!==undefined&&!described(layer.selection,160)||
+      layer.presentation!==undefined&&(!layer.visible||!validPresentation(layer.presentation)))))return false;
   if(panels!==undefined&&(!Array.isArray(panels)||panels.length>5||panels.some(v=>
     typeof v!=="string"||!["chat","inspector","evidence","research-lists","layer-menu"].includes(v))))return false;
   return true;

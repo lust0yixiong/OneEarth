@@ -1,9 +1,38 @@
 import {createHash} from "node:crypto";
+import {isDeepStrictEqual} from "node:util";
 import type {Pool, PoolClient} from "pg";
 import {TaskConflict, taskIdPattern, type Payload, type Task} from "./task-store";
 import {validClarificationAnswer} from "../src/domain/clarification";
-import type {BrowserWorkspaceReceipt, WorkspaceReceipt} from "../src/domain/turn-context";
+import type {BrowserWorkspaceReceipt, WorkspaceReceipt, WorkspaceRecoveryInput, WorkspaceRecoveryAdvice} from "../src/domain/turn-context";
 import type {DiscoveryResponse} from "../src/domain/types";
+import {workspaceObservationTarget} from "../src/domain/workspace-published-layer";
+import type {RuntimeTurnInput} from "./runtime-turn-handoff";
+
+const sameReceiptIdentity = (id:string,body:RuntimeTurnInput,result:DiscoveryResponse|undefined,input:Pick<BrowserWorkspaceReceipt,"effectId"|"conversationId"|"turnId">) =>
+  input.conversationId===body.conversationId&&input.turnId===body.turnId&&result?.workspaceEffect?.state==="proposed"&&
+  input.effectId===result.workspaceEffect.effectId&&input.effectId==="workspace:"+id;
+
+function sameRecoveryWorkspace(body:RuntimeTurnInput, current:WorkspaceRecoveryInput, now:number) {
+  const original=body.context.workspaceView,previous=body.context.browserTurnFrame;
+  const {workspaceView:latest,browserTurnFrame:frame}=current;
+  if(!original||!previous?.capturedAt||frame.capturedAt<previous.capturedAt||frame.capturedAt<now-30000||frame.capturedAt>now+5000)return false;
+  const view=(value:typeof original)=>{
+    const {display:_display,activeLayer,...rest}=value;
+    if(!activeLayer)return rest;
+    const {display:_layerDisplay,...layer}=activeLayer;
+    return {...rest,activeLayer:layer};
+  };
+  const globe=(value:typeof previous.globe)=>value?{focusId:value.focusId,
+    layers:value.layers.map(({presentation:_presentation,...layer})=>layer)}:undefined;
+  return isDeepStrictEqual(view(original),view(latest))&&isDeepStrictEqual(globe(previous.globe),globe(frame.globe));
+}
+
+function workspaceReceiptView(receipt:WorkspaceReceipt|undefined) {
+  if(receipt?.recovery?.state==="running"&&Date.now()-receipt.recovery.observedAt>40000)
+    return {...receipt,recovery:{...receipt.recovery,state:"failed" as const}};
+  return receipt;
+}
+
 
 type ChatStatus = "planning" | "handed_off" | "complete" | "failed" | "cancelled";
 type ChatRow = Omit<Task, "status"> & {status: ChatStatus};
@@ -79,34 +108,72 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
     await write(db, id, payload, now);
     return true;
   }
+  async function getReceipt(db:Pool|PoolClient,id:string) {
+    return (await db.query<{receipt:WorkspaceReceipt}>("SELECT receipt FROM runtime_workspace_receipts WHERE task_id=$1",[id])).rows[0]?.receipt;
+  }
+  async function lockWorkspaceReply(db:PoolClient,id:string) {
+    const {rows:[saved]}=await db.query<{body:string;terminal:Payload}>(
+      "SELECT body,terminal FROM runtime_chat_messages WHERE id=$1 AND status='complete' FOR UPDATE",[id]);
+    if(saved)return {body:JSON.parse(saved.body) as RuntimeTurnInput,result:saved.terminal?.result as DiscoveryResponse|undefined};
+  }
+  async function updateReceipt(db:PoolClient,id:string,receipt:WorkspaceReceipt) {
+    await db.query("UPDATE runtime_workspace_receipts SET receipt=$2 WHERE task_id=$1",[id,receipt]);
+    return receipt;
+  }
   return {
     async existing(db: PoolClient, id: string) { const row = await find(db, id); return row && view(row); },
     async get(id: string) { const row = await find(pool, id); return row && view(row); },
     async terminal(id: string) {
       return (await pool.query<{terminal: Payload | null}>("SELECT terminal FROM runtime_chat_messages WHERE id=$1", [id])).rows[0]?.terminal ?? undefined;
     },
-    async workspaceReceipt(id: string) {
-      return (await pool.query<{receipt: WorkspaceReceipt}>(
-        "SELECT receipt FROM runtime_workspace_receipts WHERE task_id=$1", [id])).rows[0]?.receipt;
+    async workspaceReceipt(id:string) {
+      return workspaceReceiptView(await getReceipt(pool,id));
     },
-    async recordWorkspaceReceipt(id: string, input: BrowserWorkspaceReceipt) {
-      return transaction(async db => {
-        const {rows: [saved]} = await db.query<{body: string; terminal: Payload}>(
-          "SELECT body,terminal FROM runtime_chat_messages WHERE id=$1 AND status='complete' FOR UPDATE", [id]);
-        if (!saved) return;
-        const {conversationId, turnId} = JSON.parse(saved.body);
-        const effect = (saved.terminal?.result as DiscoveryResponse | undefined)?.workspaceEffect;
-        if (input.conversationId !== conversationId || input.turnId !== turnId ||
-            effect?.state !== "proposed" || input.effectId !== effect.effectId || input.effectId !== "workspace:" + id) return;
-        const {rows: [previous]} = await db.query<{receipt: WorkspaceReceipt}>(
-          "SELECT receipt FROM runtime_workspace_receipts WHERE task_id=$1", [id]);
-        if (previous) {
-          if (previous.receipt.state !== input.state) throw new TaskConflict("本轮操作已有一份不同结果的回执。");
-          return previous.receipt;
+    async recordWorkspaceReceipt(id:string,input:BrowserWorkspaceReceipt) {
+      return transaction(async db=>{
+        const saved=await lockWorkspaceReply(db,id);
+        if(!saved||!sameReceiptIdentity(id,saved.body,saved.result,input))return;
+        const observation=input.observation,now=Date.now();
+        if(observation){
+          const target=workspaceObservationTarget(saved.result);
+          if(!target||observation.datasetId!==target.datasetId||observation.valueId!==target.valueId||
+             observation.publicationRevision!==target.publicationRevision||observation.observedAt>now+10000)return;
         }
-        const receipt: WorkspaceReceipt = {...input, taskId: id, reportedAt: Date.now()};
-        await db.query("INSERT INTO runtime_workspace_receipts(task_id,receipt) VALUES($1,$2)", [id, receipt]);
+        const prior=await getReceipt(db,id);
+        if(prior){
+          if(prior.state!==input.state||input.reason!==undefined&&prior.reason!==input.reason)
+            throw new TaskConflict("本轮操作已有一份不同结果的回执。");
+          if(!observation||prior.observation?.state===observation.state||
+             observation.state==="loading"&&prior.observation)return workspaceReceiptView(prior);
+          if(prior.observation&&prior.observation.state!=="loading")
+            throw new TaskConflict("图层已经记录了最终显示结果。");
+          if(prior.observation&&observation.observedAt<prior.observation.observedAt)return workspaceReceiptView(prior);
+          return updateReceipt(db,id,{...prior,observation,observationReportedAt:now});
+        }
+        const receipt:WorkspaceReceipt={...input,taskId:id,reportedAt:now,...(observation?{observationReportedAt:now}:{})};
+        await db.query("INSERT INTO runtime_workspace_receipts(task_id,receipt) VALUES($1,$2)",[id,receipt]);
         return receipt;
+      });
+    },
+    async claimWorkspaceRecovery(id:string,input:WorkspaceRecoveryInput) {
+      return transaction(async db=>{
+        const saved=await lockWorkspaceReply(db,id);
+        if(!saved?.result||!sameReceiptIdentity(id,saved.body,saved.result,input)||!workspaceObservationTarget(saved.result))return;
+        const prior=await getReceipt(db,id),now=Date.now();
+        if(prior?.state!=="failed"||prior.reason!=="publication-unverified")return;
+        if(prior.recovery)return {receipt:workspaceReceiptView(prior)!};
+        if(now-prior.reportedAt>30000||!sameRecoveryWorkspace(saved.body,input,now))return;
+        const receipt=await updateReceipt(db,id,{...prior,recovery:{state:"running",observedAt:input.browserTurnFrame.capturedAt}});
+        return {...saved,result:saved.result,receipt};
+      });
+    },
+    async finishWorkspaceRecovery(id:string,advice?:WorkspaceRecoveryAdvice) {
+      return transaction(async db=>{
+        if(!await lockWorkspaceReply(db,id))return;
+        const prior=await getReceipt(db,id);
+        if(prior?.recovery?.state!=="running")return prior;
+        return updateReceipt(db,id,{...prior,recovery:{observedAt:prior.recovery.observedAt,
+          ...(advice?{state:"complete",...advice}:{state:"failed"})}});
       });
     },
     async latestCompleted(conversationId: string) {

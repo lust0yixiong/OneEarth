@@ -1,3 +1,4 @@
+import {samePublishedRaster,type PublishedRasterPresentation,type PublishedRasterTarget} from "../domain/published-raster-observation";
 import {c40CityFlight} from "../domain/globe-dataset-layers";
 import { createPortal } from "react-dom";
 import {HainaPublicLayerLegend} from "./HainaPublicLayerLegend";
@@ -104,6 +105,17 @@ function layerControl(id: string, label: string, options: WorkspaceViewChoice[],
   return current ? [{id, label, options, current, ordered}] : [];
 }
 
+function rasterSelection(id:string,cities:ReturnType<typeof useC40Layer>,dates:ReturnType<typeof useForestLayer>) {
+  if(id==="c40" && cities.city && cities.revision) return {
+    target:{datasetId:datasetLayers.c40,valueId:cities.city.id,publicationRevision:cities.revision},
+    image:cities.image, failed:cities.frameError,
+  };
+  if(id==="forest" && dates.frame && dates.revision) return {
+    target:{datasetId:datasetLayers.forest,valueId:dates.frame.date,publicationRevision:dates.revision},
+    image:dates.image, failed:dates.imageError,
+  };
+}
+
 export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost}:{
   haina:HainaPublicLayer;onLayerHaina?:(haina:HainaPublicLayer|null)=>void;rightInset?:number;toolsHost?:HTMLElement|null;
 }) {
@@ -113,7 +125,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
     setFilters,
     attachScope,
     openVisualization,inspectAsset,inspectCandidates,flyToGrid,focusAnswerEvidence,flyToEvidence,flyToResearchRegion,
-    leaveDetail, registerWorkspaceSurface, noteManualNavigation, focusGlobeLayer, setGlobeLayerVisible,
+    leaveDetail, registerWorkspaceSurface, noteManualNavigation, focusGlobeLayer, setGlobeLayerVisible, observePublishedRasters,
   } = useWorkspace();
   const stackMode=s.globeLayers.length>0;
   const visibleLayers=useMemo(()=>s.globeLayers.filter(layer=>layer.visible),[s.globeLayers]);
@@ -164,6 +176,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
   const hainaManifest=haina.catalogue.manifest;
   const viirsPublication=hainaManifest?.mode==="viirs"?hainaManifest:undefined;
   const hainaCoverage=hainaManifest?.mode==="coverage"?hainaManifest:undefined;
+  const paintedRasters=useRef<{targets:PublishedRasterTarget[];at:number}>({targets:[],at:0});
   const [frame,setFrame]=useState<FrameInfo>({gridLabel:"H3 R2",level:2,visibleCells:0,loading:"",anchor:null});
   const legacyViirs=useHainaViirsTiles(!stackMode?viirsPublication:undefined,frame.publicViewport);
   const viirs=focusedResource?.kind==="public"?focusedResource.viirs:legacyViirs;
@@ -296,6 +309,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
     if(target && hainaCoverage && target.id!==haina.patch?.id)chooseHainaPatch(target.id);
     else if(hainaView?.kind!=="points")setHainaSample({view:hainaView,point});
   };
+  const rasterInputs:NonNullable<ReturnType<typeof rasterSelection>>[]=[];
   const drawLayers=stackMode?visibleLayers.map((entry):GlobeLayerRender=>{
     if(entry.kind==="public"){
       const loaded=resources.get(entry.id)?.resource;
@@ -310,14 +324,28 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
     if(entry.kind==="field"){
       const loaded=resources.get(entry.id)?.resource;
       const ready=loaded?.kind==="field"&&loaded.selection===entry.selection?loaded:undefined;
+      const raster=ready && rasterSelection(entry.selection.id,ready.c40,ready.forest);
+      if(raster)rasterInputs.push(raster);
       return {id:entry.id,kind:entry.kind,selection:ready?.layer??entry.selection,
-        image:ready?.forest.image??ready?.c40.image,texture:ready?.fieldData.texture,rain:ready?.fieldData.field?.rain};
+        publishedRaster:raster?.target,image:ready?.forest.image??ready?.c40.image,texture:ready?.fieldData.texture,rain:ready?.fieldData.field?.rain};
     }
     return entry;
   }):undefined;
+  const legacyRaster=!stackMode && layer && rasterSelection(layer.id,c40,forest);
+  if(legacyRaster)rasterInputs.push(legacyRaster);
+  const presentRasters=():PublishedRasterPresentation[]=>rasterInputs.flatMap<PublishedRasterPresentation>(({target,image,failed})=>{
+    const last=paintedRasters.current;
+    if(failed)return [{...target,state:"load-failed",observedAt:Date.now()} as const];
+    if(!image)return [{...target,state:"loading",observedAt:Date.now()} as const];
+    return last.targets.some(item=>samePublishedRaster(item,target))
+      ? [{...target,state:"rendered",observedAt:last.at} as const] : [];
+  });
+  const rasterReading=useRef(presentRasters);
+  rasterReading.current=presentRasters;
+  useEffect(()=>observePublishedRasters(presentRasters()));
   const scene={...s,datasetLayers:drawLayers,datasetFocus:s.globeLayerFocus,researchRegion:publicLayer?null:s.researchRegion,publicPoints,publicImage,publicRaster,publicSample,publicPick,
     publicPatches:hainaCoverage?.patches,publicViirs:viirs.raster,catalogStyle:distributionStyle,rightInset,windTheme,answerReferences,
-    fieldTexture:fieldData.texture,fieldImage,fieldRain:fieldData.field?.rain,basemap:basemapFrame,basemapId:basemapId??undefined};
+    fieldTexture:fieldData.texture,fieldImage,fieldRaster:legacyRaster?legacyRaster.target:undefined,fieldRain:fieldData.field?.rain,basemap:basemapFrame,basemapId:basemapId??undefined};
   const latest=useRef(scene);
   latest.current=scene;
   const c = caseById(s.caseId);
@@ -372,9 +400,16 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
               : { selection },
           );
         },
-        setFrame,
+        (frame)=>{
+          paintedRasters.current={targets:frame.paintedRasters ?? [],at:Date.now()};
+          observePublishedRasters(rasterReading.current());
+          setFrame(frame);
+        },
         windCanvas.current || undefined,
-        (error) => patch({ error: error?.message || null }),
+        (error)=>{
+          if(error)paintedRasters.current={targets:[],at:0};
+          patch({error:error?.message || null});
+        },
         setHover,
         noteManualNavigation,
       );
@@ -388,7 +423,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
         error: e instanceof Error ? e.message : "数据地球暂时无法绘制。",
       });
     }
-  }, [patch,noteManualNavigation]);
+  }, [patch,noteManualNavigation,observePublishedRasters]);
   useEffect(()=>{if(s.flight)renderer.current?.flyTo(s.flight.camera);else renderer.current?.stopFlight();},[s.flight?.id]);
   // A place flight only moves the camera; keep a labeled, pulsing pin on the target
   // so the destination is visible without changing the research region layer.
@@ -690,6 +725,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
   }
   useLayoutEffect(() => registerWorkspaceSurface(() => {
     let activeLayer: WorkspaceViewContext["activeLayer"];
+    const rasterPresentations=presentRasters();
     if (publicLayer) {
       activeLayer = {id:"haina-"+publicLayer.id,title:hainaManifest?.title??"海纳公开图层",datasetId:"haina:"+publicLayer.id,
         status:haina.catalogue.error||haina.data?.error||viirs.failed||hainaCoverage&&(!hainaView||hainaView.kind==="patch"&&!hainaView.image)
@@ -735,7 +771,8 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
           {label: "快照日期", value: manifest.snapshot},
           ...(matchMedia("(max-width: 600px)").matches ? [] :
             [{label: "当前城市的多边形中心", value: city.samples.toLocaleString()}]),
-          {label: "城市图层", value: c40.image ? "已显示" : c40.frameError ? "切片载入失败" : "正在加载"},
+          {label: "城市图层", value: c40.frameError ? "切片载入失败" : rasterPresentations.some(p=>p.datasetId===datasetLayers.c40 && p.state==="rendered")
+            ? "已绘制在画布上" : c40.image ? "图像已读取，尚未确认当前画布显示" : "正在加载"},
           {label: "颜色图例", value: "R · PC1，G · PC2，B · PC3"},
         ];
         activeLayer.controls = [{id:"city",label:"C40 城市",current,options,ordered:true,
@@ -752,7 +789,8 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
           {label: "原网格", value: grid.resolution + "°"},
           {label: "当前日期", value: forest.date},
           {label: "已发布日期范围", value: stages[0].date+" 至 "+stages[stages.length-1].date},
-          {label: "日期图层", value: forest.image ? "已载入" : forest.imageError ? "载入失败" : forest.frame ? "正在加载" : "当日无数据"},
+          {label: "日期图层", value: forest.imageError ? "载入失败" : rasterPresentations.some(p=>p.datasetId===datasetLayers.forest && p.state==="rendered")
+            ? "已绘制在画布上" : forest.image ? "图像已读取，尚未确认当前画布显示" : forest.frame ? "正在加载" : "当日无数据"},
           {label: "颜色图例", value: ["R", "G", "B"].map((channel, index) =>
             channel + " · PC" + (index + 1) + " " + (embedding.variance[index]*100).toFixed(1) + "%").join("，")},
           {label: "播放状态", value: animate ? "播放中" : "已暂停"},
@@ -796,7 +834,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
         controls: [{id: "content", label: "当前内容", current: {id: detail.kind, label: summary}, options: [], ordered: false}]};
     }
     return {
-      surface: "earth", camera: renderer.current?.currentCamera(), activeLayer, applyControl, resolvePublishedChoice,
+      surface: "earth", camera: renderer.current?.currentCamera(), activeLayer, applyControl, resolvePublishedChoice,rasterPresentations,
       panels: {layerMenu:basemapOpen},candidateBatch:gridList??undefined,candidateListExpanded:!!gridList&&!s.evidence,
       display: [{label: "视野中心的界面标注", value: orientation.label},
         ...(!activeLayer && catalogMode ? [{label: "分布方式", value: distributionModes[distributionStyle].label}] : [])],

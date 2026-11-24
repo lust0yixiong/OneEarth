@@ -25,16 +25,18 @@ const respond={decide:{kind:"respond",targets:[],reply:"仅依据当前显示和
 async function fixture(t:TestContext){
   const dir=mkdtempSync(path.join(tmpdir(),"oe-provenance-model-")),log=path.join(dir,"calls.jsonl"),reply=path.join(dir,"reply.json");
   const oldPath=process.env.PATH,oldUrl=process.env.ONEEARTH_DISCOVERY_URL,oldProtocol=process.env.ONEEARTH_DISCOVERY_PROTOCOL,originalFetch=globalThis.fetch;
-  writeFileSync(path.join(dir,"codex"),`#!${process.execPath}\nimport fs from 'node:fs';let prompt='';for await(const chunk of process.stdin)prompt+=chunk;fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({prompt})+'\\n');process.stdout.write(fs.readFileSync(${JSON.stringify(reply)},'utf8'));\n`,{mode:0o700});
+  writeFileSync(path.join(dir,"codex"),`#!${process.execPath}\nimport fs from 'node:fs';let prompt='';for await(const chunk of process.stdin)prompt+=chunk;fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({prompt})+'\\n');const r=JSON.parse(fs.readFileSync(${JSON.stringify(reply)},'utf8'));process.stdout.write(JSON.stringify(r.__phases?(prompt.startsWith('仅做本轮')?r.planning:prompt.startsWith('你负责决定同一轮研究任务')?r.evidence:r.synthesis):r));\n`,{mode:0o700});
   process.env.PATH=dir+path.delimiter+oldPath;delete process.env.ONEEARTH_DISCOVERY_PROTOCOL;
+  let complete=false,fail=false,onDiscovery:undefined|(()=>void);
   const requests:any[]=[],app=express();app.use(express.json({type:"application/a2a+json"}));
   app.post("/message:send",(req,res)=>{
     const data=req.body.message.parts[0].data;requests.push(structuredClone(data));
+    onDiscovery?.();if(fail){res.status(503).json({error:{code:503,message:"controlled upstream unavailable"}});return;}
     const sourceRead=data.kind==="oneearth.source.read.v1",event=sourceRead?{sourceReadResult:{papers:[],searches:[],issues:[]}}:
       {result:{plan:{questionMode:"preserve",dataQuestion:data.input.query,paper:{name:"",facets:[],region:[]},web:[],hainaQueries:["actual-channel-term"],dataNeed:null},
-        clarification:"请补一个范围条件。",clarificationOptions:[],papers:[],haina:[],searches:[],
+        ...(!complete?{clarification:"请补一个范围条件。",clarificationOptions:[]}:{}),papers:[],haina:[],searches:[],
         sourceStatus:[{source:discoverySourceNames.haina,status:"done",count:0}],issues:[]}};
-    res.type("application/a2a+json").json({task:{id:randomUUID(),contextId:randomUUID(),status:{state:sourceRead?"TASK_STATE_COMPLETED":"TASK_STATE_INPUT_REQUIRED"},
+    res.type("application/a2a+json").json({task:{id:randomUUID(),contextId:randomUUID(),status:{state:sourceRead||complete?"TASK_STATE_COMPLETED":"TASK_STATE_INPUT_REQUIRED"},
       artifacts:[{artifactId:randomUUID(),parts:[{data:{kind:"oneearth.discovery.event.v1",event:{seq:1,...event}}}]}]}});
   });
   const server=app.listen(0,"127.0.0.1");await once(server,"listening");const address=server.address();assert.ok(address&&typeof address!=="string");
@@ -46,7 +48,8 @@ async function fixture(t:TestContext){
   function body(query:string,extra:Partial<RuntimeTurnInput>={}):RuntimeTurnInput{return {query,conversationId:randomUUID(),turnId:randomUUID(),context:context(),history:[],config:{executor:"codex",model:""},...extra};}
   function calls(){try{return readFileSync(log,"utf8").trim().split("\n").filter(Boolean).map(line=>JSON.parse(line) as {prompt:string});}catch{return [];}}
   function save(id:string,input:RuntimeTurnInput,result:DiscoveryResponse){tasks.submit(id,input);tasks.claim();tasks.finish(id,"complete",{result});}
-  return {tasks,services,requests,body,calls,save,set:(decision:unknown)=>writeFileSync(reply,JSON.stringify(decision)),payload:()=>JSON.parse(calls().at(-1)!.prompt.split(marker)[1])};
+  return {tasks,services,requests,body,calls,save,set:(decision:unknown)=>writeFileSync(reply,JSON.stringify(decision)),payload:()=>JSON.parse(calls().at(-1)!.prompt.split(marker)[1]),
+    completeDiscovery(callback?:()=>void){complete=true;onDiscovery=callback;},failDiscovery(){fail=true;}};
 }
 
 test("the real foreground prompt binds old query/conditions to its batch, independently of the new visible view",async t=>{
@@ -120,4 +123,39 @@ test("batch metadata separates original question, attempted channel terms and ac
   material.sourceStatus[0].status="not_requested";const unattempted=discoveryResultBatch(owner(),"原问",material);assert.ok(!unattempted.conditions?.some(value=>value.includes("actual-haina-term")));
   const catalogue=gridCatalogueBatch(owner(),"原目录问题",["exact-A"],"a".repeat(64),true);assert.equal(catalogue.kind,"catalogue");assert.deepEqual(catalogue.itemIds,["exact-A"]);
   assert.match(catalogue.conditions![1],/没有新发现委托或原文读取/);
+});
+
+test("the actual planner sees held loading and a subsequent synthesis sees its late receipt plus the same newly archived batch",async t=>{
+  const f=await fixture(t),old=owner(),original=f.body("旧来源旧地区目录查询",{conversationId:old.conversationId,turnId:old.turnId}),effectId="workspace:"+old.taskId,revision="a".repeat(64);
+  f.save(old.taskId,original,{message:"原答复不是执行依据",workspaceEffect:{effectId,state:"proposed",fields:["workspaceLayerOpen"]},workspaceLayerOpen:{kind:"open-published-layer",datasetId:"haina:1846639",valueId:"shanghai-chn",publicationRevision:revision},
+    resultBatch:{...old,kind:"research",status:"complete",query:original.query,conditions:["旧来源策略与旧地区"],channels:[{source:"旧来源",status:"done",count:1}],itemIds:["haina:old"]}});
+  let receipt:import("../src/domain/turn-context").WorkspaceReceipt={taskId:old.taskId,effectId,turnId:old.turnId,conversationId:old.conversationId,state:"applied",reportedAt:100,
+    observation:{datasetId:"haina:1846639",valueId:"shanghai-chn",publicationRevision:revision,state:"loading",observedAt:110}};
+  f.services.tasks.workspaceReceipt=async()=>receipt;
+  const current=f.body("本轮独立的新目录问题",{conversationId:old.conversationId,previousTaskId:old.taskId});current.context.browserTurnFrame={version:1,capturedAt:200,
+    batch:{answerId:old.taskId,batchId:old.batchId,title:"原批",origin:"research",visibleIds:["haina:old"]},
+    globe:{focusId:"haina:1846639",layers:[{id:"haina:1846639",label:"当前北京",visible:true,presentation:{valueId:"beijing-chn",publicationRevision:revision,state:"rendered",observedAt:190}}]}};
+  f.completeDiscovery(()=>{receipt={...receipt,observation:{...receipt.observation!,state:"rendered",observedAt:300},observationReportedAt:310};});
+  f.set({__phases:true,planning:{decide:{kind:"search",goal:"本轮独立研究目标",targets:[]}},evidence:{action:"answer",reason:"实际渠道结果已清楚",gap:null,targets:[],clarification:null},
+    synthesis:{message:"本次目录查询没有匹配条目；历史材料另属原范围。",sections:[],limitation:"没有读取原始文件。",followUp:"",researchNotes:[],calculationRequests:[]}});
+  const id=randomUUID(),front=await runForegroundTurn(f.services,id,current,new AbortController().signal,()=>{});assert.equal(front.kind,"research");if(front.kind!=="research")return;
+  const planner=JSON.parse(f.calls()[0].prompt.split(marker)[1]);assert.equal(planner.turnContext.history[0].execution.workspace.receipt.observation.state,"loading");assert.equal(planner.turnContext.history[0].execution.workspace.atSubmission.sameTarget,false);
+  const frozen=JSON.stringify(front.checkpoint.turnContext);f.tasks.submit(id,current);f.tasks.claim();const events:any[]=[];
+  const outcome=await resumePlannedTurn(f.services,id,current,front.checkpoint,new AbortController().signal,event=>{events.push(event);f.tasks.append(id,event);});assert.equal(outcome.error,undefined);f.tasks.finish(id,"complete",outcome);
+  assert.equal(f.calls().length,3,"one original planner, existing evidence review and synthesis; no new classification model");
+  const synthesized=JSON.parse(f.calls().at(-1)!.prompt.slice(f.calls().at(-1)!.prompt.lastIndexOf("\n{")+1)),result=outcome.result as DiscoveryResponse;
+  assert.equal(synthesized.turnContext.history[0].execution.workspace.receipt.observation.state,"rendered");assert.equal(synthesized.turnContext.history[0].execution.workspace.atSubmission.presentation.valueId,"beijing-chn");
+  assert.equal(synthesized.turnContext.browserObservations.capturedAt,200);assert.equal(synthesized.turnContext.visibleBatch.query,original.query);assert.equal(JSON.stringify(front.checkpoint.turnContext),frozen);
+  assert.equal(synthesized.currentResultBatch.batchId,result.resultBatch!.batchId);assert.notEqual(synthesized.currentResultBatch.batchId,old.batchId);assert.equal(synthesized.currentResultBatch.query,current.query);
+  assert.equal(synthesized.currentResultBatch.channels[0].source,discoverySourceNames.haina);assert.ok(synthesized.currentResultBatch.conditions.some((s:string)=>s.includes("actual-channel-term")));
+  assert.deepEqual(events.find(event=>event.resultBatch)?.resultBatch,result.resultBatch);assert.deepEqual((f.tasks.terminal(id)!.result as DiscoveryResponse).resultBatch,result.resultBatch);
+});
+
+test("failed source transport leaves the old batch provenance and never manufactures a current result batch",async t=>{
+  const f=await fixture(t),old=owner(),parent=f.body("旧查询",{conversationId:old.conversationId,turnId:old.turnId});
+  f.save(old.taskId,parent,{message:"旧批",resultBatch:{...old,kind:"research",status:"complete",query:parent.query,conditions:["旧来源条件"],channels:[{source:"旧来源",status:"done",count:0}],itemIds:[]}});
+  const current=f.body("本轮明确的新问题",{conversationId:old.conversationId,previousTaskId:old.taskId});current.context.browserTurnFrame={version:1,batch:{answerId:old.taskId,batchId:old.batchId,title:"旧批",origin:"research",visibleIds:[]}};
+  f.set({decide:{kind:"search",goal:"新目标",targets:[]}});f.failDiscovery();const id=randomUUID(),front=await runForegroundTurn(f.services,id,current,new AbortController().signal,()=>{});assert.equal(front.kind,"research");if(front.kind!=="research")return;
+  assert.equal(front.checkpoint.turnContext!.visibleBatch.query,parent.query);f.tasks.submit(id,current);f.tasks.claim();const events:any[]=[];
+  const outcome=await resumePlannedTurn(f.services,id,current,front.checkpoint,new AbortController().signal,event=>events.push(event));assert.ok(outcome.error);assert.equal(outcome.result,undefined);assert.ok(!events.some(event=>event.resultBatch));assert.equal(f.calls().length,1);
 });

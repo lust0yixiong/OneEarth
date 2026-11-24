@@ -1,5 +1,5 @@
 import type {DiscoveryAttempt,DiscoveryResponse,Message} from "./types";
-import {validBrowserWorkspaceReceipt,type BrowserWorkspaceReceipt,type WorkspaceReceipt} from "./turn-context";
+import {validBrowserWorkspaceReceipt,type BrowserWorkspaceReceipt,type WorkspaceReceipt,type WorkspaceRecoveryInput} from "./turn-context";
 import {createClarificationPrompt,validClarificationPrompt} from "./clarification";
 
 export const chatMessagesPath = "/api/chat/messages";
@@ -96,13 +96,26 @@ export async function loadResearchRecord(id:string):Promise<ResearchRecord>{
 export function readWorkspaceReceipt(receipt:WorkspaceReceipt|undefined,taskId:string,conversationId:string,turnId:string) {
   if(!receipt || receipt.taskId!==taskId || !Number.isFinite(receipt.reportedAt) || receipt.turnId!==turnId ||
     receipt.conversationId!==conversationId || receipt.effectId!=="workspace:"+taskId)return;
-  const {effectId,state}=receipt;
-  return validBrowserWorkspaceReceipt({effectId,conversationId,turnId,state}) ? receipt : undefined;
+  const {taskId:_taskId,reportedAt:_reportedAt,observationReportedAt:_observationReportedAt,recovery,...wire}=receipt;
+  if(recovery && (!["running","complete","failed"].includes(recovery.state) ||
+    !Number.isSafeInteger(recovery.observedAt) || recovery.observedAt<=0 ||
+    recovery.message!==undefined && typeof recovery.message!=="string"))return;
+  return validBrowserWorkspaceReceipt(wire) ? receipt : undefined;
 }
 
 export async function reportWorkspaceReceipt(id:string,receipt:BrowserWorkspaceReceipt) {
   const res=await fetch(chatMessagesPath+"/"+encodeURIComponent(id)+"/workspace-receipt",{
     method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(receipt),signal:AbortSignal.timeout(8000),
   });
-  return res.ok || res.status===400 || res.status===404 || res.status===409;
+  const saved=res.ok ? await res.json().catch(()=>undefined) : undefined;
+  return {settled:res.ok || res.status===400 || res.status===404 || res.status===409,
+    receipt:readWorkspaceReceipt(saved,id,receipt.conversationId,receipt.turnId)};
+}
+
+export async function requestWorkspaceRecovery(id:string,input:WorkspaceRecoveryInput,signal:AbortSignal) {
+  const res=await fetch(chatMessagesPath+"/"+encodeURIComponent(id)+"/workspace-recovery",{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(input),signal,
+  });
+  if(!res.ok)return;
+  return readWorkspaceReceipt(await res.json(),id,input.conversationId,input.turnId);
 }
