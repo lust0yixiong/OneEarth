@@ -3,6 +3,8 @@ import {paperRecords} from "../domain/paper-record";
 import {useCatalogRevision} from "./use-catalog-revision";
 import {loadRemoteAssetIds} from "../domain/datasets";
 import {useWebPreview} from "./use-web-preview";
+import {publicLayerForDataset} from "../domain/haina-public-layer";
+import {usePublicLayerManifest} from "./use-haina-public-layer";
 import {EntityVisualization} from "./EntityVisualization";
 import {regionalForDataset} from "../domain/regional-cases";
 import {readC40Catalogue} from "./use-c40-layer";
@@ -91,6 +93,7 @@ function Overview({
   const pushed = observationById(asset.id);
   const wind = asset.datasetId === "gfs-wind";
   const rain = regionalForDataset(asset.datasetId) === "rain";
+  const researchUse=catalogGroupById(asset.caseId)?.needs[asset.needIndex]?.name;
   const rainPublication = useRainCatalog(rain);
   const frame = windFrame(s.visualization || defaultWindState());
   const eligible = supportsDataView(asset.caseId, asset.needIndex);
@@ -154,8 +157,7 @@ function Overview({
         </>}
         {asset.profile && (
           <>
-            <dt>研究用途</dt>
-            <dd>{catalogGroupById(asset.caseId)?.needs[asset.needIndex].name}</dd>
+            {researchUse && <><dt>研究用途</dt><dd>{researchUse}</dd></>}
             <dt>覆盖与粒度</dt>
             <dd>{asset.profile.coverage}
               {coverageReview?.original && <div><a href={coverageReview.original} target="_blank" rel="noreferrer">查看原始来源 <ExternalLink size={12}/></a></div>}
@@ -196,7 +198,7 @@ function Overview({
         </dd>
       </dl>
       <div className="inspector-links">
-        <EntityVisualization asset={asset}/>
+        <EntityVisualization asset={asset} hidePublicButton={s.view==="earth" && !!s.inspector && "parent" in s.inspector}/>
         {eligible && (
           <button
             className="native-content-button"
@@ -387,7 +389,9 @@ function DataGlobeButton({asset,scope}:{
   asset?:Asset;
   scope?:{filters:Filters;selection:Selection|null};
 }) {
-  const {state:s,patch,openData,openVisualization}=useWorkspace();
+  const {state:s,patch,openData,openVisualization,openPublicLayer}=useWorkspace();
+  const pilot=publicLayerForDataset(asset?.id);
+  const publication=usePublicLayerManifest(pilot);
   const layer=asset ? regionalForDataset(asset.datasetId) : undefined;
   const rain=useRainCatalog(layer==="rain");
   const [verified,setVerified]=useState<"forest"|"c40"|null>(null);
@@ -409,7 +413,9 @@ function DataGlobeButton({asset,scope}:{
     && scopedDataView(asset.caseId,asset.needIndex,{...scope.filters,need:asset.needIndex},scope.selection,s.dataView);
 
   function open() {
-    if (layer && readyLayer) {
+    if (pilot && publication.manifest) {
+      openPublicLayer(pilot);
+    } else if (layer && readyLayer) {
       openVisualization(layer,null);
     } else if (wind && scope) {
       if (s.visualization?.id==="gfs-wind")
@@ -420,7 +426,7 @@ function DataGlobeButton({asset,scope}:{
       openData(asset.caseId,asset.needIndex,scope.filters,scope.selection);
     }
   }
-  return <button type="button" className="data-globe-button" disabled={!(readyLayer || wind || native)} onClick={open}>数据上球</button>;
+  return <button type="button" className="data-globe-button" disabled={pilot ? !publication.manifest : !(readyLayer || wind || native)} onClick={open}>数据上球</button>;
 }
 
 export function DatasetInspector() {

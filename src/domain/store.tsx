@@ -12,6 +12,7 @@ import {conversationReferenceMemory,modelHistoryMessages} from "./reference-memo
 import {researchRegionCamera,validResearchRegion,sameResearchRegion,type ResearchRegion,type ResearchRegionLayer} from "./research-region";
 import {answerMapBatch,answerFilters,initialAnswerCamera,gridCamera,evidenceCamera,evidenceSelection} from "./answer-map";
 import { globeCases,layerFrameCount,datasetLayers,isForestDate,type RegionalId } from "./regional-cases";
+import {isPublicLayerId,validPublicViewId,type PublicLayerId,type PublicLayerSelection} from "./haina-public-layer";
 import {isRainYear} from "./rain-catalog";
 import { paperId } from "./paper-record";
 import { loadPaperCatalog,readPaperCatalogStatus, type PaperCatalogStatus } from "./paper-catalog-client";
@@ -120,6 +121,7 @@ export interface State {
   search: SearchState;
   overview: "catalog" | "simulation";
   origin: ReturnPoint | null;
+  publicLayer: PublicLayerSelection | null;
   fieldLayer: {id:RegionalId;frame:number;year?:number;city?:string;date?:string} | null;
   visualization: VisualizationState | null;
   view: View;
@@ -156,7 +158,7 @@ type ActiveChat = {
 };
 const workspaceFields = [
   "view", "caseId", "filters", "camera", "gridSystem", "layer", "selection", "mesh", "source",
-  "inspector", "mapResult", "search", "overview", "origin", "visualization", "fieldLayer", "dataView",
+  "inspector", "mapResult", "search", "overview", "origin", "visualization", "fieldLayer", "publicLayer", "dataView",
   "comparisonYear", "listLibraryOpen", "citation", "evidence", "previewKind", "readerPosition",
   "chatOpen", "saved", "clarificationReply",
   "researchRegion",
@@ -185,6 +187,7 @@ type ReturnPoint = Pick<
   | "dataView"
   | "visualization"
   | "fieldLayer"
+  | "publicLayer"
   | "search"
   | "citation"
   | "mapResult"
@@ -203,7 +206,7 @@ function remember(s: State): ReturnPoint {
     layer,
     mesh,
     dataView,
-    visualization,fieldLayer,
+    visualization,fieldLayer,publicLayer,
     search,
     citation,
     overview,
@@ -222,7 +225,7 @@ function remember(s: State): ReturnPoint {
     layer,
     mesh,
     dataView,
-    visualization,fieldLayer,
+    visualization,fieldLayer,publicLayer,
     search,
     citation,
     overview,
@@ -252,7 +255,7 @@ function requestWorkspaceKey(s: State) {
   // A city selection may still be flying when the question is sent. Keep its target stable on settle.
   const camera = s.flight?.kind === "layer-control" ? [s.flight.id, s.flight.camera] : s.camera;
   return JSON.stringify([s.view, s.caseId, s.filters, s.gridSystem, s.layer, s.selection, camera,
-    s.dataView, s.visualization, s.fieldLayer, s.overview, s.mapResult, s.search, s.inspector,
+    s.dataView, s.visualization, s.fieldLayer, s.publicLayer, s.overview, s.mapResult, s.search, s.inspector,
     s.mapFocus, s.evidence?.id, s.previewKind, s.readerPosition]);
 }
 type Action =
@@ -363,6 +366,10 @@ function initial(sessionId: string, url = new URL(location.href), saved: Record<
       : caseId === "Q20" && dataParam === "front"
         ? createDataView(caseId, 1, filters)
         : null;
+  const publicId=Number(url.searchParams.get("hainaLayer"));
+  const publicView=url.searchParams.get("hainaView");
+  const publicLayer=view==="earth"&&!caseId&&!fieldLayer&&!visualization&&!dataView&&!openPushGlobe&&isPublicLayerId(publicId)
+    ? {id:publicId,...(validPublicViewId(publicView)?{view:publicView}:{})} : null;
   if (dataView) {
     filters.need = dataView.kind === "ctd" ? 4 : 1;
     filters.type = "";
@@ -391,7 +398,7 @@ function initial(sessionId: string, url = new URL(location.href), saved: Record<
         ...(["map","request","local"].includes(url.searchParams.get("capability")||"")?{capability:url.searchParams.get("capability") as SearchState["capability"]}:{})}:{}),
     },
     overview: "catalog",
-    fieldLayer,visualization,
+    fieldLayer,visualization,publicLayer,
     view,
     caseId,
     filters,
@@ -409,7 +416,7 @@ function initial(sessionId: string, url = new URL(location.href), saved: Record<
         ? saved.layer
         : "all",
     selection: null,
-    mesh: visualization || fieldLayer ? false : saved.mesh !== false,
+    mesh: visualization || fieldLayer || publicLayer ? false : saved.mesh !== false,
     source: -1,
     draftScope: (() => {
       const id = fieldLayer?.id === "forest" ? "haina:1846764" : fieldLayer?.id === "c40" ? "haina:1846639" : null;
@@ -597,6 +604,8 @@ function useWorkspaceValue(initialState: State) {
     )
       value = { ...value, origin: null };
     if(!Object.hasOwn(value,"fieldLayer") && (Object.hasOwn(value,"caseId") || value.dataView || value.visualization))value={...value,fieldLayer:null};
+    if(!Object.hasOwn(value,"publicLayer") && (Object.hasOwn(value,"caseId") || Object.hasOwn(value,"fieldLayer") || value.dataView || value.visualization))
+      value={...value,publicLayer:null};
     if (Object.hasOwn(value, "caseId") && !Object.hasOwn(value, "mapResult"))
       value = { ...value, mapResult: null };
     if (
@@ -902,8 +911,16 @@ function useWorkspaceValue(initialState: State) {
       else url.searchParams.delete("rainYear");
       url.searchParams.set("rainMonth",String(state.fieldLayer.frame+1));
     }else{url.searchParams.delete("rainYear");url.searchParams.delete("rainMonth");}
+    if(state.view==="earth" && state.publicLayer){
+      url.searchParams.set("hainaLayer",String(state.publicLayer.id));
+      if(state.publicLayer.view)url.searchParams.set("hainaView",state.publicLayer.view);
+      else url.searchParams.delete("hainaView");
+    }else{
+      url.searchParams.delete("hainaLayer");
+      url.searchParams.delete("hainaView");
+    }
     history.replaceState({ ...history.state, oneearthSession: state.sessionId, oneearthPath: url.pathname + url.search }, "", url);
-  }, [state.linkStatus, state.sessionId, state.caseId, state.view, state.search.source,state.search.section,state.search.page,state.search.query,state.search.type,state.search.capability,state.search.savedOnly, state.filters.source, state.mapResult, state.dataView, state.visualization,state.fieldLayer?.id,state.fieldLayer?.year,state.fieldLayer?.frame,state.fieldLayer?.city,state.fieldLayer?.date]);
+  }, [state.linkStatus, state.sessionId, state.caseId, state.view, state.search.source,state.search.section,state.search.page,state.search.query,state.search.type,state.search.capability,state.search.savedOnly, state.filters.source, state.mapResult, state.dataView, state.visualization,state.fieldLayer?.id,state.fieldLayer?.year,state.fieldLayer?.frame,state.fieldLayer?.city,state.fieldLayer?.date,state.publicLayer?.id,state.publicLayer?.view]);
   useEffect(() => () => {
     for (const entry of requests.current.values()) entry.controller.abort();
     requests.current.clear();
@@ -1052,7 +1069,7 @@ function useWorkspaceValue(initialState: State) {
     if(previous.session!==state.sessionId || previous.id===last?.id || !last || last.role!=="assistant" ||
       !automaticAnswerIds.current.delete(last.id) || !last.candidates || last.historicalReply || last.failed)return;
     // Explicit content visualizations keep control of the globe. Late replies never move it.
-    if(state.view!=="earth" || state.visualization || state.fieldLayer || state.dataView || state.evidence)return;
+    if(state.view!=="earth" || state.visualization || state.fieldLayer || state.publicLayer || state.dataView || state.evidence)return;
     const fit=!state.researchRegion && !state.mapResult?.answerId,key=requestWorkspaceKey(state);
     const ids=last.candidates.ids.filter(id=>!assetById.has(id));
     if(ids.length)void loadRemoteAssetIds(ids).then(()=>{
@@ -1385,7 +1402,7 @@ function useWorkspaceValue(initialState: State) {
         const now=latest.current,previous=now.researchRegion;
         const changed=!sameResearchRegion(previous?.region,region);
         const layer=region?{messageId:attempt.userMessageId,region,visible:changed?true:previous?.visible??true}:null;
-        const target=region && changed && now.view==="earth" && !now.visualization && !now.fieldLayer && !now.dataView && !now.evidence
+        const target=region && changed && now.view==="earth" && !now.visualization && !now.fieldLayer && !now.publicLayer && !now.dataView && !now.evidence
           ? researchRegionCamera(region):null;
         if(target)regionFlight={id:randomId(),camera:target,kind:"research-region"};
         patch({researchRegion:layer,...(regionFlight?{flight:regionFlight}:{})});
@@ -1937,6 +1954,17 @@ function useWorkspaceValue(initialState: State) {
     void restore().catch(() => { if (active) patch({sessionError:sessionFailure}); });
     return () => { active = false; };
   }, [state.sessionId, executeDiscovery, patch]);
+  const openPublicLayer = useCallback((id:PublicLayerId) => {
+    const current=latest.current;
+    if(current.view==="earth" && current.publicLayer?.id===id){
+      patch({inspector:null,evidence:null});
+      return;
+    }
+    patch({publicLayer:{id},view:"earth",caseId:null,fieldLayer:null,visualization:null,dataView:null,
+      filters:emptyFilters(),overview:"catalog",mapResult:null,selection:null,mesh:false,layer:"all",
+      origin:current.inspector ? remember(current) : current.origin || remember(current),
+      inspector:null,evidence:null,error:null});
+  },[patch]);
   const openVisualization = useCallback(
     (id: "gfs-wind" | RegionalId | "catalog", selection?: Selection | null) => {
       const current=latest.current;
@@ -2103,6 +2131,7 @@ function useWorkspaceValue(initialState: State) {
     inspectAsset,
     openData,
     openVisualization,
+    openPublicLayer,
     mapCandidates,
     activateAnswer,flyToGrid,flyToEvidence,focusAnswerEvidence,flyToResearchRegion,
     showCandidates,

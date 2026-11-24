@@ -3,14 +3,20 @@ import {Layers,X} from "lucide-react";
 import type {Asset} from "../domain/datasets";
 import {visualizationEntities} from "../domain/entity-visualization";
 import {regionalForDataset} from "../domain/regional-cases";
+import {publicLayerForDataset} from "../domain/haina-public-layer";
+import {usePublicLayerManifest} from "./use-haina-public-layer";
 import {useWorkspace} from "../domain/store";
 
-export function EntityVisualization({asset}:{asset:Asset}) {
-  const {openVisualization}=useWorkspace();
+export function EntityVisualization({asset,hidePublicButton=false}:{asset:Asset;hidePublicButton?:boolean}) {
+  const {openVisualization,openPublicLayer}=useWorkspace();
+  const pilot=publicLayerForDataset(asset.id);
+  const publication=usePublicLayerManifest(hidePublicButton?undefined:pilot);
   const layer=asset.datasetId?regionalForDataset(asset.datasetId):undefined;
   const entities=visualizationEntities(asset);
   const [open,setOpen]=useState(false),dialog=useRef<HTMLDialogElement>(null);
   useEffect(()=>{if(open)dialog.current?.showModal();},[open]);
+  if(pilot)return hidePublicButton?null:<button type="button" className="entity-visualization data-globe-button"
+    disabled={!publication.manifest} onClick={()=>openPublicLayer(pilot)}><Layers size={13}/>数据上球</button>;
   if(layer)return <button className="entity-visualization" onClick={()=>openVisualization(layer,null)}><Layers size={13}/>在球上可视化</button>;
   if(!entities.length)return null;
   return <><button className="entity-visualization" onClick={()=>setOpen(true)}><Layers size={13}/>在球上可视化 <small>待支持</small></button>

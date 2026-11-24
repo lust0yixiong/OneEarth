@@ -1,3 +1,4 @@
+import type {PublicLayerPoint,PublicLayerSelection} from "../domain/haina-public-layer";
 import {createRainPainter} from "./rain-layer";
 import type {RainTiles} from "./rain-tiles";
 import {rainCell,rainGrid,rainFactors} from "../domain/rainfall";
@@ -69,6 +70,11 @@ export interface Scene {
   catalogStyle?: DistributionMode;
   paperFeed?:{loading:boolean}|null;
   fieldLayer?: {id:string;frame:number}|null;
+  publicLayer?: PublicLayerSelection|null;
+  publicPoints?:PublicLayerPoint[];
+  publicImage?:GeoImageFrame;
+  publicRaster?:string;
+  publicPick?:(point:Coordinate)=>void;
   fieldTexture?:Uint8ClampedArray|null;
   fieldImage?:GeoImageFrame|null;
   basemap?:GeoImageFrame|null;
@@ -90,6 +96,8 @@ export interface Scene {
   dataView: DataView | null;
 }
 export interface FrameInfo {
+  publicPoints?:PublicLayerPoint[];
+  publicMarkers?:{id:string;label:string;x:number;y:number}[];
   answerPins?: {assetId:string;number:number;x:number;y:number;kind:"local"|"range"}[];
   clusterKeys?: string[];
   coloredProducts?: number;
@@ -242,7 +250,7 @@ export function createRenderer(
     if (disposed) return;
     const scene = {...getScene(),camera:motion.camera()};
     if(!scene.pending)pendingNavigation=false;
-    const catalog = !scene.dataView && !scene.caseId && !scene.fieldLayer && !scene.visualization && scene.overview !== "simulation";
+    const catalog = !scene.dataView && !scene.caseId && !scene.fieldLayer && !scene.publicLayer && !scene.visualization && scene.overview !== "simulation";
     // The catalogue's grid is its common foundation, including while the
     // distribution is loading or the user is rotating a smoothed view.
     const showMesh = scene.mesh;
@@ -251,7 +259,7 @@ export function createRenderer(
     width = canvas.clientWidth;
     height = canvas.clientHeight;
     if (!width || !height) return;
-    const baseOnly = firstFrame && !scene.caseId && !scene.dataView && !scene.fieldLayer && !scene.visualization;
+    const baseOnly = firstFrame && !scene.caseId && !scene.dataView && !scene.fieldLayer && !scene.publicLayer && !scene.visualization;
     firstFrame = false;
     // Pointer coordinates and evidence stay in CSS pixels. Avoid four times the
     // raster work on Retina displays during motion; restore sharpness at rest.
@@ -291,7 +299,26 @@ export function createRenderer(
     let productCell: FrameInfo["productCell"];
     let loading = "",
       visibleCells = 0;
-    if(scene.fieldLayer?.id==="forest"||scene.fieldLayer?.id==="c40"){
+    const publicMarkers:FrameInfo["publicMarkers"]=[];
+    canvas.dataset.publicRaster="";
+    if(scene.publicLayer){
+      paint({type:"Sphere"},"#dcebf2","#9bb6c3");
+      paint(land,"#f5f8f4","#b4c6bf");
+      if(scene.basemap)drawGeoImage(ctx!,projection,scene.basemap,width,height,interacting);
+      if(zoom<15)paint(graticule,null,"#bad0d7",0.55);
+      if(scene.publicImage){
+        drawGeoImage(ctx!,projection,scene.publicImage,width,height,interacting);
+        canvas.dataset.publicRaster=scene.publicRaster??"";
+      }
+      for(const point of scene.publicPoints??[]){
+        if(geoDistance(center,point.coordinate)>=Math.PI/2)continue;
+        const p=projection(point.coordinate);
+        if(!p)continue;
+        const [x,y]=p;
+        if(x>=8&&x<=width-(scene.rightInset??0)-8&&y>=8&&y<=height-8)
+          publicMarkers.push({id:point.id,label:point.label,x,y});
+      }
+    } else if(scene.fieldLayer?.id==="forest"||scene.fieldLayer?.id==="c40"){
       paint({type:"Sphere"},"#dcebf2","#9bb6c3");
       paint(land,"#f5f8f4","#b4c6bf");
       if(scene.basemap)drawGeoImage(ctx!,projection,scene.basemap,width,height,interacting);
@@ -759,7 +786,7 @@ export function createRenderer(
       if (p[0] >= 0 && p[0] <= width && p[1] >= 0 && p[1] <= height)
         anchor = { x: p[0], y: p[1] };
     }
-    onFrame({ answerPins,clusterKeys, coloredProducts, coloredSelection, coverageSelection, productCell, gridLabel: g.label, level: band, visibleCells, loading, anchor });
+    onFrame({ publicPoints:scene.publicPoints, publicMarkers, answerPins,clusterKeys, coloredProducts, coloredSelection, coverageSelection, productCell, gridLabel: g.label, level: band, visibleCells, loading, anchor });
     canvas.dataset.painted = "true";
     canvas.dataset.focusWidth = String(width - (scene.rightInset || 0));
   }
@@ -771,6 +798,7 @@ export function createRenderer(
     const scene = {...getScene(),camera:motion.camera()};
     motion.settle();
     const point = projection.invert!([x, y]) as Coordinate;
+    if(scene.publicLayer){scene.publicPick?.(point);return;}
     const g = gridSpec(scene.gridSystem, resolution(scene.camera.zoom));
     const id = cellAt(point, g);
     const version = ++selectVersion;
@@ -834,7 +862,7 @@ export function createRenderer(
   });
   const hoverEnabled=()=>{
     const s=getScene();
-    return !!onHover && !s.observationGlobe && !s.caseId && !s.dataView && !s.fieldLayer && !s.visualization &&
+    return !!onHover && !s.observationGlobe && !s.caseId && !s.dataView && !s.fieldLayer && !s.publicLayer && !s.visualization &&
       s.overview!=="simulation" && s.mapResult?.metric!=="scenes" && !interacting && canvas.dataset.flying!=="true";
   };
   function onGlobe(x:number,y:number) {

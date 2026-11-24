@@ -1,4 +1,6 @@
 import { createPortal } from "react-dom";
+import {HainaPublicLayerPanel} from "./HainaPublicLayerPanel";
+import {useHainaPublicLayer} from "./use-haina-public-layer";
 import {ResearchRegionLayer} from "./ResearchRegionLayer";
 import {gridScope,timeScope} from "../domain/question-scope";
 import {attachCoverageScope,CoverageScopeChanged} from "../domain/coverage-attachment";
@@ -84,7 +86,7 @@ import {
   localEntries,
 } from "../domain/spatial";
 import { useGeoOrientation } from "./use-geo-orientation";
-import type { CandidateSet, MapLayer, VisualizationState } from "../domain/types";
+import type { CandidateSet, Coordinate, MapLayer, VisualizationState } from "../domain/types";
 import { useWindTheme } from "../domain/wind-theme";
 import {DistributionModePicker} from "./DistributionModePicker";
 import {DistributionLegend} from "./DistributionLegend";
@@ -145,6 +147,27 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   const canvas = useRef<HTMLCanvasElement>(null),
     controls = useRef<HTMLDivElement>(null),
     renderer = useRef<ReturnType<typeof createRenderer> | null>(null);
+  const publicLayer=s.publicLayer;
+  const haina=useHainaPublicLayer(publicLayer);
+  const hainaView=haina.view;
+  const hainaManifest=haina.catalogue.manifest;
+  const [hainaSample,setHainaSample]=useState<{view:typeof hainaView;point:Coordinate}|null>(null);
+  const positioned=useRef("");
+  const locateHaina=()=>{
+    if(!hainaView||!hainaManifest)return;
+    patch({camera:{center:hainaView.center,zoom:hainaView.zoom,reason:hainaManifest.title+" · "+hainaView.label},flight:null});
+  };
+  useEffect(()=>{
+    if(!publicLayer || !hainaView || !hainaManifest){
+      positioned.current="";
+      return;
+    }
+    const key=[publicLayer.id,hainaView.id,...hainaView.center,hainaView.zoom].join("/");
+    if(positioned.current===key)return;
+    positioned.current=key;
+    patch({camera:{center:hainaView.center,zoom:hainaView.zoom,reason:hainaManifest.title+" · "+hainaView.label},flight:null,
+      ...(publicLayer.view!==hainaView.id?{publicLayer:{id:publicLayer.id,view:hainaView.id}}:{})});
+  },[publicLayer,hainaView,hainaManifest,patch]);
   const selectedLayer=s.fieldLayer;
   const publication=useRainCatalog(selectedLayer?.id==="rain");
   const rainCatalog=publication.status==="ready"?publication.catalog:undefined;
@@ -160,7 +183,7 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   const [preferredStyle,setDistributionStyle]=useDistributionMode();
   const distributionContext:DistributionContext=s.mapResult?.selection?"fixed-cell":s.mapResult?.metric==="scenes"?"scenes":"catalog";
   const distributionStyle=resolveDistributionMode(preferredStyle,distributionContext);
-  const smoothedMode=distributionModes[distributionStyle].smoothed && !layer && !s.caseId && !s.dataView && !s.visualization && s.overview==="catalog";
+  const smoothedMode=distributionModes[distributionStyle].smoothed && !publicLayer && !layer && !s.caseId && !s.dataView && !s.visualization && s.overview==="catalog";
   const fieldData=useFieldData(layer,rainCatalog);
   const [animate,setAnimate]=useState(false);
   useEffect(()=>setAnimate(false),[layer?.id,layer?.year]);
@@ -234,8 +257,12 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
     return ()=>{window.clearTimeout(timer);controller.abort();};
   },[basemapId,s.camera.center[0],s.camera.center[1],s.camera.zoom,s.chatOpen,viewportRevision]);
   useEffect(()=>{renderer.current?.render();},[basemapFrame]);
-  const latest = useRef({ ...s, catalogStyle:distributionStyle,rightInset, windTheme,answerReferences,fieldTexture:fieldData.texture,fieldImage,fieldRain:fieldData.field?.rain, basemap:basemapFrame, basemapId:basemapId??undefined });
-  latest.current = { ...s, catalogStyle:distributionStyle,rightInset, windTheme,answerReferences,fieldTexture:fieldData.texture,fieldImage,fieldRain:fieldData.field?.rain, basemap:basemapFrame, basemapId:basemapId??undefined };
+  const publicPoints=haina.data?.points;
+  const publicImage=haina.data?.image;
+  const publicRaster=publicImage?hainaView?.id:undefined;
+  const latest = useRef({ ...s, publicPoints,publicImage,publicRaster,publicPick:undefined as ((point:Coordinate)=>void)|undefined, catalogStyle:distributionStyle,rightInset, windTheme,answerReferences,fieldTexture:fieldData.texture,fieldImage,fieldRain:fieldData.field?.rain, basemap:basemapFrame, basemapId:basemapId??undefined });
+  latest.current = { ...s, researchRegion:publicLayer?null:s.researchRegion,publicPoints,publicImage,publicRaster,
+    publicPick:hainaView?.kind==="raster"&&hainaView.grid?point=>setHainaSample({view:hainaView,point}):undefined, catalogStyle:distributionStyle,rightInset, windTheme,answerReferences,fieldTexture:fieldData.texture,fieldImage,fieldRain:fieldData.field?.rain, basemap:basemapFrame, basemapId:basemapId??undefined };
   const c = caseById(s.caseId);
   const [frame, setFrame] = useState<FrameInfo>({
     gridLabel: "H3 R2",
@@ -378,14 +405,14 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
       s.pushFeed,
       s.paperFeed,
       s.dataView,
-      s.visualization,layer,fieldData.texture,fieldImage,fieldData.revision,fieldData.field,
+      s.visualization,layer,publicLayer,publicPoints,publicImage,fieldData.texture,fieldImage,fieldData.revision,fieldData.field,
       distributionStyle,
       rightInset,
       windTheme,
     ],
   );
   const model = c ? getModel(c.id) : null;
-  const catalogMode = !layer && !c && s.overview === "catalog";
+  const catalogMode = !publicLayer && !layer && !c && s.overview === "catalog";
   const pushMode=catalogMode && s.filters.source==="constellation";
   const coarsePush=(s.mapResult?.selection?.grid ? (s.mapResult.selection.grid.system==="h3" ? s.mapResult.selection.grid.n<=3 : s.mapResult.selection.grid.n<=6) : frame.level<=3);
   const mappedIds = useMemo(()=>s.mapResult ? identitiesForRecords(s.mapResult.ids) : null,[s.mapResult,revision]);
@@ -587,7 +614,12 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   }
   useLayoutEffect(() => registerWorkspaceSurface(() => {
     let activeLayer: WorkspaceViewContext["activeLayer"];
-    if (s.visualization) {
+    if (publicLayer) {
+      activeLayer = {id:"haina-"+publicLayer.id,title:hainaManifest?.title??"海纳公开图层",datasetId:"haina:"+publicLayer.id,
+        status:haina.catalogue.error || haina.data?.error ? "unavailable" : haina.data ? "ready" : "loading",controls:[],
+        ...(hainaManifest && hainaView ? {display:[{label:"资料时间",value:hainaManifest.period},
+          {label:"已发布视窗",value:hainaView.label}]} : {})};
+    } else if (s.visualization) {
       const view = s.visualization;
       const status = windLoad.error ? "unavailable" : windLoad.ready ? "ready" : "loading";
       const level = windManifest.levels.map(({id,label}) => ({id,label}));
@@ -701,7 +733,7 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
     if (s.dataView?.kind === "front") batch.ids = entries.length ? ["Q20-1"] : [];
     setGridList(batch);
   };
-  const footer = <div className={toolsHost && (catalogMode||forestMode||c40Mode) ? "catalog-distribution" : undefined}>
+  const footer = !publicLayer && <div className={toolsHost && (catalogMode||forestMode||c40Mode) ? "catalog-distribution" : undefined}>
       <div className="map-footer">
         {forestLayer && forest.manifest ? <ForestTimeline manifest={forest.manifest} date={forest.date} playing={animate}
           choose={chooseForestDate}
@@ -879,15 +911,16 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
   </div>;
   return (
     <section
-      className={"earth-view" + (s.visualization ? " wind-mode" : "")+((catalogMode||forestMode||c40Mode)?" catalog-distribution":"")}
+      className={"earth-view" + (publicLayer ? " haina-public-mode" : "") + (s.visualization ? " wind-mode" : "")+((catalogMode||forestMode||c40Mode)?" catalog-distribution":"")}
       data-wind-theme={s.visualization ? windTheme : undefined}
+      style={publicLayer?{"--haina-inset":rightInset+"px"} as CSSProperties:undefined}
       aria-label="数据地球"
     >
       <div className="earth-canvas-wrap">
         <canvas
           ref={canvas}
           role="img"
-          aria-label="可旋转、缩放与点选网格的数据地球"
+          aria-label={publicLayer?"海纳公开图层的数据地球":"可旋转、缩放与点选网格的数据地球"}
         />
         <canvas
           ref={windCanvas}
@@ -903,7 +936,20 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
         )}
       </div>
 
-      {hover && canvas.current && <GridHoverOverview hover={hover} filters={s.filters} batch={s.mapResult}
+      {publicLayer&&frame.publicPoints===publicPoints&&frame.publicMarkers?.map(marker=>
+        <button key={marker.id} type="button" className="haina-point-marker"
+          aria-label={"火山："+marker.label} aria-pressed={publicLayer.point===marker.id}
+          style={{left:marker.x,top:marker.y}} title={marker.label}
+          onClick={()=>patch({publicLayer:{...publicLayer,point:marker.id}})}/>)}
+      {publicLayer&&<HainaPublicLayerPanel selection={publicLayer} layer={haina}
+        sample={hainaSample?.view===hainaView ? hainaSample?.point??null : null}
+        chooseView={view=>{setHainaSample(null);patch({publicLayer:{id:publicLayer.id,view}});}}
+        choosePoint={point=>patch({publicLayer:{...publicLayer,point}})}
+        locate={locateHaina}
+        inspect={hainaManifest && assetById.has("haina:"+publicLayer.id)
+          ? ()=>inspectDatasetLayer("haina:"+publicLayer.id,hainaManifest.title,["实体数据","海纳专区"]) : undefined}
+        close={()=>s.origin?leaveDetail():openVisualization("catalog",null)}/>}
+      {!publicLayer && hover && canvas.current && <GridHoverOverview hover={hover} filters={s.filters} batch={s.mapResult}
         index={hoverIndex} locate={geoOrientation} width={canvas.current.clientWidth-rightInset} height={canvas.current.clientHeight}
         pushConfigured={s.pushFeed?.offline?undefined:s.pushFeed?.configured}/>}
 
@@ -959,11 +1005,11 @@ export function GlobeView({ rightInset = 0, toolsHost }: { rightInset?: number; 
             </div>
           </details>}
         </div>
-        {s.researchRegion && <ResearchRegionLayer layer={s.researchRegion}
+        {!publicLayer && s.researchRegion && <ResearchRegionLayer layer={s.researchRegion}
           toggle={()=>patch({researchRegion:{...s.researchRegion!,visible:!s.researchRegion!.visible}})}
           locate={()=>flyToResearchRegion(s.researchRegion!.region,s.researchRegion!.messageId)}/>}
       </div>
-      {s.visualization || layer ? null : c ? (
+      {publicLayer || s.visualization || layer ? null : c ? (
         <div className="earth-task-card">
           <div className="task-label">
             <span>

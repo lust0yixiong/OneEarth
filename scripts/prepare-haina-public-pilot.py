@@ -237,7 +237,7 @@ def xuannv(prior,bundle):
     image=bundle.png(1846104,"patch-000186",rgba,assets,bounds,AGE["xuannv"])
     manifest=bundle.layer(1846104,"玄女哈尔滨嵌入","2025 年 4 月",
         "仅发布 V5 patch_000186 的 64×64 个向量格；按海纳索引与同编号原栅格定位。颜色由这个 patch 的 128 维向量经 PCA 生成，表示特征差异。",
-        "patch-000186",[view("patch-000186","哈尔滨 patch_000186",bounds,700,"raster",image=image,count=4096)],assets)
+        "patch-000186",[view("patch-000186","哈尔滨 patch_000186",bounds,2200,"raster",image=image,count=4096)],assets)
     return {"datasetId":1846104,"inputs":inputs,"patch":patch,"nativeShape":[64,64],"nativeResolutionMetres":[20,20],
             "validVectors":int(np.count_nonzero(norms>0)),"normRange":[float(norms.min()),float(norms.max())],
             "probe":{"lonLat":list(probe),"embeddingRowCol":[row,col],"originalS2RowsColumns":[[64,65],[64,65]],

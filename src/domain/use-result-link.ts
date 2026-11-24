@@ -21,7 +21,7 @@ function setLink(id: string | null) {
 }
 
 function capture(s: State) {
-  if (s.linkStatus || s.view === "cases" || s.visualization || s.fieldLayer || s.dataView)
+  if (s.linkStatus || s.view === "cases" || s.visualization || s.fieldLayer || s.publicLayer || s.dataView)
     return null;
   const scope = {
     caseId: s.caseId,
@@ -98,6 +98,7 @@ export function useResultLink(
     s.search,
     s.visualization,
     s.fieldLayer?.id,
+    s.publicLayer?.id,
     s.dataView,
     s.saved,
     s.overview,
