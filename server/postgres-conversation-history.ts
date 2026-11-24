@@ -19,8 +19,10 @@ export const conversationHistorySchema = `
   CREATE INDEX IF NOT EXISTS runtime_task_history_conversation ON runtime_tasks (${conversationKey("body")},created);
 `;
 
-type HistoryRow = Omit<ConversationHistoryTurn,"submittedAt"|"references"> & {
+type HistoryRow = Omit<ConversationHistoryTurn,"submittedAt"|"question"|"assistantText"|"references"> & {
   submittedAt: string;
+  question: string | null;
+  assistantText: string | null;
   references: AnswerReference[] | null;
   webStages: [string,EvidenceStage][] | null;
 };
@@ -63,29 +65,33 @@ export function postgresConversationHistory(pool:Pool) {
       ), saved AS (
         SELECT id,created,admitted,status,runtime_history_json(body) AS body,terminal->'result' AS result
         FROM prior
-      )
-      SELECT id AS "taskId",body->>'turnId' AS "turnId",created AS "submittedAt",status AS "taskState",
-        body->>'query' AS question,result->>'message' AS "assistantText",
-        result#>'{answerNotes,references}' AS "references",
-        (SELECT jsonb_agg(jsonb_build_array(source->>'url',source->>'stage'))
-         FROM jsonb_array_elements(CASE WHEN jsonb_typeof(result#>'{answerNotes,webSources}')='array'
-           THEN result#>'{answerNotes,webSources}' ELSE '[]'::jsonb END) AS source
-         WHERE source->>'stage' IN ('search-snippet','abstract','page-excerpt','pdf-excerpt')) AS "webStages",
-        COALESCE(
+      ), guarded AS (
+        SELECT *,COALESCE(
           body ? 'observationCheck'
           OR body @> '{"context":{"attachedScope":[{"kind":"observation"}]}}'
           OR body @> '{"context":{"attachedScope":[{"reference":{"evidenceLevel":"observation-file"}}]}}'
           OR result ? 'observationCheckResult'
           OR result @> '{"answerNotes":{"references":[{"evidenceLevel":"observation-file"}]}}',
           false
-        ) AS "observationRestricted"
-      FROM saved WHERE jsonb_typeof(body->'query')='string' ORDER BY admitted`,
+        ) AS restricted FROM saved
+      )
+      SELECT id AS "taskId",body->>'turnId' AS "turnId",created AS "submittedAt",status AS "taskState",
+        CASE WHEN NOT restricted THEN body->>'query' END AS question,
+        CASE WHEN NOT restricted THEN result->>'message' END AS "assistantText",
+        CASE WHEN NOT restricted THEN result#>'{answerNotes,references}' END AS "references",
+        CASE WHEN NOT restricted THEN
+          (SELECT jsonb_agg(jsonb_build_array(source->>'url',source->>'stage'))
+           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(result#>'{answerNotes,webSources}')='array'
+             THEN result#>'{answerNotes,webSources}' ELSE '[]'::jsonb END) AS source
+           WHERE source->>'stage' IN ('search-snippet','abstract','page-excerpt','pdf-excerpt'))
+        END AS "webStages",restricted AS "observationRestricted"
+      FROM guarded WHERE jsonb_typeof(body->'query')='string' ORDER BY admitted`,
       [conversationId,currentTaskId]);
     return rows.map(({taskId,turnId,submittedAt,question,taskState,assistantText,references,webStages,observationRestricted})=>{
       const saved={taskId,...(turnId?{turnId}:{}),submittedAt:Number(submittedAt),taskState,observationRestricted};
       if(observationRestricted)return {...saved,question:"观测材料历史由独立授权路径提供。"};
       const stages=new Map(webStages||[]);
-      return {...saved,question,
+      return {...saved,question:question??"",
         ...(assistantText?{assistantText}:{}),
         ...(Array.isArray(references)?{references:references.map(reference=>{
           const stage=reference?.kind==="web"?stages.get(reference.url):undefined;
