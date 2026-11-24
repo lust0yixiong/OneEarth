@@ -5,6 +5,7 @@ import type {TurnPlan,TurnTarget} from "./turn-planning";
 import {gridQueryLimits} from "./grid-catalogue-answer";
 import {mergeWebEvidence} from "./merge-web-evidence";
 import {modelSafeText} from "./model-context-safety";
+import {publicPage} from "./fetch-pages";
 import {decisionDeadline,evidenceDecisionLimits} from "./runtime-decision-budget";
 import {parseSourceReadLocator,type SourceReadLocator} from "../src/domain/source-read-locator";
 import {DiscoveryA2AError} from "./discovery-a2a-client";
@@ -58,6 +59,7 @@ const instructions=`你负责决定同一轮研究任务的下一步。原问题
 只输出唯一JSON对象，关键字段action/gap/targets/clarification必须有；reason仅为简短说明，缺失或格式不合不能代替执行字段。locators为可选同源定位数组（最多4项）或null，非空只允许一个已给W目标；每项{kind:"section"|"table"|"figure"|"page"|"equation",value:"原材料中的位置标签"}。定位只在同一原文件内查找，不增加URL、搜索或读取许可。合法形状：{"action":"answer","reason":"当前证据支持有限答复","gap":null,"targets":[],"clarification":null}；{"action":"read","reason":"需核对所给网页的具体字段","gap":"具体字段缺口","targets":["W1"],"clarification":null}；{"action":"discover","reason":"需独立证据","gap":"明确的新证据缺口","targets":[],"clarification":null}；{"action":"clarify","reason":"需要研究者决定原范围","gap":null,"targets":[],"clarification":"待确认问题"}。只可选择actions中当前允许的分支；read只可用exactReadTargets列出的W编号，不能使用S编号、裸数字、标题、URL或猜测的默认编号。例子不代表W1实际存在。
 - answer：能够完成用户本轮目标，或当前证据边界已清楚且再查不会改变结论时，直接答；不要求把所有背景都查全。解释公开方法、给候选线索与声称已核实官方事实有不同证据门槛。
 - read：只有摘要或身份时，可选一至两个获准公开网页编号。来源已经读过但特定位置尚未取得时，可选一个W编号并填最多4个locators，沿同一原文件定位；首读成功不意味着所有图表和章节均已取得。已有availableLocators/sourceOutlines时使用其中真实kind/value，不复制示例或填新URL。未取得正文的摘要不能当作已读原文；已有所需字段或同位置回执时不重复外调。
+- sourceAlternateHints 来自刚读取的来源自己声明的其他格式入口，内容和可访问性未核。仅有 W 编号且当前列入 exactReadTargets 时可按新外取预算读取；原请求限定范围时只保留线索，不能拿入口替换原来源。
 - discover：关键事实缺失、对象已经明确但已得材料没有可直接读取的合适来源时，给出一个具体证据缺口，由独立发现服务决定渠道和检索策略。不得重复已尝试的缺口。禁止把用户私有样本、未公开指标或内容放进缺口。
 - clarify：仅在现有目标缺少关键对象或用户必须决定研究范围时，请用户补充一项关键信息；仅仅资料或上游不可用时，说明证据界限后用 answer。
 materials.sourcePolicy 的 restricted 是已确定的来源边界。补查只能在这一边界内，材料不足时说明缺口并请用户决定是否扩大。preferred 只影响查找顺序。
@@ -88,9 +90,16 @@ function materialView({retrieval,reads,assertionReadings,issues,attemptedReadTar
   }
   const policy=authority?.sourcePolicy??retrieval?.plan.sourcePolicy;
   const restricted=policy?.mode==="restricted"?(retrieval?scopedDiscoverySources({...retrieval,plan:{...retrieval.plan,sourcePolicy:policy}}):policy.fallback?policy.sources.slice(0,1):policy.sources):undefined;
+  const alternates=new Map<string,NonNullable<SearchRun["hits"][number]["sourceAlternates"]>[number]&{declaredBy:string}>();
   if(!restricted||restricted.includes("web")){
     for(const target of targets)if(target.url&&!target.alreadyRead)webTarget(target.url,target.title,target.discoveredBy);
     for(const hit of web)if(!hit.pageExcerpt&&!hit.previousRead)webTarget(hit.url,hit.title,hit.discoveredBy);
+    for(const hit of web)if(!hit.previousRead)for(const entry of hit.sourceAlternates||[]){
+      const url=publicPage(entry.url);
+      if(!url||url===hit.url||modelSafeText(url)!==url||alternates.has(url)||alternates.size>=8)continue;
+      alternates.set(url,{...entry,url,declaredBy:hit.url});
+      if(authority?.allowDiscovery)webTarget(url,hit.title,"assistant");
+    }
     if(authority?.allowReread&&!rereadUsed)for(const target of targets){
       if(!target.url)continue;
       const acquired=reads.some(run=>run.status==="done"&&!run.cacheStoredAt&&["原站读取","PDF 原文","DeepSeek Fetch"].includes(run.engine)&&
@@ -138,6 +147,7 @@ function materialView({retrieval,reads,assertionReadings,issues,attemptedReadTar
     locatorReadTargets:locatorIndexed.map(({label,source})=>({label,url:source.url,title:source.title,scope:"同一已绑定来源，最多4个明确位置；已有同位置回执只复用，不能据此改URL或增加搜索"})),
     locatorReadResults:[...located.values()].slice(-24),
     sourceOutlines:[...outlines.values()],
+    sourceAlternateHints:[...alternates.values()].map(entry=>({...entry,readTarget:indexed.find(({source})=>source.url===entry.url)?.label})),
     sourcePolicy:policy,channels:retrieval?.sourceStatus,issues,
     capabilities:{independentDiscovery:authority?.allowDiscovery??!!retrieval,discoveryLimit:authority?.discoveryLimit,
       discoveryChannels:policy?.mode==="restricted"?policy.sources:["paper","haina","web"],
@@ -237,6 +247,8 @@ export async function continueResearch(question:string,plan:TurnPlan,material:Ma
     const allowed=new Map([...allAllowed].filter(([,source])=>acquisitions<evidenceDecisionLimits.acquisitions||acquired.has(source.url!)||cachedUrls.has(source.url!)));
     view.exactReadTargets=view.exactReadTargets.filter(row=>acquisitions<evidenceDecisionLimits.acquisitions&&allowed.has(row.label));
     view.locatorReadTargets=view.locatorReadTargets.filter(row=>allowed.has(row.label));
+    const exactLabels=new Set(view.exactReadTargets.map(row=>row.label));
+    for(const hint of view.sourceAlternateHints)if(hint.readTarget&&!exactLabels.has(hint.readTarget))hint.readTarget=undefined;
     const actions=confirmation?["answer"]:["answer","clarify"];
     if(toolAttempts<evidenceDecisionLimits.toolAttempts){
       if(allowed.size&&(acquisitions<evidenceDecisionLimits.acquisitions||locationAttempts<evidenceDecisionLimits.locations&&[...allowed.values()].some(source=>acquired.has(source.url!))))actions.push("read");

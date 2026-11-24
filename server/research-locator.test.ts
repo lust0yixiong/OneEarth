@@ -29,6 +29,37 @@ test("the same code and field can be corrected later rather than being an early 
  },undefined,{allowDiscovery:false});assert.equal(models,5);assert.equal(reads,1);assert.equal(result.assessment,"answer");
 });
 
+test("a source-declared format is visible and can be acquired only within the existing authority",async()=>{
+ const alternate="https://archive.example.org/source.xml";
+ const landing:SearchRun={engine:"原站读取",query:url,status:"done",hits:[{
+   url,title:"Controlled source",snippet:"Public landing page",sourceAlternates:[
+     {url:alternate,mediaType:"application/xml",relation:"alternate"},
+     {url:"https://archive.example.org/source.pdf?sig=temporary",mediaType:"application/pdf",relation:"citation_pdf_url"},
+   ],
+ }]};
+ for(const allowDiscovery of [false,true]){
+   const inputs:any[]=[],requests:TurnPlan["targets"][]=[],trace:ToolCall[]=[];
+   const result=await continueResearch(question,plan,{reads:[landing],attemptedReadTargets:[url]},new AbortController().signal,{
+     model:async prompt=>{
+       const input=JSON.parse(prompt.slice(prompt.lastIndexOf("\n{")+1));inputs.push(input);
+       if(inputs.length>1)return decision("answer");
+       return decision("read",[input.materials.sourceAlternateHints[0].readTarget??"W2"]);
+     },
+     read:async targets=>{requests.push(targets);return [source(alternate)];},
+     discover:async()=>assert.fail(),report:call=>trace.push(call),stage:()=>{},
+   },undefined,{allowDiscovery,allowReread:true});
+   const hints=inputs[0].materials.sourceAlternateHints;
+   assert.deepEqual(hints,[{url:alternate,mediaType:"application/xml",relation:"alternate",declaredBy:url,...allowDiscovery?{readTarget:"W1"}:{}}]);
+   assert.equal(inputs[0].sameSourceLocatorTargets.length,0);
+   assert.equal(requests.length,allowDiscovery?1:0);
+   if(allowDiscovery){
+     assert.equal(requests[0][0].url,alternate);
+     assert.equal(JSON.parse(trace.find(call=>call.id==="research-budget")!.output!).acquisitions,1);
+   }else assert.equal(inputs[1].previousFailure.toolAttempted,false);
+   assert.equal(result.assessment,"answer");
+ }
+});
+
 test("the provider's bounded outline reaches the material model intact, including late entries",async()=>{
  const run=source(),locators=Array.from({length:20},(_,i)=>({kind:"section" as const,value:"section-"+(i+1),label:"Published section "+(i+1)}));run.hits[0].availableLocators=locators;
  let seen:any;await continueResearch(question,plan,{reads:[run]},new AbortController().signal,{model:async prompt=>{seen=JSON.parse(prompt.slice(prompt.lastIndexOf("\n{")+1));return decision("answer");},read:async()=>assert.fail(),discover:async()=>assert.fail(),report:()=>{},stage:()=>{}},undefined,{allowDiscovery:false});
