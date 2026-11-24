@@ -40,7 +40,7 @@ async function send(page, text) {
 async function directory(page) {
   await page.getByRole("button", { name: "查看研究所需资料", exact: true }).click();
   await restoreInspectedBatchInCatalog(page);
-  try { await page.locator(".catalog-card").first().waitFor(); }
+  try { await page.locator(".catalog-record").first().waitFor(); }
   catch (error) {
     await page.screenshot({ path: `${destination}/directory-failure.png`, animations: "disabled" });
     throw new Error(`${page.url()} 没有实际展开候选：${(await page.locator(".main-surface").innerText()).slice(0, 1000)}`, { cause: error });
@@ -71,6 +71,10 @@ async function downloaded(page, trigger, extension, label) {
 
 async function exportJSON(page, label) {
   const region = await library(page);
+  const batches = region.locator("details.saved-batches");
+  const summary = batches.locator(":scope > summary");
+  await summary.waitFor();
+  if (!(await batches.evaluate(element => element.open))) await summary.click();
   await region.locator(".research-list-item").first().waitFor();
   assert.equal(await region.locator(".research-list-item").count(), 1, "隔离工作区应只有本次保存的一份清单");
   const item = region.locator(".research-list-item");
@@ -150,8 +154,8 @@ try {
     try {
       await directory(page);
       await filterLinkedCatalog(page, "NOAA PSL · PDO 月指数");
-      await page.waitForFunction(() => document.querySelectorAll(".catalog-card").length === 1);
-      assert.equal(await page.locator(".catalog-card").count(), 1);
+      await page.waitForFunction(() => document.querySelectorAll(".catalog-record").length === 1);
+      assert.equal(await page.locator(".catalog-record").count(), 1);
       await save(page);
       const result = await exportJSON(page, "q08-filtered-pdo");
       assert.deepEqual(result.value.batch.ids, ["Q08-1"], "当前只显示 PDO，清单不得夹带海冰或背景场");
@@ -166,7 +170,7 @@ try {
     const { page, context, errors } = await workspace("/?task=Q08");
     try {
       await directory(page);
-      const ice = page.locator(".catalog-card").filter({ has: page.locator("h2").filter({ hasText: "NSIDC Sea Ice Index" }) });
+      const ice = page.locator(".catalog-record").filter({ has: page.locator("h2").filter({ hasText: "NSIDC Sea Ice Index" }) });
       await ice.getByRole("button", { name: "加入对照", exact: true }).click();
       await save(page, true);
       const first = await exportJSON(page, "q08-selected-ice");
@@ -185,15 +189,15 @@ try {
     const { page, context, errors } = await workspace("/?task=Q15");
     try {
       await directory(page);
-      const before = { url: page.url(), cards: await page.locator(".catalog-card h2").allTextContents() };
+      const before = { url: page.url(), cards: await page.locator(".catalog-record h2").allTextContents() };
       const region = await library(page);
       await region.getByLabel("导入研究清单", { exact: true }).setInputFiles(q08Snapshot.filename);
       await region.locator(".research-list-item").waitFor();
       assert.equal(page.url(), before.url, "导入动作不应自动切换研究问题");
-      assert.deepEqual(await page.locator(".catalog-card h2").allTextContents(), before.cards, "导入动作改变了当前候选");
+      assert.deepEqual(await page.locator(".catalog-record h2").allTextContents(), before.cards, "导入动作改变了当前候选");
       await region.locator(".research-list-item").getByRole("button", { name: "恢复这份清单", exact: true }).click();
       assert.equal(new URL(page.url()).searchParams.get("task"), "Q08");
-      const cards = await page.locator(".catalog-card h2").allTextContents();
+      const cards = await page.locator(".catalog-record h2").allTextContents();
       assert.equal(cards.length, q08Snapshot.value.items.length, "恢复没有实际改变候选卡片");
       cards.forEach((title, index) => assert(title.includes(q08Snapshot.value.items[index].title), "恢复后的候选顺序与文件不同"));
       const live = await page.evaluate(readActiveWorkspace);
@@ -228,9 +232,9 @@ try {
     try {
       await directory(page);
       await page.getByRole("button", { name: /^需申请资料/ }).click();
-      await page.waitForFunction(() => document.querySelectorAll(".catalog-card").length === 1);
-      assert.equal(await page.locator(".catalog-card").getByRole("button", { name: "定位分布", exact: true }).count(), 0, "受限地址不应在公共地图上定位");
-      await page.locator(".catalog-card").getByRole("button", { name: /数据速览/ }).click();
+      await page.waitForFunction(() => document.querySelectorAll(".catalog-record").length === 1);
+      assert.equal(await page.locator(".catalog-record").getByRole("button", { name: /^(定位分布|在球上查看)$/ }).count(), 0, "受限地址不应在公共地图上定位");
+      await page.locator(".catalog-record").getByRole("button", { name: /数据速览/ }).click();
       assert.equal(await page.locator(".overview-inspector").getByRole("button", { name: "导出此表 CSV", exact: true }).count(), 0, "公开论文不应成为住址原始数据下载");
       await page.getByLabel("关闭数据速览", { exact: true }).click();
       await save(page);
@@ -248,9 +252,9 @@ try {
       await region.getByLabel("导入研究清单", { exact: true }).setInputFiles(snapshot.filename);
       await region.locator(".research-list-item").waitFor();
       await region.locator(".research-list-item").getByRole("button", { name: "恢复这份清单", exact: true }).click();
-      assert.equal(await next.page.locator(".catalog-card").count(), 1);
-      assert.match(await next.page.locator(".catalog-card h2").innerText(), /SDPP.*AMIGO.*BAMSE.*PIAMA/);
-      assert.equal(await next.page.locator(".catalog-card").getByRole("button", { name: "定位分布", exact: true }).count(), 0);
+      assert.equal(await next.page.locator(".catalog-record").count(), 1);
+      assert.match(await next.page.locator(".catalog-record h2").innerText(), /SDPP.*AMIGO.*BAMSE.*PIAMA/);
+      assert.equal(await next.page.locator(".catalog-record").getByRole("button", { name: /^(定位分布|在球上查看)$/ }).count(), 0);
       assert.deepEqual(next.errors, []);
       return { ids: snapshot.value.batch.ids };
     } finally { await next.context.close(); }
@@ -261,8 +265,8 @@ try {
     try {
       await directory(page);
       for (const name of ["NSIDC Sea Ice Index", "NOAA PSL · PDO 月指数"]) {
-        const card = page.locator(".catalog-card").filter({ has: page.locator("h2").filter({ hasText: name }) });
-        assert.equal(await card.getByRole("button", { name: "定位分布", exact: true }).count(), 0, "汇总时间序列不得伪造局地像元");
+        const card = page.locator(".catalog-record").filter({ has: page.locator("h2").filter({ hasText: name }) });
+        assert.equal(await card.getByRole("button", { name: /^(定位分布|在球上查看)$/ }).count(), 0, "汇总时间序列不得伪造局地像元");
         await card.getByRole("button", { name: "加入对照", exact: true }).click();
       }
       await save(page, true);
@@ -312,13 +316,13 @@ try {
     try {
       await page.getByLabel("筛选数据来源", { exact: true }).selectOption("haina");
       await page.locator(".empty-state").waitFor();
-      assert.equal(await page.locator(".catalog-card").count(), 0);
+      assert.equal(await page.locator(".catalog-record").count(), 0);
       assert.equal(await page.getByRole("button", { name: "保存研究清单", exact: true }).count(), 0, "未接入来源的空结果不应生成真实清单");
       await page.getByLabel("筛选数据来源", { exact: true }).selectOption("public");
       await page.waitForURL(url => url.searchParams.get("source") === "public");
       await page.goto(catalogQueryUrl(page.url(), "ERA5-Land"));
-      await page.locator(".catalog-card").first().waitFor();
-      const titles = await page.locator(".catalog-card h2").allTextContents();
+      await page.locator(".catalog-record").first().waitFor();
+      const titles = await page.locator(".catalog-record h2").allTextContents();
       assert(titles.length > 0);
       await save(page);
       const result = await exportJSON(page, "catalog-public-era5land");
@@ -340,7 +344,7 @@ try {
     const { page, context, errors } = await workspace("/?view=discover");
     try {
       await page.goto(catalogQueryUrl(page.url(), "RGI"));
-      await page.locator(".catalog-card").filter({ hasText: /Randolph Glacier Inventory/ }).first().waitFor();
+      await page.locator(".catalog-record").filter({ hasText: /Randolph Glacier Inventory/ }).first().waitFor();
       await save(page);
       const result = await exportJSON(page, "catalog-rgi6-lineage");
       const sameEdition = result.value.items.filter((item) => item.datasetId === "rgi:6.0");
@@ -412,7 +416,7 @@ try {
       assert((await next.page.locator(".result-context .batch-context").innerText()).includes(gridSnapshot.value.batch.selection.id), "返回目录丢失原选格");
       const returned = await next.page.evaluate(readActiveWorkspace);
       for (const field of ["filters", "gridSystem", "layer", "camera"]) assert.deepEqual(returned[field], gridSnapshot.value.batch[field], `返回原条件改变 ${field}`);
-      const titles = await next.page.locator(".catalog-card h2").allTextContents();
+      const titles = await next.page.locator(".catalog-record h2").allTextContents();
       assert.equal(titles.length, gridSnapshot.value.items.length);
       titles.forEach((title, index) => assert(title.includes(gridSnapshot.value.items[index].title), "返回原条件改变资料顺序"));
       assert.deepEqual(next.errors, []);

@@ -61,11 +61,11 @@ try {
   const emptyUrl = page.url();
   const freshEmpty = await pageAt(emptyUrl);
   await freshEmpty.locator(".empty-state").waitFor();
-  assert.equal(await freshEmpty.locator(".catalog-card").count(), 0);
+  assert.equal(await freshEmpty.locator(".catalog-record").count(), 0);
   assert.match(await freshEmpty.locator(".result-context").innerText(), /1960/);
   assert.equal((await frozen(freshEmpty)).snapshot.batch.ids.length, 0);
   await old.getByRole("button", { name: /在数据触达查看本次结果/ }).click();
-  await page.locator(".catalog-card").waitFor();
+  await page.locator(".catalog-record").waitFor();
   await ask(page, "保存这批资料到研究清单");
   assert.deepEqual((await lists(page))[0].batch.ids, [
     "earth-search:landsat-c2-l2:yangtze-1998",
@@ -112,7 +112,7 @@ try {
   );
 
   const catalog = await pageAt(base + "/?view=discover");
-  await catalog.locator(".catalog-card").first().waitFor();
+  await catalog.locator(".catalog-record").first().waitFor();
   assert.equal(new URL(catalog.url()).searchParams.has("result"), false);
   await catalog.goto(catalogQueryUrl(catalog.url(), "完全不存在的资料"));
   await catalog.locator(".empty-state").waitFor();
@@ -123,13 +123,13 @@ try {
     "完全不存在的资料",
   );
   await catalog.goto(catalogQueryUrl(catalog.url(), "PDO 月指数"));
-  const one = catalog.locator(".catalog-card").first();
+  const one = catalog.locator(".catalog-record").first();
   await one.getByRole("button", { name: "收藏资料", exact: true }).click();
   await catalog.getByRole("button", { name: /我的收藏/ }).click();
   const favorite = await pageAt(catalog.url());
-  await favorite.locator(".catalog-card").first().waitFor();
-  assert.equal(await favorite.locator(".catalog-card").count(), 1);
-  assert.match(await favorite.locator(".catalog-card h2").innerText(), /PDO/);
+  await favorite.locator(".catalog-record").first().waitFor();
+  assert.equal(await favorite.locator(".catalog-record").count(), 1);
+  assert.match(await favorite.locator(".catalog-record h2").innerText(), /PDO/);
   assert.equal(
     await favorite.locator(".saved-toggle").getAttribute("aria-pressed"),
     "true",
@@ -139,7 +139,7 @@ try {
   const science = await pageAt(base + "/?task=Q08");
   await science.getByRole("button", { name: "查看研究所需资料" }).click();
   await restoreInspectedBatchInCatalog(science);
-  const cards = science.locator(".catalog-card");
+  const cards = science.locator(".catalog-record");
   await cards.first().waitFor();
   assert.equal(await cards.count(), 4);
   await cards.nth(1).getByRole("button", { name: "加入对照" }).click();
@@ -179,7 +179,7 @@ try {
   );
   const checkedLink = await frozen(science);
   const checked = await pageAt(checkedLink.url);
-  await checked.locator(".catalog-card").first().waitFor();
+  await checked.locator(".catalog-record").first().waitFor();
   assert.equal(
     await checked.getByRole("button", { name: "已选对照" }).count(),
     2,
@@ -187,22 +187,22 @@ try {
   await science.getByRole("button", { name: "关闭数据速览" }).click();
   await science.goto(catalogQueryUrl(checkedLink.url, "PDO 月指数"));
   await science.waitForFunction(
-    () => document.querySelectorAll(".catalog-card").length === 1,
+    () => document.querySelectorAll(".catalog-record").length === 1,
   );
   const filtered = await pageAt(science.url());
-  await filtered.locator(".catalog-card").first().waitFor();
+  await filtered.locator(".catalog-record").first().waitFor();
   assert.equal(
     await filtered.locator(".access-query-filter strong").innerText(),
     "PDO 月指数",
   );
-  assert.equal(await filtered.locator(".catalog-card").count(), 1);
+  assert.equal(await filtered.locator(".catalog-record").count(), 1);
   assert.equal(await filtered.locator(".message.user").count(), 0);
   console.log("PASS 单份、勾选、整批保存，复制后保留候选、勾选与目录筛选");
 
   const cited = await pageAt(base + "/?task=Q08");
   await cited.getByRole("button", { name: "查看研究所需资料" }).click();
   await restoreInspectedBatchInCatalog(cited);
-  const sourceCard = cited.locator(".catalog-card").first();
+  const sourceCard = cited.locator(".catalog-record").first();
   await sourceCard.getByRole("button", { name: /数据速览/ }).click();
   await cited
     .locator(".overview-inspector")
@@ -215,7 +215,7 @@ try {
   const original = cited.locator(".message-citation button").first();
   assert.match(await original.innerText(), /13–24/);
   await cited
-    .locator(".catalog-card")
+    .locator(".catalog-record")
     .nth(1)
     .getByRole("button", { name: /数据速览/ })
     .click();
@@ -233,7 +233,7 @@ try {
   const anotherCase = await ask(cited, "Q15 研究问题需要哪些资料？");
   await anotherCase.getByRole("button", { name: /在数据触达查看本次结果/ }).click();
   await cited
-    .locator(".catalog-card")
+    .locator(".catalog-record")
     .first()
     .getByRole("button", { name: /数据速览/ })
     .click();
@@ -250,7 +250,7 @@ try {
   const absent = await pageAt(base + "/?view=discover&result=" + randomUUID());
   await absent.getByRole("heading", { name: "无法打开这批结果" }).waitFor();
   assert.match(await absent.locator("main").innerText(), /没有该结果快照/);
-  assert.equal(await absent.locator(".catalog-card").count(), 0);
+  assert.equal(await absent.locator(".catalog-record").count(), 0);
   assert.equal(
     (
       await science.request.put(base + "/api/results/bad", { data: {} })

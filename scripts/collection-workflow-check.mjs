@@ -1,4 +1,4 @@
-import { openDataAccessNavigation, restoreInspectedBatchInCatalog } from "./data-access-ui-helpers.mjs";
+import { openDataAccessNavigation } from "./data-access-ui-helpers.mjs";
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 const browser = await chromium.launch({
@@ -32,12 +32,8 @@ try {
   await p.screenshot({ path: "/tmp/oneearth-q08-collection.png" });
   await p.goto(base + "/?task=Q15");
   await p.getByRole("button", { name: "查看研究所需资料" }).click();
-  await restoreInspectedBatchInCatalog(p);
-  await p.getByRole("button", { name: /需申请资料/ }).click();
-  const card = p.locator(".catalog-card");
-  assert.equal(await card.count(), 1);
-  assert.equal(await card.getByRole("button", { name: "定位分布" }).count(), 0);
-  await card.getByRole("button", { name: /数据速览/ }).click();
+  await dock.locator(".batch-list button").filter({ hasText: /SDPP.*AMIGO.*BAMSE.*PIAMA/ }).click();
+  assert.ok(await dock.getByRole("button", { name: "数据上球", exact: true }).isDisabled());
   assert.match(await dock.innerText(), /队列|住址/);
   assert((await dock.locator('a[href*="ki.se"]').count()) >= 1);
   assert(!(await dock.getByRole("button", { name: /导出此表/ }).count()));
@@ -52,6 +48,8 @@ try {
   assert.match(await dock.innerText(), /WPS/);
   await p.setViewportSize({ width: 390, height: 844 });
   await p.reload();
+  const closeChat = p.getByRole("button", { name: "收起 Chat", exact: true });
+  if (await closeChat.isVisible()) await closeChat.click();
   await p.getByRole("button", { name: "查看研究所需资料" }).click();
   assert.ok(await dock.getByRole("button", { name: "数据上球", exact: true }).isDisabled());
   assert.equal(

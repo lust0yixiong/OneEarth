@@ -12,7 +12,7 @@ async function readingPosition() {
     await page.goto(base + "/?task=Q08");
     await page.getByRole("button", {name:"查看研究所需资料"}).click();
     await restoreInspectedBatchInCatalog(page);
-    const card = page.locator(".catalog-card").filter({hasText:"NSIDC Sea Ice Index"});
+    const card = page.locator(".catalog-record").filter({hasText:"NSIDC Sea Ice Index"});
     await card.getByRole("button", {name:/数据速览/}).click();
     await page.locator(".overview-inspector").getByRole("button", {name:"预览表格",exact:true}).first().click();
     // Reproduce the durable state left by a reload before the async position
@@ -50,7 +50,7 @@ async function windSession(status) {
       else await route.continue();
     });
     await page.goto(base + "/?view=discover&q=GFS");
-    await page.locator(".catalog-card").filter({hasText:/风场/}).first().getByRole("button",{name:/数据速览/}).click();
+    await page.locator(".catalog-record").filter({hasText:/风场/}).first().getByRole("button",{name:/数据速览/}).click();
     await page.getByRole("button",{name:"预览原始网格"}).waitFor();
     const oldId = await page.evaluate(() => history.state.oneearthSession);
     const request = page.waitForRequest("**/visualizations/gfs/wind.bin");
