@@ -1,7 +1,7 @@
 import {rankEvidence} from "./evidence-ranking";
 import {modelSafeText,modelSafeValue} from "./model-context-safety";
 
-export const synthesisPromptByteLimit=56*1024;
+export const synthesisPromptByteLimit=192*1024;
 export const synthesisTimeLimitMs=110000;
 type Row=Record<string,any>&{ref:string};
 export type RetainedEvidence={ref:string;identity:string;title:string;quote?:string;level:string;sourceGroup:string;quality:number;score:number;mentionsRequestedYear:boolean;relevant:boolean;pinned:boolean};
@@ -74,7 +74,9 @@ function core(payload:Record<string,any>){
 }
 
 export function packSynthesisContext(instructions:string,input:Record<string,any>,options:PackOptions){
-  const payload=modelSafeValue(input),original=serialize(instructions,payload),limit=Math.min(synthesisPromptByteLimit,options.maxBytes??48*1024);
+  const payload=modelSafeValue(input),original=serialize(instructions,payload);
+  const requested=options.maxBytes??synthesisPromptByteLimit;
+  const limit=Number.isFinite(requested)?Math.min(synthesisPromptByteLimit,requested):synthesisPromptByteLimit;
   const rows:Row[]=[...(payload.catalogue||[]),...(payload.webResults||[])],pinned=new Set(options.pinnedRefs||[]);
   const queries=[options.question,payload.researchIntent?.task,...(options.matchHints||[])].filter((value):value is string=>typeof value==="string"&&!!value);
   const ranked=rankEvidence(rows,queries,row=>row.title||"",row=>JSON.stringify(row),row=>pinned.has(row.ref));

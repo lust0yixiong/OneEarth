@@ -29,10 +29,10 @@ function assessment(statement:string,status:SourceChangeAssessment["status"],quo
   return {ref:"S1",statement,status,historyWindow:status==="reverified"?"H1":null,historyQuote:status==="reverified"?grouping:null,currentWindow:"C1",currentQuote:quote};
 }
 const decoded=(prompt:string)=>JSON.parse(prompt.slice(prompt.lastIndexOf("\n{")+1));
-async function assemble(run:ReturnType<typeof researchExecutor>["model"],hit=current(),record:DiscoveryResponse|null=parent){
+async function assemble(run:ReturnType<typeof researchExecutor>["model"],hit=current(),record:DiscoveryResponse|null=parent,budget?:{promptBytes:number}){
   const executor:ReturnType<typeof researchExecutor>={name:"codex",model:run,discover:async()=>{throw Error("No discovery request");},read:async()=>{throw Error("No source request");},close:async()=>{}};
   return modelReply(query,context,{message:"精确重读已实际取得原PDF节选"},[{role:"assistant",text:"此前归档",conversationEvidence:record?.conversationEvidence}],executor,new AbortController().signal,
-    undefined,[],"",undefined,undefined,undefined,{plan,searches:runs(hit)},[],{record:record||undefined});
+    undefined,[],"",undefined,undefined,undefined,{plan,searches:runs(hit)},[],{record:record||undefined},undefined,undefined,budget);
 }
 
 test("same source compares the longer original archive and actual reread with original layer, time and page anchors",()=>{
@@ -180,4 +180,33 @@ test("an unassignable field error prevents recovery of prose that may contain th
   assert.equal(calls,2);
   assert.doesNotMatch(result.message,/另有无法证实的全新差值|四站分组在此前保存的图注中已齐全/);
   assert.match(result.message,/回答整理未能完成/);
+});
+
+test("large exact-source generation and corrective model call share the new cap in the answer pipeline",async()=>{
+  const promptSizes:number[]=[];
+  const result=await assemble(async prompt=>{
+    promptSizes.push(Buffer.byteLength(prompt));
+    const valid=assessment(correctStatement,"reverified");
+    if(promptSizes.length===1)return JSON.stringify({...template,message:correctStatement+"。[S1]",sourceChanges:[{...valid,currentQuote:7}]});
+    assert.equal(decoded(prompt).issue.comparison.path,"sourceChanges[0].currentQuote");
+    return JSON.stringify({...template,message:correctStatement+"。[S1]",sourceChanges:[valid]});
+  },current("\n"+"原始测站校准记录。".repeat(3200)));
+  assert.equal(promptSizes.length,2);
+  assert.ok(promptSizes.every(bytes=>bytes>56*1024&&bytes<=192*1024));
+  assert.equal(result.answerNotes?.references?.length,1);
+  assert.match(result.message,new RegExp(correctStatement));
+});
+
+test("an explicit lower answer budget also bounds a citation repair",async()=>{
+  const sizes:number[]=[];
+  const limit=48*1024;
+  const result=await assemble(async prompt=>{
+    sizes.push(Buffer.byteLength(prompt));
+    if(sizes.length===1)return JSON.stringify({...template,message:"资料片段提供了说明。[S99]"+"测试草稿。".repeat(4300)});
+    assert.equal(decoded(prompt).issue.kind,"out-of-range");
+    return JSON.stringify({...template,message:"资料片段提供了说明。[S1]"});
+  },current(),null,{promptBytes:limit});
+  assert.equal(sizes.length,2);
+  assert.ok(sizes.every(bytes=>bytes<=limit));
+  assert.equal(result.answerNotes?.references?.length,1);
 });

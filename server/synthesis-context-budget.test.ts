@@ -13,7 +13,7 @@ const noisy=Array.from({length:50},(_,i)=>({ref:"S"+(i+1),id:"other-"+i,title:"S
 const input=()=>({question:query,researchIntent:{task:query,region:"北部流域",time:options.time},catalogue:noisy,webResults:[snippet,read]});
 
 test("whole UTF-8 packet retains a late relevant actual window and stable source number",()=>{
- const payload=input(),before=JSON.stringify(payload),packet=packSynthesisContext("科学证据规则".repeat(100),payload,options);
+ const payload=input(),before=JSON.stringify(payload),packet=packSynthesisContext("科学证据规则".repeat(100),payload,{...options,maxBytes:48*1024});
  assert.equal(packet.blocked,false);assert.ok(Buffer.byteLength(packet.prompt)<=48*1024);
  assert.equal(packet.stats.promptBytes,Buffer.byteLength(packet.prompt));assert.ok(packet.stats.originalPromptBytes>100000);
  const selected=packet.payload.webResults.find((row:any)=>row.ref==="S52");assert.equal(selected.pageExcerpt,original);
@@ -70,8 +70,22 @@ test("no direct quote preserves a retrieval limitation and never selects the fir
  assert.ok(retainedSourceAnswer([],[],[],true));assert.equal(retainedSourceAnswer([],[],[],false),undefined);
 });
 
+
+test("default synthesis fits the original large UTF-8 packet under one 192 KiB ceiling",()=>{
+ const large={question:query,workspace:{otherEvidence:"观测".repeat(17000)},webResults:[read]};
+ const packet=packSynthesisContext("rules",large,options);
+ assert.equal(synthesisPromptByteLimit,192*1024);
+ assert.equal(packet.stats.limitBytes,192*1024);
+ assert.equal(packet.blocked,false);assert.equal(packet.stats.partial,false);
+ assert.ok(packet.stats.promptBytes>56*1024);
+ assert.equal(packet.stats.promptBytes,packet.stats.originalPromptBytes);
+ assert.equal(packet.payload.webResults[0].ref,read.ref);
+ assert.equal(packSynthesisContext("rules",large,{...options,maxBytes:48*1024}).blocked,true);
+});
+
 test("mandatory context exceeding the hard limit never supplies an oversized model packet",()=>{
- const packet=packSynthesisContext("x".repeat(synthesisPromptByteLimit+1),{catalogue:[]},{question:"q"});
+ const packet=packSynthesisContext("x".repeat(synthesisPromptByteLimit+1),{catalogue:[]},{question:"q",maxBytes:synthesisPromptByteLimit*2});
+ assert.equal(packet.stats.limitBytes,192*1024);
  assert.equal(packet.blocked,true);assert.equal(packet.prompt,"");assert.ok("rejectedPromptBytes" in packet.stats&&Number(packet.stats.rejectedPromptBytes)>synthesisPromptByteLimit);
  assert.equal(utf8Prefix("观测🌏中文",7),"观测");
 });
