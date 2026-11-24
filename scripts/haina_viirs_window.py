@@ -11,9 +11,8 @@ import numpy as np
 import requests
 import tifffile
 
-OBJECT = "SVDNB_npp_20250801_20250831_Global_cog.tif"
-SIZE = 4753924147
-ETAG = '"C761F3ABC311B94BC65841F31019B3AE"'
+from haina_viirs_source import ETAG, OBJECT, SIZE
+
 
 class COGReader(io.RawIOBase):
     name = OBJECT
