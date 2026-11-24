@@ -91,7 +91,7 @@ test("exact .xml octet-stream requires actual JATS, returns a first-read directo
     {sourceRequest:source(unknown.url,"binary/octet-stream",xml).request}),/未取得 HTML/);
 });
 
-function pdfFixture(){
+function pdfFixture(padding=0){
   const line=(x:number,y:number,value:string)=>`BT /F1 12 Tf ${x} ${y} Td (${value}) Tj ET`;
   const stream=[
     line(20,750,"Table 2. Groundwater monitoring results"),
@@ -109,20 +109,22 @@ function pdfFixture(){
   ];
   let body="%PDF-1.4\n";const offsets:number[]=[];
   for(const [index,obj] of objects.entries()){offsets.push(body.length);body+=(index+1)+" 0 obj\n"+obj+"\nendobj\n";}
+  if(padding)body+="%"+"x".repeat(padding)+"\n";
   return Buffer.from(body+"xref\n0 6\n0000000000 65535 f \n"+offsets.map(i=>String(i).padStart(10,"0")+" 00000 n \n").join("")+
     "trailer\n<< /Root 1 0 R /Size 6 >>\nstartxref\n"+body.length+"\n%%EOF\n");
 }
 
-test("PDF locators share one byte snapshot, retain aligned table cells and mark figure caption-only as partial",async()=>{
+test("PDF locators share a five MiB snapshot, retain aligned table cells and mark figure caption-only as partial",async()=>{
   const hit=target("https://evidence.example.org/wells.pdf");
-  const f=source(hit.url,"application/pdf",pdfFixture());
-  const service={sourceRequest:f.request};
+  const f=source(hit.url,"application/pdf",pdfFixture(5*1024*1024));
+  const service={sourceRequest:f.request,sourceSnapshotScope:randomUUID()};
   const ordinary=(await runWebTool(operation(hit,"PDF 原文"),signal(),service)).hits[0];
   assert.ok(ordinary.availableLocators?.some(x=>x.kind==="table"&&x.value==="2"));
   assert.ok(ordinary.availableLocators?.some(x=>x.kind==="page"&&x.value==="1"));
-  f.requests.length=0;
   const locators=[locator("page","1"),locator("table","2"),locator("figure","1"),locator("page","99")];
-  const got=(await runWebTool(operation(hit,"PDF 原文",locators),signal(),service)).hits[0];
+  const located=await runWebTool(operation(hit,"PDF 原文",locators),signal(),service);
+  assert.ok(located.cacheStoredAt);
+  const got=located.hits[0];
   assert.deepEqual(f.requests,[hit.url]);
   assert.deepEqual(got.locatorResults?.map(x=>x.status),["found","partial","partial","not_found"]);
   assert.match(got.locatorResults![1].excerpt!,/"cells":\["South","2.75"\]/);

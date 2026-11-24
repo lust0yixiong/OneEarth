@@ -1,9 +1,10 @@
 import type {SourceResponse} from "./source-fetch";
 import {publicPage} from "./fetch-pages";
+import {researchPdfByteBudget} from "./pdf-ranges";
 
 type Snapshot = {response:SourceResponse;cacheStoredAt:string};
 export type ExactSourceSnapshot = {get():Snapshot|undefined;keep(response:SourceResponse):void};
-const ttlMs=90_000, maxBytes=16*1024*1024, maxEntry=4*1024*1024;
+const ttlMs=90_000, maxBytes=16*1024*1024, maxOriginEntry=4*1024*1024;
 const entries=new Map<string,Snapshot>();
 let bytes=0;
 function forget(key:string){
@@ -16,6 +17,7 @@ export function exactSourceSnapshot(researchTaskId:string|undefined,rawUrl:strin
   const url=publicPage(rawUrl);
   if(!researchTaskId||!url)return;
   const key=researchTaskId+"\0"+format+"\0"+url;
+  const maxEntry=format==="pdf"?researchPdfByteBudget:maxOriginEntry;
   return {
     get(){
       const entry=entries.get(key);
