@@ -3309,6 +3309,9 @@ html[data-panel-interaction="move"] * {
 @media (max-width: 760px) {
   .haina-public-mode.haina-docked .earth-side-controls { bottom: 12px; }
 }
+@media (max-width: 760px) and (max-height: 780px) {
+  .haina-public-mode:not(.haina-docked) .earth-side-controls { right: 54px; }
+}
 .haina-public-legend { min-width: 0; }
 .haina-point-switch select { max-width: min(194px, 50vw); }
 .haina-sample { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0 6px; overflow-wrap: anywhere; }
