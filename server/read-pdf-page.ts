@@ -1,20 +1,20 @@
 import {locatorIndexNotice} from "./locator-labels.mjs";
 import type {ExactSourceSnapshot} from "./exact-source-snapshot";
 import {locatorHref,parseSourceReadLocator,type AvailableSourceLocator,type SourceReadLocator,type SourceReadLocatorResult} from "../src/domain/source-read-locator";
-import {readPdfSnapshot} from './pdf-ranges';
+import {readPdfSnapshot,researchPdfByteBudget as byteBudget} from './pdf-ranges';
 import {createHash} from 'node:crypto';
 import {Worker} from 'node:worker_threads';
 import {fetchSource,type SourceRequest} from './source-fetch';
 import type {WebHit} from '../src/domain/types';
 
 const chunkSize=32768;
-const byteBudget=4*1024*1024;
 export async function readPdfPage(hit:WebHit,url:string,parent:AbortSignal,request?:SourceRequest,query='',focusQuestion=query,locators?:SourceReadLocator[],snapshot?:ExactSourceSnapshot){
   const controller=new AbortController();
   const signal=AbortSignal.any([parent,controller.signal,AbortSignal.timeout(14000)]);
   signal.throwIfAborted();
   const cached=snapshot?.get();
   let first=cached?.response||await fetchSource(url,signal,request,{range:'bytes=0-'+(chunkSize-1),maxBytes:byteBudget});
+  if(first.bytes.length>byteBudget)throw Error('PDF 页读取达到本轮字节上限。');
   const range=first.headers['content-range']?.match(/^bytes 0-(\d+)\/(\d+)$/);
   let size=first.status===200?first.bytes.length:Number(range?.[2]);
   if(first.truncated || !Number.isSafeInteger(size) || size<=0 || size>256_000_000 ||

@@ -5,6 +5,8 @@ import { SourceReadError } from "./source-read-error";
 export const pdfChunkSize = 65536;
 const upstreamChunkSize = 32768;
 const cacheLimit = 32_000_000;
+const defaultSnapshotByteBudget = 4 * 1024 * 1024;
+export const researchPdfByteBudget = 6 * 1024 * 1024;
 
 export interface RemotePdf {
   url: string;
@@ -15,12 +17,12 @@ export interface RemotePdf {
 }
 
 /** One bounded response is a version snapshot even when the server offers no range validator. */
-export async function readPdfSnapshot(url:string,signal:AbortSignal,request?:SourceRequest,maxBytes=4*1024*1024){
-  const limit=Math.min(4*1024*1024,maxBytes);
+export async function readPdfSnapshot(url:string,signal:AbortSignal,request?:SourceRequest,maxBytes=defaultSnapshotByteBudget){
+  const limit=Math.min(researchPdfByteBudget,maxBytes);
   if(!Number.isSafeInteger(limit)||limit<=0)throw new SourceReadError('PDF 读取预算已用尽。','WEB_FETCH_TOO_LARGE');
   const response=await fetchSource(url,signal,request,{maxBytes:limit});
   if(response.status!==200||response.truncated||response.bytes.length>limit||response.bytes.subarray(0,5).toString()!=='%PDF-')
-    throw new SourceReadError('原站未返回本轮4MiB上限内完整的单响应 PDF。','SOURCE_INVALID_RANGE');
+    throw new SourceReadError('原站未返回本轮字节预算内完整的单响应 PDF。','SOURCE_INVALID_RANGE');
   return {...response,fingerprint:'sha256:'+createHash('sha256').update(response.bytes).digest('hex')};
 }
 

@@ -27,10 +27,10 @@ test('a login page or incomplete PDF is not a successful page read',async()=>{
 });
 
 test('PDF without validators uses one bounded complete response, discards probe and records content fingerprint',async()=>{
-  const old=document(40000),fresh=document(40000,'Fresh response only: verified measurement fields and corrected atmospheric retrieval documentation.');
+  const old=document(40000),fresh=document(5*1024*1024,'Fresh response only: verified measurement fields and corrected atmospheric retrieval documentation.');
   let calls=0;
   const r=await readPdfPage(hit,url,new AbortController().signal,async(_u,_s,options):Promise<SourceResponse>=>{
-    calls++;assert.equal(options?.maxBytes,options?.range?4*1024*1024:4*1024*1024-32768);
+    calls++;assert.equal(options?.maxBytes,options?.range?6*1024*1024:6*1024*1024-32768);
     return options?.range?{url,status:206,bytes:old.subarray(0,32768),headers:{'content-range':'bytes 0-32767/'+old.length},truncated:false}:{url,status:200,bytes:fresh,headers:{},truncated:false};
   });
   assert.equal(calls,2);assert.match(r.hits[0].pageExcerpt!,/Fresh response only/);assert.match(r.hits[0].pageExcerpt!,/sha256:[a-f0-9]{64}/);
@@ -42,7 +42,7 @@ test('unvalidated fallback cannot join a second partial response or accept an ov
     await assert.rejects(readPdfPage(hit,url,new AbortController().signal,async():Promise<SourceResponse>=>{
       calls++;
       if(calls===1)return {url,status:206,bytes:pdf.subarray(0,32768),headers:{'content-range':'bytes 0-32767/'+pdf.length},truncated:false};
-      return {url,status:mode==='partial'?206:200,bytes:mode==='oversize'?Buffer.concat([pdf,Buffer.alloc(4*1024*1024)]):pdf,headers:{},truncated:mode==='truncated'};
+      return {url,status:mode==='partial'?206:200,bytes:mode==='oversize'?Buffer.concat([pdf,Buffer.alloc(6*1024*1024)]):pdf,headers:{},truncated:mode==='truncated'};
     }));assert.equal(calls,2);
   }
 });
@@ -108,7 +108,7 @@ test('actual PDF worker returns late ground-measurement text rather than only th
 
 test('actual PDF outline destination resolves questionnaire appendix to physical page6 within bounded read budget',async()=>{
   let requests=0;
-  const r=await readPdfPage(hit,url,new AbortController().signal,async(_u,_s,o)=>{requests++;assert.ok((o?.maxBytes||0)<=4*1024*1024);return {url,status:200,bytes:manyPages(true),headers:{},truncated:false};},
+  const r=await readPdfPage(hit,url,new AbortController().signal,async(_u,_s,o)=>{requests++;assert.equal(o?.maxBytes,6*1024*1024);return {url,status:200,bytes:manyPages(true),headers:{},truncated:false};},
     'field survey appendix questionnaire','请看调查附录里的问卷和记录表');
   assert.match(r.hits[0].pageExcerpt!,/PDF 第 6 页/);assert.match(r.hits[0].pageExcerpt!,/APPENDIX_TARGET/);
   assert.match(r.hits[0].pageExcerpt!,/"status":"matched"/);assert.match(r.hits[0].pageExcerpt!,/"pageNo":6/);assert.equal(requests,1);
