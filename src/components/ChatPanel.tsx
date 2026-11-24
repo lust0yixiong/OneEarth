@@ -7,7 +7,7 @@ import {scopeKey} from "../domain/question-scope";
 import {useWebPreview} from "./use-web-preview";
 import {CopyButton,RunDetails} from "./RunDetails";
 import {QuestionCheck} from "./QuestionCheck";
-import {ClarificationDialog} from "./ClarificationDialog";
+import {ClarificationCard} from "./ClarificationCard";
 import { AnswerBody } from "./AnswerBody";
 import { SourceDrawer } from "./SourceDrawer";
 import { sourcesFor } from "../domain/answer-sources";
@@ -222,29 +222,40 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
   },[s.messages,s.unansweredQuestionId]);
   const legacyTarget=s.clarificationReply && replyTargets.get(s.clarificationReply.parentTaskId)?.message;
   const clarificationTarget=legacyTarget && !validClarificationPrompt(legacyTarget.clarificationPrompt) ? legacyTarget : null;
-  const [clarificationDialog,setClarificationDialog]=useState<{sessionId:string;parentTaskId:string;seed?:ClarificationAnswer}|null>(null);
+  const clarificationCardId="chat-clarification-card";
+  const [clarification,setClarification]=useState<{sessionId:string;parentTaskId:string;seed?:ClarificationAnswer;focusOnOpen:boolean}|null>(null);
   const handledClarifications=useRef(new Set<string>());
-  const openClarification=useCallback((parentTaskId:string,seed?:ClarificationAnswer)=>{
+  const clarificationTrigger=useRef<HTMLButtonElement|null>(null);
+  const openClarification=useCallback((parentTaskId:string,seed?:ClarificationAnswer,trigger?:HTMLButtonElement)=>{
     handledClarifications.current.add(s.sessionId+"/"+parentTaskId);
-    setClarificationDialog({sessionId:s.sessionId,parentTaskId,seed});
+    clarificationTrigger.current=trigger ?? null;
+    setClarification({sessionId:s.sessionId,parentTaskId,seed,focusOnOpen:!!trigger || document.activeElement===input.current});
   },[s.sessionId]);
-  const activeClarification=clarificationDialog?.sessionId===s.sessionId
-    ? replyTargets.get(clarificationDialog.parentTaskId) : undefined;
+  const closeClarification=useCallback((submitted=false)=>{
+    const trigger=clarificationTrigger.current;
+    clarificationTrigger.current=null;
+    setClarification(null);
+    requestAnimationFrame(()=>{
+      (submitted || !trigger?.isConnected ? input.current : trigger)?.focus({preventScroll:true});
+    });
+  },[]);
+  const activeClarification=clarification?.sessionId===s.sessionId
+    ? replyTargets.get(clarification.parentTaskId) : undefined;
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyRows, setHistoryRows] = useState<SessionSummary[]>([]);
   const [historyStatus, setHistoryStatus] = useState("");
   const historyButton = useRef<HTMLButtonElement>(null);
   useEffect(()=>{
-    if (clarificationDialog && (!activeClarification || !s.chatOpen)) setClarificationDialog(null);
-  },[activeClarification,clarificationDialog,s.chatOpen]);
+    if (clarification && (!activeClarification || !s.chatOpen)) setClarification(null);
+  },[activeClarification,clarification,s.chatOpen]);
   useEffect(()=>{
-    if (!s.chatOpen || clarificationDialog || historyOpen || composerSources || !latest
+    if (!s.chatOpen || clarification || historyOpen || composerSources || !!text.trim() || !latest
       || latest.historicalReply || historyIds.has(latest.id) || !validClarificationPrompt(latest.clarificationPrompt)
       || !replyTargets.has(latest.id) || handledClarifications.current.has(s.sessionId+"/"+latest.id)
       || document.querySelector("dialog:modal")) return;
     const newestQuestion=s.messages.slice().reverse().find(message=>message.role==="user");
     if (newestQuestion && latest.replyTo===newestQuestion.id) openClarification(latest.id);
-  },[clarificationDialog,composerSources,historyIds,historyOpen,latest,openClarification,replyTargets,s.chatOpen,s.messages,s.sessionId]);
+  },[clarification,composerSources,historyIds,historyOpen,latest,openClarification,replyTargets,s.chatOpen,s.messages,s.sessionId,text]);
   useEffect(() => {
     if (!historyOpen) return;
     let active = true;
@@ -327,9 +338,9 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
               {m.id === s.unansweredQuestionId && m === s.messages.at(-1) && !s.activeChats.some(chat=>chat.userMessageId===m.id) && (
                 m.clarificationAnswer || m.clarificationReply
                   ? replyTargets.has((m.clarificationAnswer || m.clarificationReply)!.parentTaskId) &&
-                    <button className="activity-link" onClick={()=>{
+                    <button className="activity-link" onClick={event=>{
                       const seed=m.clarificationAnswer || {parentTaskId:m.clarificationReply!.parentTaskId,text:m.text};
-                      openClarification(seed.parentTaskId,seed);
+                      openClarification(seed.parentTaskId,seed,event.currentTarget);
                     }}>这条回复未送达，重新提交</button>
                   : <button className="activity-link" onClick={()=>{
                     setText(m.text);patch({draftScope:m.attachedScope || null,citation:m.citation || null,clarificationReply:null});
@@ -342,7 +353,10 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                 onChoose={(choice,edited)=>void confirmQuestion(m.id,choice,edited)}/>}
               {m.role==="assistant" && !m.questionCheck && <AnswerBody message={m} archived={historyIds.has(m.id)} animate={!historyIds.has(m.id) && Date.now()-m.time<3000} onReady={answerReady}
                 clarificationAction={replyTargets.has(m.id) && <button type="button" className="activity-link"
-                  aria-haspopup="dialog" onClick={()=>openClarification(m.id)}>回复此问题</button>}
+                  aria-expanded={activeClarification?.message.id===m.id}
+                  aria-controls={activeClarification?.message.id===m.id ? clarificationCardId : undefined}
+                  onClick={event=>activeClarification?.message.id===m.id ? closeClarification() :
+                    openClarification(m.id,undefined,event.currentTarget)}>回复此问题</button>}
                 showLiveMembership={!hasCoverageRecord(m,questions.get(m.id))}
                 question={questions.get(m.id)?.text || "OneEarth 研究记录"} onQuote={(reference,number)=>{
                   const item={kind:"reference" as const,reference,number,messageId:m.id};
@@ -400,7 +414,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   onClick={() => void retry(m.retry!,m.id)}>重试</button>
               ) : <small>旧记录没有保存完整请求，可重新提问。</small>)}
             </article>
-          )),[s.messages,s.unansweredQuestionId,s.activeChats,s.camera,s.gridSystem,historyIds,questions,patch,confirmQuestion,attachScope,retry,inspectAsset,answerReady,regionsByQuestion,flyToResearchRegion,locateQuestion,replyTargets,openClarification]);
+          )),[s.messages,s.unansweredQuestionId,s.activeChats,s.camera,s.gridSystem,historyIds,questions,patch,confirmQuestion,attachScope,retry,inspectAsset,answerReady,regionsByQuestion,flyToResearchRegion,locateQuestion,replyTargets,openClarification,activeClarification,closeClarification]);
   if (!s.chatOpen) return null;
   const examples =
     c?.id === "wind"
@@ -529,6 +543,17 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
             <span className="composer-sources-icon" aria-hidden="true"><ListChecks size={14}/><Clock3 className="composer-sources-recent" size={8}/></span>本轮来源与依据 · <span>{latestSources.length}</span><ChevronRight size={13} aria-hidden="true"/>
           </button>
         </div>}
+        {clarification && activeClarification ? <ClarificationCard
+          key={clarification.sessionId+"/"+clarification.parentTaskId}
+          id={clarificationCardId} sessionId={clarification.sessionId} parentTaskId={clarification.parentTaskId}
+          prompt={activeClarification.prompt} seed={clarification.seed} focusOnOpen={clarification.focusOnOpen}
+          openOrigin={activeClarification.message.replyTo && questions.has(activeClarification.message.id)
+            ? ()=>locateQuestion(activeClarification.message.replyTo!) : undefined}
+          submit={answer=>{
+            if(!answerClarification(answer))return false;
+            closeClarification(true);
+            return true;
+          }} close={()=>closeClarification()}/> :
         <div className={"chat-composer-input"+(clarificationTarget || s.citation || s.draftScope?.length ? " composer-with-reference" : "")}>
         {clarificationTarget ? <div className="composer-references">
           <div className="citation-attachment" role="group" aria-label="正在回复的澄清">
@@ -592,14 +617,8 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
             </button>
           </div>
         </form>
-        </div>
-        
+        </div>}
       </div>
-      {clarificationDialog && activeClarification && <ClarificationDialog
-        key={clarificationDialog.sessionId+"/"+clarificationDialog.parentTaskId}
-        sessionId={clarificationDialog.sessionId} parentTaskId={clarificationDialog.parentTaskId}
-        prompt={activeClarification.prompt} seed={clarificationDialog.seed} submit={answerClarification}
-        close={()=>setClarificationDialog(null)} restoreFocus={()=>input.current?.focus({preventScroll:true})}/>}
       {composerSources && <SourceDrawer refs={sourcesFor(literatureDisplay(composerSources)).refs} message={composerSources} archived={historyIds.has(composerSources.id)}
         title="本条回答的来源与依据" question={questions.get(composerSources.id)?.text} close={()=>setComposerSources(null)}/>}
     </aside>
