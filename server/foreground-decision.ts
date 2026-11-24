@@ -27,6 +27,14 @@ function exact(value:any,keys:string[]){
 }
 const text=(v:unknown,max:number):v is string=>typeof v==="string"&&!!v.trim()&&v.length<=max&&!v.includes("\0");
 
+/** Only a well-shaped read can request the bounded cardinality correction. */
+export class ForegroundReadCardinalityError extends Error {
+  constructor(readonly targets:string[],private readonly wire:Record<string,unknown>){
+    super("读取需要一至三个确切对象。");
+  }
+  withTargets(targets:string[]){return JSON.stringify({...this.wire,decide:{kind:"read",targets}});}
+}
+
 /** Also validates plain-JSON model providers that cannot enforce the schema. */
 export function normalizeForegroundDecision(raw:string,input:TurnInput){
   const value=JSON.parse(raw.trim().replace(/^```(?:json)?\s*|\s*```$/gi,""));
@@ -58,7 +66,7 @@ export function normalizeForegroundDecision(raw:string,input:TurnInput){
   if((d.kind==="clarify"||d.kind==="propose-workspace")&&!text(clarification,500))throw Error("追问缺少有效问题。");
   if((d.kind==="workspace"||d.kind==="propose-workspace")&&(!workspaceAction||typeof workspaceAction!=="object"||Array.isArray(workspaceAction)))throw Error("界面操作需要确切动作。");
   if(!Array.isArray(targets)||targets.length>8||!targets.every(v=>text(v,2300)))throw Error("依据目标列表无效。");
-  if(d.kind==="read"&&(!targets.length&&!(input.observationAvailable&&value.observationUse==="selected")||targets.length>3))throw Error("读取需要确切目标或已核观测资料。");
+  if(d.kind==="read"&&(!targets.length&&!(input.observationAvailable&&value.observationUse==="selected")||targets.length>3))throw new ForegroundReadCardinalityError(targets,value);
   const grid=input.context.attachedScope?.find(item=>item.kind==="grid"),time=input.context.attachedScope?.find(item=>item.kind==="time");
   return JSON.stringify({action,goal,targets,clarification,clarificationChoices,clarificationSubject,workspaceAction,reply,
     observationUse:value.observationUse,gridIntent:value.gridIntent,
