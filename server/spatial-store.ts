@@ -32,7 +32,9 @@ export async function spatialStore() {
   catch(error){await pg.end();throw error;}
   const writeLayer = async (layer: Layer, target: Pick<PoolClient,"query"> = pg) => {
     await target.query(`INSERT INTO layers SELECT * FROM jsonb_populate_record(null::layers,$1::jsonb)
-      ON CONFLICT(id) DO UPDATE SET entity_id=EXCLUDED.entity_id,version=EXCLUDED.version,title=EXCLUDED.title,source=EXCLUDED.source`,[JSON.stringify(layer)]);
+      ON CONFLICT(id) DO UPDATE SET entity_id=EXCLUDED.entity_id,version=EXCLUDED.version,title=EXCLUDED.title,source=EXCLUDED.source
+      WHERE (layers.entity_id,layers.version,layers.title,layers.source)
+        IS DISTINCT FROM (EXCLUDED.entity_id,EXCLUDED.version,EXCLUDED.title,EXCLUDED.source)`,[JSON.stringify(layer)]);
   };
   const writeChunks = async (rows: Chunk[], target: Pick<PoolClient,"query"> = pg) => {
     await target.query(`INSERT INTO layer_chunks
@@ -42,7 +44,9 @@ export async function spatialStore() {
       FROM jsonb_to_recordset($1::jsonb) AS data(route text,layer_id text,starts date,ends date,level integer,
         bounds double precision[],hash text,size integer,media text)
       ON CONFLICT(route) DO UPDATE SET layer_id=EXCLUDED.layer_id,starts=EXCLUDED.starts,ends=EXCLUDED.ends,
-      level=EXCLUDED.level,geom=EXCLUDED.geom,hash=EXCLUDED.hash,size=EXCLUDED.size,media=EXCLUDED.media`,[JSON.stringify(rows)]);
+      level=EXCLUDED.level,geom=EXCLUDED.geom,hash=EXCLUDED.hash,size=EXCLUDED.size,media=EXCLUDED.media
+      WHERE (layer_chunks.layer_id,layer_chunks.starts,layer_chunks.ends,layer_chunks.level,layer_chunks.geom,layer_chunks.hash,layer_chunks.size,layer_chunks.media)
+        IS DISTINCT FROM (EXCLUDED.layer_id,EXCLUDED.starts,EXCLUDED.ends,EXCLUDED.level,EXCLUDED.geom,EXCLUDED.hash,EXCLUDED.size,EXCLUDED.media)`,[JSON.stringify(rows)]);
   };
   return {
     engine:"postgresql" as const,

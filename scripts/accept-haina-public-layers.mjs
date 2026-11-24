@@ -46,7 +46,14 @@ const summaries=[];
 for (const datasetId of ids) {
   assert.ok(installed.some(layer => layer.entity_id==="haina:"+datasetId), "Missing indexed entity "+datasetId);
   const root = "/visualizations/haina/"+datasetId+"/public-v1/";
-  const manifest = JSON.parse(await get(root+"manifest.json",/application\/json/));
+  const manifestRoute=root+"manifest.json";
+  const manifest = JSON.parse(await get(manifestRoute,/application\/json/));
+  const manifestEtag='"'+digests.at(-1).sha256+'"';
+  const unchanged = await fetch(origin.origin+manifestRoute,{
+    headers:{"If-None-Match":manifestEtag},signal:AbortSignal.timeout(5_000),
+  });
+  assert.equal(unchanged.status,304,manifestRoute);
+  assert.equal(await unchanged.text(),"");
   assert.equal(manifest.version,1);
   assert.equal(manifest.datasetId,datasetId);
   assert.ok(manifest.title && manifest.period && manifest.description);
@@ -91,6 +98,20 @@ for (const datasetId of ids) {
   if (datasetId===1835833) {
     assert.ok(views.length>=2 && views.every(view=>view.values), "VIIRS must verify multiple real windows");
     assert.ok(new Set(views.map(view=>view.bounds.join(","))).size===views.length);
+    for (const view of manifest.views) {
+      const [west,south,east,north]=view.bounds;
+      const inset=[
+        west+(east-west)*0.2,south+(north-south)*0.2,
+        east-(east-west)*0.2,north-(north-south)*0.2,
+      ];
+      const query=new URLSearchParams({bbox:inset.join(","),start:"2025-08-01",end:"2025-08-31",level:"0"});
+      const response=await fetch(origin.origin+"/api/spatial/layers/"+datasetId+"/chunks?"+query,{
+        signal:AbortSignal.timeout(5_000),
+      });
+      assert.equal(response.status,200);
+      const {chunks}=await response.json();
+      assert.deepEqual(chunks.map(chunk=>chunk.route).sort(),[view.image,view.grid].sort());
+    }
   }
   summaries.push({datasetId,title:manifest.title,period:manifest.period,views});
 }
