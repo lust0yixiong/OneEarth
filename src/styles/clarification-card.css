@@ -4,14 +4,17 @@
   max-block-size: min(52dvh, 350px);
   padding: 0;
   overflow: hidden;
-  border: 1px solid #cdd9cf;
-  border-radius: 12px;
-  background: #fdfefb;
-  color: #233d30;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--forest);
+  font-size: 14px;
+  line-height: 1.5;
 }
+.chat-compose .oe-clarification-card form:focus-within { border-color: var(--line); }
 .oe-clarification-body {
   min-block-size: 0;
-  padding: 12px;
+  padding: 10px 14px 12px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -21,21 +24,22 @@
   align-items: center;
   gap: 6px 12px;
   font-size: 12px;
-  color: #4c6c57;
+  color: #52685b;
 }
 .oe-clarification-meta button {
   min-block-size: 32px;
-  padding: 3px;
-  border: 0;
+  padding: 0 0 0 5px;
   background: transparent;
-  color: inherit;
-  text-decoration: underline;
+  color: #42684d;
   font: inherit;
+  font-weight: 500;
 }
+.oe-clarification-meta button:hover { text-decoration: underline; }
 .oe-clarification-card h2 {
-  margin: 2px 0 10px;
+  margin: 0 0 8px;
   font-size: 16px;
-  line-height: 1.45;
+  font-weight: 600;
+  line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -46,7 +50,7 @@
 .oe-clarification-option {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   min-block-size: 36px;
   padding: 4px 8px;
   border: 0;
@@ -63,12 +67,13 @@
   display: grid;
   place-items: center;
   flex: none;
-  width: 23px;
-  height: 23px;
+  width: 20px;
+  height: 20px;
   border-radius: 5px;
-  background: #edf2ec;
-  color: #395c44;
-  font-size: 12px;
+  background: #f0f4ef;
+  color: #486452;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 .oe-clarification-option[aria-pressed="true"] .oe-clarification-choice-mark {
   background: #236950;
@@ -88,35 +93,34 @@
   min-block-size: 28px;
   max-block-size: 95px;
   padding-block: 2px 3px;
-  border-block-end: 1px solid #a6bdac;
+  border-block-end: 1px solid #afc2b3;
   field-sizing: content;
-  font-size: 16px;
-  line-height: 1.5;
-  color: #233d30;
+  font: inherit;
+  color: var(--forest);
 }
+.oe-clarification-card .oe-clarification-text textarea::placeholder { color: #607367; }
 .oe-clarification-card footer {
   display: flex;
   flex: none;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 12px;
-  border-top: 1px solid #dfe8df;
-  background: #f7faf5;
+  gap: 6px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
 }
 .oe-clarification-card footer button {
-  min-block-size: 40px;
-  padding: 5px 10px;
+  min-block-size: 34px;
+  padding: 5px 12px;
   border-radius: 7px;
-  border: 1px solid #cdd9cf;
-  background: white;
-  color: inherit;
-  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
 }
-.oe-clarification-card footer button[type="button"] { border-color: transparent; background: transparent; color: #486452; }
+.oe-clarification-card footer button[type="button"] { color: #486452; }
 .oe-clarification-card footer button[type="button"]:hover { background: #edf3ec; }
-.oe-clarification-card footer button[type="submit"] { background: #236950; color: white; border-color: transparent; }
-.oe-clarification-card footer button:disabled { background: #e2e8e3; color: #54655a; opacity: 1; }
+.oe-clarification-card footer button[type="submit"] { background: var(--forest); color: white; }
+.oe-clarification-card footer button[type="submit"]:hover:enabled { background: #29433a; }
+.oe-clarification-card footer button:disabled { background: #e9eee9; color: #54655a; opacity: 1; }
 .oe-clarification-card button:focus-visible,
 .oe-clarification-card textarea:focus-visible {
   outline: 2px solid #46816a;
@@ -129,6 +133,10 @@
 @media (pointer: coarse), (max-width: 520px) {
   .oe-clarification-option, .oe-clarification-card footer button { min-block-size: 44px; }
   .oe-clarification-card .oe-clarification-text textarea { min-block-size: 44px; }
+}
+
+@media (pointer: coarse) {
+  .oe-clarification-card .oe-clarification-text textarea { font-size: 16px; }
 }
 
 @media (max-width: 520px) {
