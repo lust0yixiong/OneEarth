@@ -38,7 +38,7 @@ import { useWorkspace } from "../domain/store";
 import { caseById } from "../domain/catalog";
 import { emptyFilters } from "../domain/spatial";
 import type { SessionSummary } from "../domain/session-storage";
-import {answeredClarificationIds, messageClarificationPrompt} from "../domain/runtime-client";
+import {answeredClarificationIds, messageClarificationPrompt, displayedChatMessages, isClarificationAttempt} from "../domain/runtime-client";
 import {validClarificationPrompt, type ClarificationAnswer} from "../domain/clarification";
 import type { Message } from "../domain/types";
 import "../styles/research-chat.css";
@@ -170,6 +170,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     cancelChat,
     attachScope,
     retry,
+    recoverableClarifications,
     switchSession,
     retrySessionSave,
     sessionSummaries,
@@ -182,7 +183,8 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
   const revision=useCatalogRevision();
   const [readyAnswers,setReadyAnswers]=useState<ReadonlySet<string>>(()=>new Set());
   const answerReady=useCallback((id:string)=>setReadyAnswers(ids=>ids.has(id)?ids:new Set(ids).add(id)),[]);
-  const latest=s.messages.at(-1);
+  const chatMessages=useMemo(()=>displayedChatMessages(s.messages,recoverableClarifications),[s.messages,recoverableClarifications]);
+  const latest=chatMessages.at(-1);
   const latestReady=latest?.role==="assistant" && !latest.failed && !latest.clarification && !latest.questionCheck
     && (historyIds.has(latest.id) || readyAnswers.has(latest.id));
   const latestSources=useMemo(()=>latestReady?sourcesFor(literatureDisplay(latest!)).refs:[],[latest,latestReady,revision]);
@@ -284,7 +286,12 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     if(s.researchRegion)regions.set(s.researchRegion.messageId,s.researchRegion.region);
     return regions;
   },[s.messages,s.researchRegion]);
-  const renderedMessages=useMemo(()=>s.messages.map((m) => (
+  const renderedMessages=useMemo(()=>chatMessages.map((m) => {
+    const parent=m.replyTo && questions.get(m.id);
+    const clarificationFailure=m.failed && (isClarificationAttempt(m.retry) ||
+      !!(parent && (parent.clarificationAnswer || parent.clarificationReply)));
+    const retryAttempt=m.retry && (!clarificationFailure || recoverableClarifications.has(m.id)) ? m.retry : undefined;
+    return (
             <article
               key={m.id}
               id={"message-"+m.id}
@@ -409,12 +416,12 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
               ))}
               {m.research && <ResearchRows message={m}/>}
               </AnswerBody>}
-              {m.failed && (m.retry ? (
-                <button disabled={s.activeChats.some(chat=>chat.userMessageId===m.retry!.userMessageId)}
-                  onClick={() => void retry(m.retry!,m.id)}>重试</button>
-              ) : <small>旧记录没有保存完整请求，可重新提问。</small>)}
+              {m.failed && (retryAttempt ? (
+                <button disabled={s.activeChats.some(chat=>chat.userMessageId===retryAttempt.userMessageId)}
+                  onClick={() => void retry(retryAttempt,m.id)}>{clarificationFailure?"重新连接":"重试"}</button>
+              ) : <small>{clarificationFailure?"可发送一条新问题继续。":"旧记录没有保存完整请求，可重新提问。"}</small>)}
             </article>
-          )),[s.messages,s.unansweredQuestionId,s.activeChats,s.camera,s.gridSystem,historyIds,questions,patch,confirmQuestion,attachScope,retry,inspectAsset,answerReady,regionsByQuestion,flyToResearchRegion,locateQuestion,replyTargets,openClarification,activeClarification,closeClarification]);
+          );}),[chatMessages,s.messages,recoverableClarifications,s.unansweredQuestionId,s.activeChats,s.camera,s.gridSystem,historyIds,questions,patch,confirmQuestion,attachScope,retry,inspectAsset,answerReady,regionsByQuestion,flyToResearchRegion,locateQuestion,replyTargets,openClarification,activeClarification,closeClarification]);
   if (!s.chatOpen) return null;
   const examples =
     c?.id === "wind"

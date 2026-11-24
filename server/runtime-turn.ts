@@ -45,6 +45,7 @@ import { discover } from "../src/domain/discovery";
 import {authorizesWorkspaceViewAction,workspaceViewActionAllowed} from "../src/domain/workspace-view-context";
 import {resolveWorkspaceC40Publication} from "./workspace-c40-publication";
 import {resolveWorkspaceForestPublication} from "./workspace-forest-publication";
+import {resolveWorkspacePublishedLayer} from "./workspace-published-layer";
 import {runtimeTurnContext,boundTurnContext} from "./runtime-turn-context";
 import {discoveryResultBatch,gridCatalogueBatch} from "./runtime-result-batch";
 import {modelSafeValue,modelSafeText} from "./model-context-safety";
@@ -508,7 +509,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       }
       const continuingProposal=!!boundProposal&&internal.approvedConfirmation;
       if(continuingProposal){
-        if(turn.action==="workspace"&&!turn.pendingApproval||turn.workspaceReply||turn.workspaceOperation||turn.workspaceNavigation)
+        if(turn.action==="workspace"&&!turn.pendingApproval||turn.workspaceReply||turn.workspaceOperation||turn.workspaceNavigation||turn.workspaceLayerRequest)
           return complete({message:"这次决定不符合原待办的具体操作，尚未执行。请明确新的目标或确认原提案。",clarification:true,...continuity});
         if(!turn.workspaceAction&&!turn.workspaceLookup&&!turn.workspaceDateLookup)turn.workspaceAction=structuredClone(boundProposal);
       }
@@ -537,7 +538,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       if(pending?.proposedAction&&!internal.approvedConfirmation&&turn.action==="workspace"&&(pending.answer!==undefined||sameProposedTarget)){
         turn.action="clarify";turn.workspacePending=true;turn.clarification="原具体提案仍需明确确认；本轮没有执行。";
         turn.workspaceAction=structuredClone(pending.proposedAction);
-        delete turn.workspaceLookup;delete turn.workspaceDateLookup;delete turn.workspaceNavigation;delete turn.workspaceReply;delete turn.workspaceOperation;
+        delete turn.workspaceLookup;delete turn.workspaceDateLookup;delete turn.workspaceNavigation;delete turn.workspaceReply;delete turn.workspaceOperation;delete turn.workspaceLayerRequest;
         const action=turn.workspaceAction,control=context.workspaceView?.activeLayer?.controls.find(control=>control.id===action.controlId);
         if(control&&!control.options.some(choice=>choice.id===action.valueId)&&control.publication?.revision===action.publicationRevision){
           const choice=action.layerId==="forest"?forestResolution?.lookup?.({mode:"exact",date:action.valueId}).choice:workspaceResolution?.lookup?.(action.valueId).choice;
@@ -582,6 +583,19 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
           ...(turn.workspacePending?{workspacePending:{question,originalQuestion:boundPending?.originalQuestion??body.query,
             ...(proposal?{proposedAction:proposal,proposalOrigin:{layerId:context.workspaceView!.activeLayer!.id,controlId:proposedControl!.id,valueId:proposedControl!.current.id}}:{})}}:{})};
         return complete(reply);
+      }
+      if(turn.action==="workspace"&&turn.workspaceLayerRequest){
+        const request=turn.workspaceLayerRequest;
+        const resolved=await resolveWorkspacePublishedLayer(request.datasetId,request.selection,signal);
+        report({id:"workspace-published-layer",kind:"tool",name:"核对模型选择的已发布图层条目",input:JSON.stringify(request),status:resolved.action?"done":"partial",
+          output:JSON.stringify({action:resolved.action,read:resolved.read,issue:resolved.issue})});
+        if(!resolved.action)return complete({message:resolved.issue||"所选发布图层暂不可用，本轮未加载。",clarification:true,...continuity});
+        const current=await resolved.revalidate?.(signal);
+        report({id:"workspace-published-layer-final",kind:"tool",name:"重验加载条目的发布修订",input:JSON.stringify(resolved.action),status:current?"done":"partial",
+          output:current?"修订未变；仅交由网页核验后加载，尚非网页应用回执。":"发布目录变化或不可用，未交付加载动作。"});
+        if(!current)return complete({message:"发布目录已变化或暂不可用，本轮未加载。请按当前目录重新选择。",clarification:true,...continuity});
+        signal.throwIfAborted();
+        return complete({message:"将加载「"+resolved.title+"」并选择「"+resolved.label+"」，由网页核验原工作台状态后应用。",workspaceLayerOpen:resolved.action,...continuity});
       }
       const hasSourceMaterial=turn.targets.length||context.citation||context.attachedScope?.some(item=>item.kind==="dataset"||item.kind==="reference")||
         conversationEvidence?.length||conversationAssertionEvidence?.length||prior?.answerNotes?.references?.length;

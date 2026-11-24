@@ -53,7 +53,13 @@ export async function prepareRuntimeChat(services: RuntimeServices, id: string, 
   const previousId=original.previousTaskId,previous=answered?.result??(previousId?await priorResult(tasks,original.conversationId,previousId):undefined);
   const parentBody=answered?JSON.parse(answered.parent.body) as RuntimeTurnInput:undefined;
   const originalQuestion=answered?.prompt.kind==="chat"&&parentBody?await originalChatQuestion(tasks,parentBody):parentBody;
-  const actionState=(body:RuntimeTurnInput|undefined)=>{const raw=workspaceActionState(body?.context.workspaceView);return raw?JSON.parse(raw):undefined;};
+  const actionState=(body:RuntimeTurnInput|undefined)=>{
+    const view=body?.context.workspaceView;
+    // A newly supported delivery capability does not change the archived view
+    // or approve an action. Keep checking every actual view/control field.
+    const {publishedLayerActions:_capability,...state}=view||{};
+    const raw=workspaceActionState(view?state as typeof view:undefined);return raw?JSON.parse(raw):undefined;
+  };
   if(answered&&previous?.workspacePending&&!isDeepStrictEqual(actionState(parentBody),actionState(original)))
     return {error:"回答前工作台已改变，原追问已失效。请按当前视图重新发问。"};
   const continuation=answered&&answered.prompt.kind!=="research"&&parentBody?{

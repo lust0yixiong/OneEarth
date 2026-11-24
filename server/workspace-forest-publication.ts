@@ -11,7 +11,7 @@ type Resolution={view:WorkspaceViewContext|undefined;proof?:ForestPublicationPro
   revalidate?:(signal:AbortSignal)=>Promise<boolean>};
 const maxBytes=4*1024*1024,maxFrames=10000;
 
-function dates(value:any):string[]{
+export function publishedForestDates(value:any):string[]{
   if(!value||value.version!==1||value.datasetId!=="haina:1846764"||!Array.isArray(value.frames)||!value.frames.length||value.frames.length>maxFrames)
     throw Error("森林日期目录格式或规模不可用");
   return value.frames.map((frame:any,index:number)=>{
@@ -43,7 +43,7 @@ export function workspaceForestPublications(options:{origin?:string;fetchImpl?:t
       const bytes=Buffer.concat(chunks),revision=createHash("sha256").update(bytes).digest("hex");readBytes=bytes.length;
       if(etag!==null&&workspacePublicationRevision(etag)!==revision)throw Error("森林日期目录内容与发布修订不符");
       let value:unknown;try{value=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes));}catch{throw Error("森林日期目录内容格式无效");}
-      publication={revision,dates:dates(value)};
+      publication={revision,dates:publishedForestDates(value)};
       const actualKey=url.href+"#"+revision;cache.delete(actualKey);cache.set(actualKey,publication);
       while(cache.size>8)cache.delete(cache.keys().next().value!);
     }

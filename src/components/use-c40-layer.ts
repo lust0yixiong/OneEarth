@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useState} from "react";
+import {useEffect, useMemo, useRef, useState} from "react";
 import {hainaC40Manifest, type C40City, type C40Manifest} from "../domain/regional-cases";
 import {c40CityManifestPath} from "../domain/workspace-view-context";
 import {readWorkspacePublication} from "./workspace-publication-client";
@@ -6,7 +6,7 @@ import type {ForestImage} from "../globe/regional-layer";
 
 const cityPath = /^\/visualizations\/haina\/1846639\/(?:full-v1\/)?[a-z0-9-]+\.webp$/;
 const cityId = /^[a-z0-9][a-z0-9-]{0,79}$/;
-type PublishedCities = {manifest:C40Manifest; revision?:string};
+export type PublishedCities = {manifest:C40Manifest; revision?:string};
 
 function validCity(city: C40City) {
   return city && typeof city.id === "string" && cityId.test(city.id) &&
@@ -32,9 +32,10 @@ export async function readC40Catalogue(signal:AbortSignal):Promise<PublishedCiti
   return {manifest, revision};
 }
 
-export function useC40Layer(layer:{frame:number;city?:string}|null) {
+export function useC40Layer(layer:{frame:number;city?:string}|null, verified?:PublishedCities) {
   const active = layer !== null;
-  const [published, setPublished] = useState<PublishedCities|null>(null);
+  const [loadedCatalogue, setPublished] = useState<PublishedCities|null>(null);
+  const usedCatalogue=useRef<PublishedCities|undefined>(undefined);
   const [catalogError, setCatalogError] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [frameError, setFrameError] = useState<C40City|null>(null);
@@ -45,6 +46,13 @@ export function useC40Layer(layer:{frame:number;city?:string}|null) {
     if (!active) {
       setPublished(null);
       setCatalogError(false);
+      return;
+    }
+    if(verified && verified!==usedCatalogue.current){
+      usedCatalogue.current=verified;
+      setPublished(verified);
+      setCatalogError(false);
+      setCatalogLoading(false);
       return;
     }
     const request = new AbortController();
@@ -60,8 +68,9 @@ export function useC40Layer(layer:{frame:number;city?:string}|null) {
         if (!request.signal.aborted) setCatalogLoading(false);
       });
     return ()=>request.abort();
-  },[active,catalogAttempt]);
+  },[active,catalogAttempt,verified]);
 
+  const published=verified && verified!==usedCatalogue.current ? verified : loadedCatalogue;
   const manifest = published?.manifest;
   const cities = useMemo(()=>new Map(manifest?.cities.map(city=>[city.id,city])),[manifest]);
   // Old workspaces persisted a position in the original three-city list.

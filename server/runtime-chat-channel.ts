@@ -14,7 +14,7 @@ export type ChatPreparation = {error: string} | {kind: "research"; checkpoint?: 
 const interrupted = {error: "服务中断了本轮消息。请重新发送以继续。", code: "chat_interrupted"};
 
 const workspaceFields = [
-  "workspaceAction", "workspaceOperation", "view", "catalogQuery", "inspectId", "camera",
+  "workspaceAction", "workspaceLayerOpen", "workspaceOperation", "view", "catalogQuery", "inspectId", "camera",
   "filters", "caseId", "dataView", "visualization", "mesh", "gridSystem", "layer",
   "previewNeed", "previewCaseId", "visualizeNeed", "previewKind", "clearSelection", "selectCenter",
 ] as const satisfies readonly (keyof DiscoveryResponse)[];

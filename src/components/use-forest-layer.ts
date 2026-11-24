@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isForestDate, type HainaForestFrame, type HainaForestManifest } from "../domain/regional-cases";
 import {forestFrameManifestPath} from "../domain/workspace-view-context";
 import {readWorkspacePublication} from "./workspace-publication-client";
 import type { ForestImage } from "../globe/regional-layer";
 
 const base = forestFrameManifestPath.slice(0,-"/manifest.json".length);
-type ForestPublication={manifest:HainaForestManifest;revision?:string};
+export type ForestPublication={manifest:HainaForestManifest;revision?:string};
 function checkedManifest(data: HainaForestManifest) {
   if (data.datasetId !== "haina:1846764" || !Array.isArray(data.frames) || !data.frames.length ||
     data.grid?.width !== 370 || data.grid?.height !== 303 || data.grid.bounds?.length !== 4 ||
@@ -25,9 +25,10 @@ export async function readForestPublication(signal:AbortSignal):Promise<ForestPu
   return {manifest:checkedManifest(JSON.parse(new TextDecoder().decode(bytes))),revision};
 }
 
-export function useForestLayer(layer: { frame: number; date?: string } | null, playing: boolean) {
+export function useForestLayer(layer: { frame: number; date?: string } | null, playing: boolean, verified?:ForestPublication) {
   const active = layer !== null;
-  const [publication, setPublication] = useState<ForestPublication | null>(null);
+  const [loadedCatalogue, setPublication] = useState<ForestPublication | null>(null);
+  const usedCatalogue=useRef<ForestPublication|undefined>(undefined);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState(false);
   const [imageError, setImageError] = useState<HainaForestFrame | null>(null);
@@ -36,6 +37,13 @@ export function useForestLayer(layer: { frame: number; date?: string } | null, p
   const [imageAttempt, retryImage] = useState(0);
   useEffect(() => {
     if (!active) { setPublication(null); setCatalogLoading(false); setCatalogError(false); return; }
+    if(verified && verified!==usedCatalogue.current){
+      usedCatalogue.current=verified;
+      setPublication(verified);
+      setCatalogError(false);
+      setCatalogLoading(false);
+      return;
+    }
     const request = new AbortController();
     setCatalogLoading(true);
     void readForestPublication(AbortSignal.any([request.signal,AbortSignal.timeout(10000)]))
@@ -46,7 +54,8 @@ export function useForestLayer(layer: { frame: number; date?: string } | null, p
       }).catch(() => { if (!request.signal.aborted) setCatalogError(true); })
       .finally(()=>{if (!request.signal.aborted) setCatalogLoading(false);});
     return () => request.abort();
-  }, [active, catalogAttempt]);
+  }, [active, catalogAttempt, verified]);
+  const publication=verified && verified!==usedCatalogue.current ? verified : loadedCatalogue;
   const manifest=publication?.manifest ?? null;
   const dateIndices=useMemo(()=>new Map(manifest?.frames.map((frame,index)=>[frame.date,index])),[manifest]);
   const date = layer && manifest ?

@@ -63,6 +63,7 @@ export function mergeMessages(existing: Message[], incoming: Message[]) {
     const previous = messages.get(message.id);
     const receipt=matchingWorkspaceReceipt(message);
     if (!previous || (previous.failed && !message.failed) ||
+      (previous.failed && previous.retry && message.failed && !message.retry && previous.replyTo===message.replyTo) ||
       (receipt && previous.replyTo===message.replyTo && !matchingWorkspaceReceipt(previous))) {
       messages.set(message.id, message);
       changed = true;

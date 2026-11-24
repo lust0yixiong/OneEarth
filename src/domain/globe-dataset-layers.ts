@@ -1,6 +1,6 @@
 import { isPublicLayerId, validPublicCoordinate, validPublicViewId, type PublicLayerSelection } from "./haina-public-layer";
 import { validHainaMonth } from "./haina-published-raster";
-import { datasetLayers, globeCases, isForestDate, layerFrameCount, type RegionalId } from "./regional-cases";
+import { datasetLayers, globeCases, isForestDate, layerFrameCount, type C40City, type RegionalId } from "./regional-cases";
 import { isRainYear } from "./rain-catalog";
 import { emptyFilters } from "./spatial";
 import { createDataView, ctdStations } from "./visualization";
@@ -8,6 +8,11 @@ import { validVisualization } from "./visualization-catalog";
 import type { Camera, DataView, Filters, Selection, VisualizationState } from "./types";
 
 export type FieldLayerSelection = {id:RegionalId;frame:number;year?:number;city?:string;date?:string};
+export function c40CityFlight(city:C40City) {
+  return {id:"c40-"+city.id+"-"+Date.now(),kind:"layer-control" as const,
+    camera:{center:city.center,zoom:city.zoom,reason:"C40 · "+city.name}};
+}
+
 type DrawLayer =
   | {kind:"public";selection:PublicLayerSelection}
   | {kind:"field";selection:FieldLayerSelection}

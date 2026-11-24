@@ -1,3 +1,4 @@
+import {c40CityFlight} from "../domain/globe-dataset-layers";
 import { createPortal } from "react-dom";
 import {HainaPublicLayerLegend} from "./HainaPublicLayerLegend";
 import type {HainaPublicLayer} from "./use-haina-public-layer";
@@ -101,11 +102,6 @@ import {countBand} from "../domain/distribution-heat";
 function layerControl(id: string, label: string, options: WorkspaceViewChoice[], value: string, ordered: boolean) {
   const current = options.find(option => option.id === value);
   return current ? [{id, label, options, current, ordered}] : [];
-}
-
-function c40Flight(city:C40City) {
-  return {id:"c40-"+city.id+"-"+Date.now(), kind:"layer-control" as const,
-    camera:{center:city.center,zoom:city.zoom,reason:"C40 · "+city.name}};
 }
 
 export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost}:{
@@ -248,7 +244,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
     const normalize=(c40Layer.city!==undefined&&c40Layer.city!==city.id)
       || (c40Layer.city===undefined&&c40Layer.frame!==0);
     if(fit||normalize)patch({
-      ...(fit?{globeLayerFit:null,flight:c40Flight(city)}:{}),
+      ...(fit?{globeLayerFit:null,flight:c40CityFlight(city)}:{}),
       ...(normalize?{fieldLayer:{...c40Layer,city:city.id}}:{})});
   },[c40Layer,c40.city,focusedLayer,s.globeLayerFit,patch]);
   const fieldImage=forest.image ?? c40.image;
@@ -633,7 +629,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
     const city = c40.cities.get(id);
     if (!c40Layer || !city) return false;
     if (c40.city?.id === id) return true;
-    patch({fieldLayer:{...c40Layer,frame:0,city:id},flight:c40Flight(city)});
+    patch({fieldLayer:{...c40Layer,frame:0,city:id},flight:c40CityFlight(city)});
     return true;
   };
   const resolvePublishedChoice = (publication:WorkspaceViewPublication, id:string) => {
@@ -1007,7 +1003,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
       data-wind-theme={s.visualization ? windTheme : undefined}
       aria-label="数据地球"
     >
-      <GlobeLayerResources layers={visibleLayers} focus={s.globeLayerFocus} playing={animate}
+      <GlobeLayerResources layers={visibleLayers} focus={s.globeLayerFocus} playing={animate} catalogues={s.publishedFieldCatalogues}
         viewport={frame.publicViewport} report={report}/>
       <div className="earth-canvas-wrap">
         <canvas

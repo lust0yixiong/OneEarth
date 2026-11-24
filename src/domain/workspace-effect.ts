@@ -3,7 +3,7 @@ import type {BrowserWorkspaceReceipt,WorkspaceEffect} from "./turn-context";
 import type {State} from "./store";
 import {datasetLayerFromView} from "./globe-dataset-layers";
 
-type Operation=NonNullable<DiscoveryResponse["workspaceAction"]|DiscoveryResponse["workspaceOperation"]>|WorkspaceEffect;
+type Operation=NonNullable<DiscoveryResponse["workspaceAction"]|DiscoveryResponse["workspaceOperation"]|DiscoveryResponse["workspaceLayerOpen"]>|WorkspaceEffect;
 type Status=BrowserWorkspaceReceipt["state"]|"not-applied"|"proposed";
 const prefix="workspace-effect/";
 const label:Record<Status,string>={

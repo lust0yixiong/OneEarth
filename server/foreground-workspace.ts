@@ -4,6 +4,7 @@ import {validVisualization} from "../src/domain/visualization-catalog";
 import {ctdStations} from "../src/domain/visualization";
 import type {TurnTarget} from "./turn-planning";
 import {workspaceCandidateOperationAllowed} from "../src/domain/workspace-operations";
+import {publishedWorkspaceLayerRecipes} from "../src/domain/workspace-published-layer";
 
 const shape=(kind:string,properties:Record<string,unknown>)=>({type:"object",additionalProperties:false,required:["kind",...Object.keys(properties)],properties:{kind:{type:"string",enum:[kind]},...properties}});
 export function foregroundWorkspaceSchemas(context?:DiscoveryContext){
@@ -14,6 +15,8 @@ export function foregroundWorkspaceSchemas(context?:DiscoveryContext){
     shape("open-target",{targetKey:{type:"string",maxLength:2300}}),
     shape("workspace-candidates",{operation:{type:"string",enum:["open-candidate","compare-candidates"]},ids:{type:"array",minItems:1,maxItems:6,items:{type:"string",maxLength:160}}}),
   ];
+  if(context?.workspaceView?.publishedLayerActions===true)result.push(shape("open-published-layer",{
+    datasetId:{type:"string",enum:Object.keys(publishedWorkspaceLayerRecipes)},selection:{type:"string",minLength:1,maxLength:200}}));
   // Visualization is a registered, finite UI state, never an arbitrary patch.
   result.push(shape("workspace-visualization",{value:{anyOf:[{type:"null"},{type:"object",additionalProperties:false,
     required:["id","level","forecastHour","playing","color"],properties:{id:{type:"string",enum:["gfs-wind"]},level:{type:"string",enum:["10m","250hPa"]},

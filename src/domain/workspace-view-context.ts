@@ -44,6 +44,7 @@ export type WorkspaceViewContext = {
   candidateItems?: WorkspaceCandidateItem[];
   catalogue?: {section?:string;type?:string;source?:string;capability?:string;page?:number;savedOnly?:boolean};
   operations?: WorkspaceOperationKind[];
+  publishedLayerActions?: true;
 };
 
 export type WorkspaceViewAction = {
@@ -141,14 +142,15 @@ function catalogue(v:unknown) {
 
 /** User-visible context only. It carries no source access, scope, or operation grant. */
 export function validWorkspaceViewContext(value:unknown):value is WorkspaceViewContext {
-  return object(value,["version","surface","map","case","activeLayer","focus","candidates","candidateItems","catalogue","display","operations"])&&
+  return object(value,["version","surface","map","case","activeLayer","focus","candidates","candidateItems","catalogue","display","operations","publishedLayerActions"])&&
     value.version===1&&member(value.surface,["earth","discover","cases"])&&optional(value.display,displayFacts)&&
     optional(value.map,mapContext)&&optional(value.case,v=>object(v,["id","title"])&&id(v.id)&&label(v.title,240))&&
     optional(value.activeLayer,activeLayer)&&optional(value.focus,focus)&&
     optional(value.candidates,v=>object(v,["count","title"])&&integer(v.count,0,10000000)&&optional(v.title,label))&&
     optional(value.candidateItems,items=>Array.isArray(items)&&items.length<=16&&items.every(choice)&&
       new Set(items.map(item=>item.id)).size===items.length)&&
-    optional(value.catalogue,catalogue)&&optional(value.operations,operations=>
+    optional(value.catalogue,catalogue)&&optional(value.publishedLayerActions,enabled=>enabled===true)&&
+    optional(value.operations,operations=>
       Array.isArray(operations)&&operations.length<=workspaceOperationKinds.length&&operations.every(validWorkspaceOperationKind)&&
       new Set(operations).size===operations.length);
 }

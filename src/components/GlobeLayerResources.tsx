@@ -8,6 +8,7 @@ import {useRainCatalog} from "./use-rain-catalog";
 import {useFieldData} from "./use-field-data";
 import {useForestLayer} from "./use-forest-layer";
 import {useC40Layer} from "./use-c40-layer";
+import type {PublishedFieldCatalogues} from "./published-field-layer";
 
 type PublicEntry=Extract<GlobeDatasetLayer,{kind:"public"}>;
 type FieldEntry=Extract<GlobeDatasetLayer,{kind:"field"}>;
@@ -52,8 +53,8 @@ const PublicResource=memo(function PublicResource({entry,viewport,report}:{
   return null;
 });
 
-const FieldResource=memo(function FieldResource({entry,playing,report}:{
-  entry:FieldEntry;playing:boolean;report:UpdateResource;
+const FieldResource=memo(function FieldResource({entry,playing,report,catalogues}:{
+  entry:FieldEntry;playing:boolean;report:UpdateResource;catalogues?:PublishedFieldCatalogues;
 }) {
   const {selection}=entry;
   const publication=useRainCatalog(selection.id==="rain");
@@ -61,19 +62,21 @@ const FieldResource=memo(function FieldResource({entry,playing,report}:{
   const period=catalog?publishedRainPeriod(catalog,selection.year,selection.frame):null;
   const layer=period?{...selection,...period}:selection;
   const fieldData=useFieldData(layer,catalog,true);
-  const forest=useForestLayer(layer.id==="forest"?layer:null,playing);
-  const c40=useC40Layer(layer.id==="c40"?layer:null);
+  const forest=useForestLayer(layer.id==="forest"?layer:null,playing,layer.id==="forest"?catalogues?.forest:undefined);
+  const c40=useC40Layer(layer.id==="c40"?layer:null,layer.id==="c40"?catalogues?.c40:undefined);
   useResourceReport(entry.id,{kind:"field",selection,layer,publication,fieldData,forest,c40},report);
   return null;
 });
 
-export function GlobeLayerResources({layers,focus,playing,viewport,report}:{
+export function GlobeLayerResources({layers,focus,playing,viewport,report,catalogues}:{
   layers:GlobeDatasetLayer[];focus:string|null;playing:boolean;viewport?:HainaViewport;report:UpdateResource;
+  catalogues?:PublishedFieldCatalogues;
 }) {
   return layers.map(entry=>{
     if(entry.kind==="public")return <PublicResource key={entry.id} entry={entry} report={report}
       viewport={entry.selection.id===1835833?viewport:undefined}/>;
-    if(entry.kind==="field")return <FieldResource key={entry.id} entry={entry} report={report} playing={playing&&entry.id===focus}/>;
+    if(entry.kind==="field")return <FieldResource key={entry.id} entry={entry} report={report} playing={playing&&entry.id===focus}
+      catalogues={entry.selection.id==="c40" || entry.selection.id==="forest" ? catalogues : undefined}/>;
     return null;
   });
 }

@@ -40,6 +40,8 @@ test("Chat receipt and research handoff retain identity while the existing worke
         pending.resolve();
         await delay(5000, undefined, {signal});
       }
+      if(query==="load published layer")return {kind:"reply",payload:{result:{message:"load the verified published entry",workspaceLayerOpen:{
+        kind:"open-published-layer",datasetId:"haina:1846639",valueId:"shanghai-chn",publicationRevision:"a".repeat(64)}}}};
       if (query !== "show next city") return {kind: "research", handoff: {query}};
       return {kind: "reply", payload: {result: {message: "next city", camera: {center: [116.4, 39.9], zoom: 165}}}};
     },
@@ -181,6 +183,18 @@ test("Chat receipt and research handoff retain identity while the existing worke
   assert.equal((await audit.query("SELECT id FROM runtime_tasks WHERE id=ANY($1)",[researchReplies])).rowCount,1);
   assert.equal((await tasks.submit(acceptedReply, researchReply)).id,acceptedReply);
   await tasks.finish(acceptedReply,"cancelled",{error:"controlled test completed"});
+
+  const publishedId=randomUUID(),publishedInput=input("load published layer");
+  assert.equal((await submit(publishedId,publishedInput)).status,202);
+  await until(async()=>(await tasks.get(publishedId))?.status==="complete");
+  const publishedRecord=await (await fetch(task(publishedId)+"/record")).json();
+  assert.deepEqual(publishedRecord.result.workspaceEffect,{effectId:"workspace:"+publishedId,state:"proposed",fields:["workspaceLayerOpen"]});
+  assert.equal((await audit.query("SELECT id FROM runtime_tasks WHERE id=$1",[publishedId])).rowCount,0);
+  const publishedReceipt={effectId:"workspace:"+publishedId,conversationId,turnId:publishedInput.turnId,state:"applied"};
+  assert.equal((await acknowledge(publishedReceipt,publishedId)).status,200);
+  const reopened=await (await fetch(task(publishedId)+"/record")).json();
+  assert.deepEqual(reopened.result.workspaceLayerOpen,publishedRecord.result.workspaceLayerOpen);
+  assert.equal(reopened.workspaceReceipt.state,"applied");assert.equal(seen.get(publishedId),1);
 
   await chat.close();
   await tasks.chat.admit(interrupted, input("interrupted"), 4);

@@ -1,4 +1,4 @@
-import type {DiscoveryResponse,Message} from "./types";
+import type {DiscoveryAttempt,DiscoveryResponse,Message} from "./types";
 import {validBrowserWorkspaceReceipt,type BrowserWorkspaceReceipt,type WorkspaceReceipt} from "./turn-context";
 import {createClarificationPrompt,validClarificationPrompt} from "./clarification";
 
@@ -50,6 +50,25 @@ export function answeredClarificationIds(messages:Message[],unansweredId:string|
     const id=message.clarificationAnswer?.parentTaskId ?? message.clarificationReply?.parentTaskId;
     return message.role==="user" && message.id!==unansweredId && id ? [id] : [];
   }));
+}
+
+export function isClarificationAttempt(attempt:DiscoveryAttempt|undefined) {
+  return !!(attempt?.clarificationAnswer || attempt?.clarificationReply);
+}
+
+export function displayedChatMessages(messages:Message[], recoverable:ReadonlySet<string>) {
+  const turns=new Set(messages.filter(m=>m.role==="user" && (m.clarificationAnswer || m.clarificationReply)).map(m=>m.id));
+  const finished=new Set(messages.flatMap(m=>m.role==="assistant" && !m.failed && m.replyTo ? [m.replyTo] : []));
+  const failure=new Map<string,string>();
+  const isReplyFailure=(m:Message)=>m.role==="assistant" && m.failed && m.replyTo &&
+    (turns.has(m.replyTo) || isClarificationAttempt(m.retry));
+  for(const m of messages){
+    if(!isReplyFailure(m))continue;
+    const turn=m.replyTo!, current=failure.get(turn);
+    if(!current || recoverable.has(m.id) && !recoverable.has(current))failure.set(turn,m.id);
+  }
+  return messages.filter(m=>!isReplyFailure(m) ||
+    (!finished.has(m.replyTo!) && failure.get(m.replyTo!)===m.id));
 }
 
 interface ResearchRecord {

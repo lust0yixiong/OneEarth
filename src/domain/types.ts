@@ -384,6 +384,7 @@ export interface DiscoveryResponse {
   workspaceEffect?: import("./turn-context").WorkspaceEffect;
   workspaceAction?: import("./workspace-view-context").WorkspaceViewAction;
   workspaceOperation?: import("./workspace-operations").WorkspaceOperation;
+  workspaceLayerOpen?: import("./workspace-published-layer").WorkspacePublishedLayerAction;
   workspacePending?: {question:string;originalQuestion?:string;proposedAction?:import("./workspace-view-context").WorkspaceViewAction;
     proposalOrigin?:{layerId:string;controlId:string;valueId:string}};
   clarificationPrompt?:import("./clarification").ClarificationPrompt;

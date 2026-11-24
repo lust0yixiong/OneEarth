@@ -15,6 +15,7 @@ import {modelSafeText,modelSafeValue,originalModelKey} from "./model-context-saf
 import {modelTurnContext,type RuntimeTurnContext} from "./runtime-turn-context";
 import {authorizesWorkspaceViewAction,workspaceViewActionAllowed,type WorkspaceViewAction,type WorkspaceViewContext} from "../src/domain/workspace-view-context";
 import {restoredIntent,clarificationBlockReason,type PlanningContext} from "./plan-adaptation";
+import {publishedWorkspaceLayerRecipes,isPublishedWorkspaceLayerId,type PublishedWorkspaceLayerId} from "../src/domain/workspace-published-layer";
 import type {NumberedReference} from "./follow-up-reference";
 import type {DataSearchResult} from "./data-search";
 
@@ -41,6 +42,7 @@ export type TurnPlan={action:TurnAction;goal:string;evidenceNeed:"none"|"existin
   workspaceAction?:WorkspaceViewAction|null;
   workspaceLookup?:{kind:"resolve-control";layerId:"c40";controlId:"city";query:string};
   workspaceDateLookup?:PublishedDateSelection;
+  workspaceLayerRequest?:{kind:"open-published-layer";datasetId:PublishedWorkspaceLayerId;selection:string};
   workspaceNavigation?:{kind:"navigate-map";place:string};
   workspaceOperation?:WorkspaceOperationKind;workspacePending?:true;pendingTaskId?:string;
   pendingApproval?:true;
@@ -102,6 +104,8 @@ function foregroundPayload(input:TurnInput,targets:TurnTarget[]){
   const view=input.context.workspaceView,layer=view?.activeLayer;
   const facts=(items:WorkspaceViewContext["display"])=>items?.slice(0,6).map(item=>({label:item.label,value:item.value.slice(0,160)}));
   return modelSafeValue({question:input.confirmedQuestion||input.question,turnContext:modelTurnContext(input.turnContext),
+    ...(view?.publishedLayerActions===true?{publishedLayers:Object.entries(publishedWorkspaceLayerRecipes).map(([datasetId,recipe])=>
+      ({datasetId,title:recipe.title,selection:recipe.controlId==="city"?"确切已发布城市名称或稳定ID":"确切已发布ISO日期YYYY-MM-DD"}))}:{}),
     ...(input.workspacePublication?.directory?{controlDirectory:{layerId:"c40",controlId:"city",...input.workspacePublication.directory}}:{}),
     ...(input.forestPublication?{publishedDates:{layerId:"forest",controlId:"time",...input.forestPublication.summary}}:{}),
     followUp:input.pending?{question:input.pending.question.slice(0,700),originalQuestion:input.pending.originalQuestion?.slice(0,700),proposal:input.pending.proposedAction,
@@ -258,6 +262,7 @@ export function parseTurnPlan(raw:string,input:TurnInput,available=turnTargets(i
   if(value?.workspaceAction?.kind==="open-target")value.workspaceAction.targetKey=originalModelKey(value.workspaceAction.targetKey,available.map(target=>target.key))??value.workspaceAction.targetKey;
   let workspaceLookup:TurnPlan["workspaceLookup"];
   let workspaceDateLookup:TurnPlan["workspaceDateLookup"];
+  let workspaceLayerRequest:TurnPlan["workspaceLayerRequest"];
   let workspaceNavigation:TurnPlan["workspaceNavigation"];
   let workspaceOperation:TurnPlan["workspaceOperation"];
   let workspaceReply:TurnPlan["workspaceReply"];
@@ -286,6 +291,14 @@ export function parseTurnPlan(raw:string,input:TurnInput,available=turnTargets(i
     if(!input.semanticDecision||value.action!=="workspace"||typeof action.place!=="string"||!action.place.trim()||action.place.length>200||
       /[\u0000-\u001f\u007f]/u.test(action.place)||Object.keys(action).some(key=>!["kind","place"].includes(key)))throw Error("地图导航需要模型明确的地名或用户坐标。");
     workspaceNavigation={kind:"navigate-map",place:action.place.trim()};value.workspaceAction=null;
+  }
+  if(value?.workspaceAction?.kind==="open-published-layer"){
+    const action=value.workspaceAction;
+    if(!input.semanticDecision||value.action!=="workspace"||input.context.workspaceView?.publishedLayerActions!==true||
+      !isPublishedWorkspaceLayerId(action.datasetId)||typeof action.selection!=="string"||!action.selection.trim()||action.selection.length>200||
+      /[\u0000-\u001f\u007f]/u.test(action.selection)||Object.keys(action).length!==3||
+      Object.keys(action).some(key=>!["kind","datasetId","selection"].includes(key)))throw Error("加载图层需要当前客户端支持、已登记资料和确切选择。");
+    workspaceLayerRequest={kind:"open-published-layer",datasetId:action.datasetId,selection:action.selection.trim()};value.workspaceAction=null;
   }
   if(input.context.workspaceView){
     // Providers without structured output can omit a neutral field. A workspace
@@ -321,7 +334,7 @@ export function parseTurnPlan(raw:string,input:TurnInput,available=turnTargets(i
     if(!value||!Object.hasOwn(value,"workspaceAction")||value.workspaceAction!==null&&
       (value.action!=="workspace"&&!proposingWorkspace||!workspaceViewActionAllowed(input.context.workspaceView,value.workspaceAction)))
       throw Error("当前视图动作必须是空值或当前可用图层、控件的确切选项。");
-    if((value.workspaceAction!==null||workspaceLookup||workspaceDateLookup||workspaceNavigation||workspaceOperation)&&(!Array.isArray(value.targets)||value.targets.length))
+    if((value.workspaceAction!==null||workspaceLookup||workspaceDateLookup||workspaceNavigation||workspaceOperation||workspaceLayerRequest)&&(!Array.isArray(value.targets)||value.targets.length))
       throw Error("当前视图控件操作不能同时读取资料对象。");
   }else if(value?.workspaceAction!==undefined&&!(input.semanticDecision&&value.workspaceAction===null))throw Error("没有发问时的视图快照，不能指定控件动作。");
   if(input.observationUnavailable||input.observationAvailable){
@@ -383,6 +396,7 @@ export function parseTurnPlan(raw:string,input:TurnInput,available=turnTargets(i
     ...(input.observationUnavailable||input.observationAvailable?{observationUse:value.observationUse}:{}),
     ...(workspaceLookup?{workspaceLookup}:{}),
     ...(workspaceDateLookup?{workspaceDateLookup}:{}),
+    ...(workspaceLayerRequest?{workspaceLayerRequest}:{}),
     ...(workspaceNavigation?{workspaceNavigation}:{}),
     ...(workspaceOperation?{workspaceOperation}:{}),...(input.semanticDecision&&(value.clarificationSubject==="workspace"||value.clarificationSubject==="proposal"||input.storedPlan&&value.workspacePending)?{workspacePending:true as const}:{}),
     ...(workspaceReply?{workspaceReply}:{}),
@@ -411,6 +425,7 @@ export async function prepareTurn(input:TurnInput,signal:AbortSignal,deps:Planni
   signal.throwIfAborted();
   const available=turnPlanningTargets(input);
   const instructions=input.semanticDecision?foregroundInstructions+
+    (input.context.workspaceView?.publishedLayerActions===true?"\npublishedLayers是已登记的可加载图层，即使当前activeLayer为空或为别的层也可用。明确要求加载其中资料时，workspace.action可用{kind:\"open-published-layer\",datasetId:该资料ID,selection:确切城市名称/稳定ID或ISO日期}；由运行时查固定发布目录、唯一核验并绑定修订后交网页加载及选择。selection不是URL，不从显示标签造原文/研究权限；城市可规范名称，日期必须完整，未知或缺选择先clarify。只适用于直接工作台操作；若用户要求先确认，不发加载动作，应先clarify询问，不能在追问中同时执行。询问/否定用respond/clarify，原活动图层控件切换仍用既有动作。":"")+
     (input.observationAvailable||input.observationUnavailable?"\nobservationUse: unrelated=不依赖观测文件（界面操作也属此）；"+
       (input.observationAvailable?"selected=本轮确需该获准材料读取/依据原读据回答，交观测流程；不能因附件/历史存在而选；":"")+
       (input.observationUnavailable?"unavailable=本轮真正依赖当前不可用旧资料，只说明限制，不能复述旧事实；":""):"")+

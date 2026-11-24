@@ -14,7 +14,7 @@ const identifier=(v:unknown):v is string=>typeof v==="string"&&/^[a-z0-9][a-z0-9
 const text=(v:unknown):v is string=>typeof v==="string"&&!!v.trim()&&v.length<=200&&!/[\u0000-\u001f\u007f]/u.test(v);
 const normalize=(v:string)=>v.normalize("NFKD").replace(/\p{M}/gu,"").toLowerCase().replace(/\s+/gu," ").trim();
 
-function cities(value:any):City[]{
+export function publishedC40Cities(value:any):City[]{
   if(!value||value.version!==1||value.datasetId!=="haina:1846639"||!Array.isArray(value.cities)||
     !value.cities.length||value.cities.length>maxCities)throw Error("城市目录格式或规模不可用");
   const result:City[]=value.cities.map((city:any)=>{
@@ -24,6 +24,14 @@ function cities(value:any):City[]{
   });
   if(new Set(result.map(city=>city.id)).size!==result.length)throw Error("城市目录身份重复");
   return result;
+}
+
+export function uniquePublishedCity(entries:City[],query:string){
+  if(!text(query))return;
+  const normalized=normalize(query),matches=entries.filter(city=>city.aliases.some(alias=>{
+    const name=normalize(alias);return name===normalized||name.startsWith(normalized+" ");
+  }));
+  return matches.length===1?matches[0]:undefined;
 }
 
 function namedCities(question:string,entries:City[]){
@@ -74,7 +82,7 @@ export function workspaceC40Publications(options:{origin?:string;fetchImpl?:type
       if(etag!==null&&c40CityPublicationRevision(etag)!==revision)throw Error("城市目录内容与发布修订不符");
       let value:unknown;
       try{value=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes));}catch{throw Error("城市目录内容格式无效");}
-      publication={revision,cities:cities(value)};
+      publication={revision,cities:publishedC40Cities(value)};
       const actualKey=url.href+"#"+revision;cache.delete(actualKey);cache.set(actualKey,publication);
       while(cache.size>8)cache.delete(cache.keys().next().value!);
     }
