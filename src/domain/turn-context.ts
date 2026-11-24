@@ -4,7 +4,7 @@ import {validWorkspaceViewContext,type WorkspaceViewContext} from "./workspace-v
 export type TurnRelation = {
   taskId: string;
   turnId?: string;
-  relation: "reply" | "reference" | "visible-batch" | "in-flight" | "workspace-action";
+  relation: "reply" | "reference" | "visible-batch" | "in-flight" | "workspace-action" | "recent-outcome";
 };
 
 export type BrowserBatchRef = {
@@ -152,7 +152,7 @@ export function validBrowserTurnFrame(value: unknown): value is BrowserTurnFrame
     typeof batch.origin!=="string"||!["research","catalogue","workspace","unknown"].includes(batch.origin)))return false;
   if(related!==undefined&&(!Array.isArray(related)||related.length>8||related.some(v=>
     !object(v)||!keys(v,["taskId","turnId","relation"])||!uuid(v.taskId)||v.turnId!==undefined&&!uuid(v.turnId)||
-    typeof v.relation!=="string"||!["reply","reference","visible-batch","in-flight","workspace-action"].includes(v.relation))))return false;
+    typeof v.relation!=="string"||!["reply","reference","visible-batch","in-flight","workspace-action","recent-outcome"].includes(v.relation))))return false;
   if(globe!==undefined&&(!object(globe)||!keys(globe,["layers","focusId"])||
     globe.focusId!==null&&!identity(globe.focusId)||!Array.isArray(globe.layers)||globe.layers.length>16||
     globe.layers.some(layer=>!object(layer)||!keys(layer,["id","label","visible","selection","presentation"])||

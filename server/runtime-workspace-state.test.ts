@@ -73,7 +73,8 @@ test("refusal reasons, same-operation explanation and actual runtime failure are
     const context=await runtimeTurnContext({...f.tasks,workspaceReceipt:async()=>receipt},randomUUID(),f.current);
     const state=context.history[0].execution.workspace;assert.equal(state.state,"failed");assert.equal(state.receipt?.reason,"publication-unverified");assert.equal(state.receipt?.recovery?.nextStep,"ask-confirmation");assert.equal(state.receipt?.observation,undefined);
     const failed=randomUUID(),body=input(f.original.conversationId);f.tasks.submit(failed,body);f.tasks.claim();f.tasks.finish(failed,"failed",{code:"TURN_PLAN_INVALID",error:"旧动作未通过；Authorization Bearer synthetic-private"});
-    f.current.previousTaskId=failed;const actual=await runtimeTurnContext(f.tasks,randomUUID(),f.current),row=actual.history.find(row=>row.taskId===failed)!;
+    f.current.context.browserTurnFrame!.related=[{taskId:failed,turnId:body.turnId,relation:"recent-outcome"}];
+    const actual=await runtimeTurnContext(f.tasks,randomUUID(),f.current),row=actual.history.find(row=>row.taskId===failed)!;
     assert.equal(row.failure?.code,"TURN_PLAN_INVALID");assert.ok(!JSON.stringify(actual).includes("synthetic-private"));assert.equal(row.execution.workspace.state,"unknown");assert.equal(row.execution.workspace.operation,undefined);
   }finally{f.tasks.close();}
 });

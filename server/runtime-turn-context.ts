@@ -77,8 +77,9 @@ export async function runtimeTurnContext(tasks:ContextStore,taskId:string,body:R
   const frame=validBrowserTurnFrame(body.context.browserTurnFrame)?body.context.browserTurnFrame:undefined;
   const unavailable:RuntimeTurnContext["unavailableRelations"]=[],loaded=new Map<string,Loaded>(),requested=new Set<string>();
   const relations=frame?.related||[];
-  const queue=[frame?.batch?.answerId,body.previousTaskId,...relations.filter(item=>item.relation==="workspace-action").map(item=>item.taskId),
-    ...relations.filter(item=>item.relation!=="workspace-action").map(item=>item.taskId)].filter((id):id is string=>!!id);
+  const priority=["recent-outcome","workspace-action"];
+  const queue=[frame?.batch?.answerId,body.previousTaskId,...priority.flatMap(relation=>relations.filter(item=>item.relation===relation).map(item=>item.taskId)),
+    ...relations.filter(item=>!priority.includes(item.relation)).map(item=>item.taskId)].filter((id):id is string=>!!id);
   let reads=0;
   while(queue.length){
     const id=queue.shift()!;if(requested.has(id))continue;requested.add(id);

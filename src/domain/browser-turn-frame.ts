@@ -107,7 +107,23 @@ export function browserTurnRelations(
     const actualTurn=turnId ?? s.messages.find(m=>m.id===taskId && m.role==="assistant")?.replyTo;
     related.push({taskId,relation,...(actualTurn && researchRecordId.test(actualTurn)?{turnId:actualTurn}:{})});
   };
-  append(parentId ?? previousChatAnswer(s.messages)?.id,"reply");
+  const previous=previousChatAnswer(s.messages);
+  append(parentId ?? previous?.id,"reply");
+  // Transport and terminal failures retain the original task identity. The
+  // server checks the actual outcome instead of trusting the browser label.
+  const turns=new Map(s.messages.flatMap((m,index)=>m.role==="user"?[[m.id,index]]:[]));
+  const completed=new Set(s.messages.flatMap(m=>m.role==="assistant"&&!m.failed&&m.replyTo?[m.replyTo]:[]));
+  const lastSuccess=turns.get(previous?.replyTo??"")??-1;
+  let latestFailure:Message|undefined,failedTurn=lastSuccess;
+  for(const m of s.messages){
+    if(m.role!=="assistant"||!m.failed||!m.replyTo||!researchRecordId.test(m.id)||completed.has(m.replyTo))continue;
+    const submitted=turns.get(m.replyTo);
+    if(submitted===undefined||submitted<=lastSuccess)continue;
+    if(submitted>failedTurn||submitted===failedTurn&&!latestFailure?.runTrace&&!!m.runTrace){
+      latestFailure=m;failedTurn=submitted;
+    }
+  }
+  append(latestFailure?.id,"recent-outcome",latestFailure?.replyTo);
   for(const attachment of s.draftScope ?? [])
     if(attachment.kind==="reference")append(attachment.messageId,"reference");
   const citation=s.citation?.excerpt?.sourceBatch;
