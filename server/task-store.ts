@@ -2,11 +2,22 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import type { Router } from "express";
 import { TaskCancelled } from "./task-cancellation";
+import type { AnswerReference, EvidenceStage } from "../src/domain/types";
 
 export const taskIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export type TaskStatus = "queued" | "running" | "complete" | "failed" | "cancelled";
 export type Payload = Record<string, unknown>;
 export type Task = {id: string; body: string; fingerprint: string; status: TaskStatus; created: number; updated: number};
+export type ConversationHistoryTurn = {
+  taskId: string;
+  turnId?: string;
+  submittedAt: number;
+  question: string;
+  taskState: TaskStatus;
+  assistantText?: string;
+  references?: (AnswerReference & {webEvidenceStage?: EvidenceStage})[];
+  observationRestricted: boolean;
+};
 type EventRow = {seq: number; at: number; payload: string};
 
 export class TaskConflict extends Error {}
@@ -156,7 +167,8 @@ export type TaskStore = {
     ReturnType<LocalTaskStore[Method]> | Promise<ReturnType<LocalTaskStore[Method]>>;
 }&{materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>;researchHandoff?:(id:string)=>Promise<Payload|undefined>;
   workspaceReceipt?:(id:string)=>Promise<import("../src/domain/turn-context").WorkspaceReceipt|undefined>;
-  researchExecution?:(id:string)=>Promise<ResearchExecutionReceipt|undefined>}&{
+  researchExecution?:(id:string)=>Promise<ResearchExecutionReceipt|undefined>;
+  conversationHistory?:(conversationId:string,currentTaskId:string)=>Promise<ConversationHistoryTurn[]>}&{
   [Method in "step"|"clearStep"|"saveStep"|"park"|"cancelStep"|"cancelledSteps"]?:(...args:Parameters<LocalTaskStore[Method]>)=>ReturnType<LocalTaskStore[Method]>|Promise<ReturnType<LocalTaskStore[Method]>>;
 };
 

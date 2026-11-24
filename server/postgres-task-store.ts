@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { productDatabase } from "./product-database";
 import { TaskConflict,type ResearchExecutionReceipt,type TaskStore,type Task,type Payload,type TaskStatus } from "./task-store";
+import {conversationHistorySchema, postgresConversationHistory} from "./postgres-conversation-history";
 import {chatSchema, claimClarificationAnswer, lockRuntimeSubmission, postgresChatMessages, submissionFingerprint, type PostgresChatMessages} from "./postgres-chat-messages";
 
 export function postgresTaskStore(namespace:"runtime"):Promise<TaskStore & {chat:PostgresChatMessages}>;
@@ -50,6 +51,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
             source_channel text, reference jsonb NOT NULL, PRIMARY KEY(task_id,ordinal)
           );`);
         await db.query(chatSchema);
+        await db.query(conversationHistorySchema);
       }else{
         await db.query(`
           CREATE TABLE IF NOT EXISTS discovery_findings (
@@ -151,7 +153,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   }
   let workerConnection:PoolClient|undefined;
   const store={
-    ...(chat?{chat,researchHandoff:chat.handoff,workspaceReceipt:chat.workspaceReceipt}:{}),
+    ...(chat?{chat,researchHandoff:chat.handoff,workspaceReceipt:chat.workspaceReceipt,conversationHistory:postgresConversationHistory(pool)}:{}),
     get,
     ...(namespace==="runtime"?{async researchExecution(id:string):Promise<ResearchExecutionReceipt|undefined>{
       const {rows: [task]}=await pool.query<{status: TaskStatus}>("SELECT status FROM runtime_tasks WHERE id=$1", [id]);
