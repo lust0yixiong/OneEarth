@@ -773,7 +773,9 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
           ?{message:(workspaceResolution?.issue||"没有确定当前界面中的可选城市")+"。本轮未切换城市；请明确目录中的城市名称或刷新后选择。",clarification:true}
           :{message:"本轮没有执行界面切换。可点击引用打开预览，或明确指定要切换的网格、时段或图层。"}:{}),...continuity});
       }
-      let summary=retrieved?"本轮先读取指定对象，再按原研究目的取得了独立发现的实际材料。":"本轮只处理已指定对象和已有内容，没有执行数据发现检索。";
+      const discoveryAttempt=initialBinding?"accepted" as const:actualDiscoveryQuery?"submission-attempted" as const:undefined;
+      let summary=retrieved?"本轮在指定对象读取之外取得了独立发现回执。":discoveryAttempt==="accepted"?"补查委托已受理，尚未取得结果。":
+        discoveryAttempt==="submission-attempted"?"曾尝试提交补查，未确认受理，也未取得结果。":"本轮只处理已指定对象和已有内容，没有启动独立发现。";
       if(readIssues.length)summary+="\n"+readIssues.join("\n");
       const priorEvidence=context.citation||context.attachedScope?.some(item=>item.kind!=="reference")
         ?undefined:parentResearchEvidence(prior,turn,targetQuery);
@@ -786,7 +788,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       const currentBatch=acquired?discoveryResultBatch(batchOwner,actualDiscoveryQuery||query,acquired):undefined;
       if(currentBatch)event({resultBatch:currentBatch});
       const reply=await modelReply(targetQuery,context,{message:summary,gridCoverage},history,executor,signal,
-        stage,papers,"",undefined,acquired,report,{plan:turn,searches:readRuns,priorEvidence},currentAssertionReadings,{record:prior,searches:archived.searches},await synthesisContext(),currentBatch);
+        stage,papers,"",undefined,acquired,report,{plan:turn,searches:readRuns,priorEvidence,discoveryAttempt},currentAssertionReadings,{record:prior,searches:archived.searches},await synthesisContext(),currentBatch);
       if(currentBatch)reply.resultBatch=currentBatch;
       if(papers.length)reply.paperRecords=literatureDisplay(papers);
       reply.hainaRecords=pinnedIds.flatMap(id=>id.startsWith("haina:")?haina.records().filter(r=>String(r.id)===id.slice(6)):[]);

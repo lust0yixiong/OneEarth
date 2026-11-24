@@ -37,7 +37,7 @@ async function fixture(t:TestContext,action:"read"|"respond"|"search"|"clarify"=
     reason:"controlled planner",clarification:action==="clarify"?"是否需要论文的方法判断？":null,evidenceGap:action==="search"?"controlled gap":null,
     researchIntent:{purpose:"核对所指对象",task:"核对所指对象",region:null,time:null,months:[]},conversationContext:"所附范围"};
   const noCitations={message:"模型故意遗漏所有引用。",sections:[],limitation:"未打开原文。",followUp:"",researchNotes:[],calculationRequests:[]};
-  writeFileSync(path.join(directory,"codex"),`#!/usr/bin/env node\nimport fs from 'node:fs';let text='';for await(const c of process.stdin)text+=c;const index=process.argv.indexOf('--output-schema');const schema=index<0?null:JSON.parse(fs.readFileSync(process.argv[index+1],'utf8'));fs.appendFileSync(${JSON.stringify(prompts)},JSON.stringify({prompt:text,schema})+'\\n');const answer=text.includes('先决定本轮要做什么')?${JSON.stringify(plan)}:${JSON.stringify(noCitations)};if(!schema?.properties?.gridIntent)delete answer.gridIntent;process.stdout.write(JSON.stringify(answer));\n`,{mode:0o700});
+  writeFileSync(path.join(directory,"codex"),`#!/usr/bin/env node\nimport fs from 'node:fs';let text='';for await(const c of process.stdin)text+=c;const index=process.argv.indexOf('--output-schema');const schema=index<0?null:JSON.parse(fs.readFileSync(process.argv[index+1],'utf8'));fs.appendFileSync(${JSON.stringify(prompts)},JSON.stringify({prompt:text,schema})+'\\n');const answer=text.includes('先决定本轮要做什么')?${JSON.stringify(plan)}:text.includes('你负责决定同一轮研究任务的下一步')?{action:'answer',reason:'actual receipt returned no new full text; state limits',gap:null,targets:[],clarification:null}:${JSON.stringify(noCitations)};if(!schema?.properties?.gridIntent)delete answer.gridIntent;process.stdout.write(JSON.stringify(answer));\n`,{mode:0o700});
   process.env.PATH=directory+path.delimiter+old.path;delete process.env.ONEEARTH_DISCOVERY_PROTOCOL;
   const requests:any[]=[],app=express();app.use(express.json({type:"application/a2a+json"}));
   app.post("/message:send",(req,res)=>{
@@ -134,7 +134,11 @@ test("the same planner semantic intent handles natural catalogue wording: "+quer
 test("explicit paper text request retains exact source-read Task rather than a catalogue answer",async t=>{
   const f=await fixture(t,"read",{archived:true,explicitPaper:true,intent:"deeper"}),{outcome,reply,promptCount}=await f.run("读取所附网格中这篇论文的原文，只核对原文内容。");
   assert.equal(outcome.error,undefined);assert.equal(f.requests[0].kind,"oneearth.source.read.v1");assert.deepEqual(f.requests[0].input.targets,[{kind:"paper",id:a.id}]);
-  assert.equal(promptCount,2);assert.ok(!reply.answerNotes.references.some((r:any)=>r.evidenceLevel==="catalogue-record"));
+  assert.equal(promptCount,3);assert.equal(f.requests.length,1,"no independent source request for a source-only question");
+  const decisions=reply.runTrace.calls.filter((call:any)=>call.id.startsWith("research-decision-"));assert.equal(decisions.length,1);
+  const review=decisions[0];assert.equal(review.status,"done");assert.equal(JSON.parse(review.output).action,"answer");
+  assert.equal(reply.message,"模型故意遗漏所有引用。");assert.deepEqual(reply.answerNotes.searches,[],"no acquired full text is invented");
+  assert.ok(!reply.answerNotes.references.some((r:any)=>r.evidenceLevel==="catalogue-record"));
 });
 test("an explicit new research purpose still delegates discovery under the verified scope",async t=>{
   const f=await fixture(t,"search",{intent:"none"}),{outcome,reply}=await f.run("为这个网格查找更多独立论文和新数据，研究山洪风险。");assert.equal(outcome.error,undefined);

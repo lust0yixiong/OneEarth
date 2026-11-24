@@ -240,7 +240,7 @@ export function shouldReviewAnswerEvidence(answer:{message:string;limitation?:st
   if(verifiedExample&&explicitMathExample&&text.length<500&&!sourceClaim)return false;
   return answer.message.length>=300 || /论文|清单|版本|\d/.test(answer.message);
 }
-export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[];priorEvidence?:ParentResearchEvidence},assertionReadings:CurrentAssertionReading[]=[],sourceHistory:SourceReadHistory={},turnContext?:RuntimeTurnContext,currentBatch?:ResultBatch,budgetPolicy:{promptBytes?:number;answerMs?:number}={}) {
+export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[];priorEvidence?:ParentResearchEvidence;discoveryAttempt?:"submission-attempted"|"accepted"},assertionReadings:CurrentAssertionReading[]=[],sourceHistory:SourceReadHistory={},turnContext?:RuntimeTurnContext,currentBatch?:ResultBatch,budgetPolicy:{promptBytes?:number;answerMs?:number}={}) {
     if(retrieval?.questionCheck || retrieval?.clarification || retrieval?.plan.questionMode==="reframe")
       throw Error("转换后的问题尚未得到用户确认，不能生成答复。");
     const start=Date.now();
@@ -283,6 +283,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       .map(({conversationEvidence:_,conversationAssertionEvidence:__,...turn})=>turn));
     const searches:SearchRun[]=retrieval?.searches || turn?.searches || [];
     const readReceipts=sourceReadReceipts(searches);
+    const discoveryStatus=retrieval?"result-returned":turn?.discoveryAttempt??"not-started";
     const webIssue=retrieval?.issues.join("\n") || turn?.searches.filter(r=>r.status==="failed").map(r=>"指定来源未能读取："+(r.error||"尚未取得正文")).join("；") || "";
     const selectedWeb:WebHit[]=turn?turn.plan.targets.flatMap(t=>t.url&&t.kind!=="asset"?[{title:t.title,url:t.url,discoveredBy:t.discoveredBy,snippet:t.kind==="excerpt"?"用户本轮提供的摘录见 workspace.citation；本轮未独立回读完整来源。":"本轮指定的来源身份；身份本身不代表已读正文。"}]:[]):context.attachedScope?.flatMap(i=>i.kind==="reference" && i.reference.kind==="web"?
       [{title:i.reference.title,url:i.reference.url,snippet:"用户主动引用的来源，引用本身不代表已读正文。",referenceType:i.reference.referenceType,discoveredBy:"user" as const}]:[]) || [];
@@ -336,9 +337,9 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       dataQuestion:retrieval?.plan.dataQuestion,dataNeed:retrieval?.plan.dataNeed,mandatorySearches:retrieval?.sourceStatus,history:modelHistory,
       referenceProvenance:restricted?[]:conversationReferenceProvenance(history),
       sourceReadComparisons,
-      executionScope:{externalCommunicationAvailable:false,permissionsRequestedByPlatform:false,currentSourceReads:readReceipts,currentAssertionReads:rows.flatMap(row=>row.currentAssertionReadings||[]),discoveryDelegated:!!retrieval,requiredExactSourceReferences:exactReadRefs,
+      executionScope:{externalCommunicationAvailable:false,permissionsRequestedByPlatform:false,currentSourceReads:readReceipts,currentAssertionReads:rows.flatMap(row=>row.currentAssertionReadings||[]),discoveryDelegated:discoveryStatus==="accepted"||discoveryStatus==="result-returned",discoveryStatus,requiredExactSourceReferences:exactReadRefs,
         authorizedParentEvidence:parentCitations.length?{citations:parentCitations,rule:"这些编号来自可追溯的父研究记录。回答所用的事实应逐项引用实际支持它的历史摘录，区分文献资产、目录和实际文件。即便名相同，也必须按具体来源和取得层级判断。不得声称本轮执行了读取，也不得从正文补猜链接。"}:undefined,
-        sourceReadRule:"currentAssertionReads是本轮新取得的断言节选，独立保留readAt与论文/数据集/block身份；不表示打开网页、PDF或完整论文，引用只能据实际提供的窗口。本轮网页动作以 currentSourceReads 为准。历史摘录标明是以前取得，不能称本轮已打开；搜索摘要也不是读取。没有读取回执不描述本轮打开网页。失败只能说尝试未取得正文；节选不证明完整原文已读。discoveryDelegated 为 false 时不得声称发过定向检索或补充检索。定向读取有返回时，以 requiredExactSourceReferences 的编号注明来源，即使正文不足也可用它说明核对边界。",
+        sourceReadRule:"currentAssertionReads是本轮新取得的断言节选，独立保留readAt与论文/数据集/block身份；不表示打开网页、PDF或完整论文，引用只能据实际提供的窗口。本轮网页动作以 currentSourceReads 为准。历史摘录标明是以前取得，不能称本轮已打开；搜索摘要也不是读取。没有读取回执不描述本轮打开网页。失败只能说尝试未取得正文；节选不证明完整原文已读。discoveryStatus 为 submission-attempted 时，仅能说明尝试提交且未确认受理。accepted 时可说发现已受理，但未取得结果。只有 result-returned 才按实际渠道记录报告结果；未取得结果不能说零命中。not-started 时不称已尝试。定向读取有返回时，以 requiredExactSourceReferences 的编号注明来源，即使正文不足也可用它说明核对边界。",
         notice:"本请求的工具链只含目录/网页/文献资料读取及显式记录的本地核算，不含联系人员、发邮件或取得社群许可。用户提供或论文记载的许可不能说成平台取得。"},
       materialSelection:{considered:papers.length+(retrieval?.haina.length||0),included:rows.length,
         notice:"身份行与有界节选分别标记；未装入原文不代表来源不存在，候选有论文记录不等于与本题相关。"},workspace:{
