@@ -4,7 +4,7 @@
 
 | 查找范围 | 从这一节开始 |
 | --- | --- |
-| 数据速览与前台追问 | [数据上球与前台决定隔离验收](#mac-mini-数据上球与前台决定隔离验收) |
+| 数据速览与前台追问 | [正式发布](#mac-mini-数据上球与前台追问正式发布) · [隔离验收](#mac-mini-数据上球与前台决定隔离验收) |
 | 工作台与球体动作 | [工作台和球体动作隔离验收](#mac-mini-工作台和球体动作隔离验收) |
 | 人工追问弹框 | [人工追问弹框隔离验收](#mac-mini-人工追问弹框隔离验收) |
 | 工作台后端与运行时 API | [同进程双入口正式发布](#mac-mini-工作台后端合并正式发布) |
@@ -15,6 +15,20 @@
 | rc.9 后续交付 | [发现渠道正式发布](#mac-mini-发现渠道范围正式发布) · [目录导航静态发布](#mac-mini-数据触达浏览入口静态发布) · [KEO 文件读取](#mac-mini-日常入口的-keo-文件读取) |
 | rc.9、rc.8、rc.7 快照 | [网格问答引用 rc.9](#mac-mini-网格问答目录引用-v020-rc9) · [论文与投影 rc.8](#mac-mini-论文发布与时空投影-v020-rc8) · [日常入口 rc.7](#mac-mini-日常入口-v020-rc7) |
 | 更早候选和存储基线 | [A2A rc.6](#mac-mini-a2a-与发现模型独立配置候选-v020-rc6) · [研究工作流 rc.5](#mac-mini-研究工作流候选-v020-rc5) · [存储与恢复 dev.1](#mac-mini-存储与恢复历史基线-v020-dev1) · [0.1.0 验收](../ACCEPTANCE.md) |
+
+## Mac mini 数据上球与前台追问正式发布
+
+2026-11-24 08:30:53（上海时间），Mac mini 常驻 5474 切至 **v0.2.0-rc.10** 发布提交 `521a01ea5081bd9cb548241e9706a654b8d27fbd`，产品代码合流点 `b550008bc2cd0cc3055e8e58fc8684cc7cab95bd`。发布目录为 `~/Library/Application Support/OneEarth Next/releases/v0.2.0-rc.10-521a01e`。核对切前 `07000e8` 安装源码和新版本全部跟踪文件。新构建 3,427 件与已验收产品构建逐件一致，另保留 129 件旧静态资源供已打开的网页读取。实装 3,556 件校验清单 SHA-256 为 `3f55e342410d4f82417d94dd57b3d40a450bedafb2daf0f12767826c78b2ee54`，回环和 LAN 首页均为 `40401eaabfb0b56e71ab56b4e883e10e3a026392d8d3baa7f48d67b5f8800345`，两个入口实取新、旧首页引用的资源字节。
+
+工作台后端 PID 52579 监听公开 5474 和回环 5477。独立研究 worker、发现和时空角色正常。局域网和同源校验沿用原配置，私有端口仍仅监听回环。应用启动配置只替换发布工作目录和启动脚本路径，模型、凭据引用、网络权限和 primary 存储进程继续使用原设置。读回 OISST 等旧档字节一致，回环、LAN 和兼容入口可读同一旧纽约归档。OISST 90 条 NDJSON 事件，从 `after=12182` 恢复 5 条至终态 12187。C40 95 城、森林 4,791 日清单和抽样图像保持原字节，最新森林日期 2026-05-24 可从 LAN Chrome 打开及刷新。
+
+停受理前确认无运行中或排队的研究、发现、前台规划、技能或网页工具，已有待确认记录和保存的步骤前后相同。切前 66 个研究任务、52 个发现作业、9 条 Chat 消息和 130 条研究引用的指纹均相同。停写备份封存三库、10,839 个对象、应用状态及授权原件，备份清单 SHA-256 为 `33a7460fa807f187e5d343fd0c0db1e8dc0b74b8064f2c8d8d7fef9e53ba4059`。在独立存储实际恢复三库和全部对象，10,957 条时空索引均对应恢复对象，4 个应用 SQLite 通过快检，原 NOAA WSPD 仍有 130,402 条记录。原发布和启动项保留，已用副本验证原子回退指针，回退沿用当时的 primary 数据。
+
+正式只读运行时记录显示，唯一一组 Flash 经 Codex CLI 的真实两轮 `7ec50a8e-f3a2-4d7c-8ae8-1b1c47ae4735` 和 `48632a74-6309-45bc-999b-03b314923bb4` 分别为 `clarify` 与 `workspace`，各一次规划，耗时 7.655 秒及 6.494 秒。第二轮由原弹框提交「纽约」，数据库保留一条同会话父子绑定，运行时核验 `new-york-city-usa` 和适用发布修订。两轮均完成，产生零研究排队、发现委托或网页工具授权。主程只读对账 `production-flash-audit.json` SHA-256 为 `f2d633a4f004f4c036a3cd6703f00ffa086f59c13890bec927defa354d545ea2`。
+
+独立 QA 在同一台 Mac mini 的 Chrome 经实际 LAN 入口复核，范围为同机连接。普通速览可打开 Q19 CTD；PDO 在窄屏折叠时亦保持禁用，未选批次用鼠标和键盘均未导航或请求图层。临时浏览器批次选择第二项森林后取得 2023-07-15 的实际图，与切前同字节。独立重开及刷新旧 OISST，90 条事件，`after=12186` 续接终态 12187。同一组真实 Chat 两轮均 HTTP 202，POST 至弹框 7.897 秒，POST 至纽约图层就绪 6.917 秒，目标 WebP HTTP 200。独立索引 `iterations/inspector-contract-primary-independent.sXpUko/521a01e-primary-independent-index.json` SHA-256 为 `462120b777847a422b19d233d488cbd7d343f593cef1267a4c5ea1e1bdb3dc1c`。
+
+主程证据根为 `iterations/data-globe-and-clarification-contract/primary-521a01e/`，运行 `shasum -a 256 -c evidence/production.sha256` 核对切换、产物、接口、归档和冷恢复，清单 SHA-256 为 `4f7bc45a628ad1adee8406766757d4c4248b8772da19bdae7380d751f096a30c`。
 
 ## Mac mini 数据上球与前台决定隔离验收
 
@@ -40,7 +54,7 @@
 
 ### 合流
 
-源码合流提交 `b550008bc2cd0cc3055e8e58fc8684cc7cab95bd`，树 `c6a46d9d55e2a10d55208750204bfbd0ee12a656`，保留两组独立验收对应的源码。合流类型检查、生产构建及全套通过，924 项通过、7 项环境门控跳过、零失败。随后针对独立 PostgreSQL 启用 Chat 移交门控单测并通过。全套及单测命令分别为 `node --import tsx --test --test-concurrency=2` 和设置独立测试库 `ONEEARTH_CHAT_TEST_DATABASE_URL` 后运行 `node --import tsx --test server/runtime-chat-channel.test.ts`。两项均由总体在隔离实例签收。正式 5474 首页切前后 SHA-256 一致，本轮没有正式发布或更改默认模型。
+源码合流提交 `b550008bc2cd0cc3055e8e58fc8684cc7cab95bd`，树 `c6a46d9d55e2a10d55208750204bfbd0ee12a656`，保留两组独立验收对应的源码。合流类型检查、生产构建及全套通过，924 项通过、7 项环境门控跳过、零失败。随后针对独立 PostgreSQL 启用 Chat 移交门控单测并通过。全套及单测命令分别为 `node --import tsx --test --test-concurrency=2` 和设置独立测试库 `ONEEARTH_CHAT_TEST_DATABASE_URL` 后运行 `node --import tsx --test server/runtime-chat-channel.test.ts`。两项均由总体在隔离实例签收。隔离验收期间正式 5474 首页 SHA-256 保持原值。后续上线见[正式发布](#mac-mini-数据上球与前台追问正式发布)。
 
 ## Mac mini 工作台和球体动作隔离验收
 
