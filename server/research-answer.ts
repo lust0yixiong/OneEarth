@@ -12,7 +12,7 @@ import type {CalculationReport} from "./verified-calculation";
 import {reviewAnswerEvidence} from "./review-answer-evidence";
 import { paperRecords, type PaperRecord } from "../src/domain/paper-record";
 import { combinesSources, expandsSources,onlySource, refersToBatch } from "../src/domain/research-question";
-import { synthesizeAnswer, synthesisHistory, synthesisInstructions, synthesisResponseSchema,retainedSourceAnswer,type SynthesisAnswer } from "./scientific-answer";
+import { synthesizeAnswer, synthesisHistory, synthesisInstructions, synthesisResponseSchema,retainedSourceAnswer,type SynthesisAnswer,type SynthesisRepairDiagnostic } from "./scientific-answer";
 import type { AnswerReference, SearchRun, WebHit,ToolCall } from "../src/domain/types";
 import {webDocumentType,referenceChannel} from "../src/domain/citation-types";
 import { assets, assetById, discoverableAsset, type Asset } from "../src/domain/datasets";
@@ -380,16 +380,23 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     onTool?.({id:"synthesis-context-budget",kind:"tool",name:"核对合成整包输入预算",input:"仅记录UTF-8字节和来源数量，不记录原始提示",status:packet.blocked?"partial":"done",output:JSON.stringify(packet.stats)});
     try{
     let repaired=false,repairFailed=false,repairInput="";
+    const fileRepairDiagnostics:NonNullable<SynthesisRepairDiagnostic["fileClaim"]>[]=[];
     const actualCalculations:CalculationReport[]=[];
     let answer:SynthesisAnswer;
     let origin="model-validated";
     onTool?.({id:"answer-generation",kind:"tool",name:"回答整理",input:JSON.stringify({promptBytes:packet.stats.promptBytes,budgetMs:Math.min(synthesisTimeLimitMs,budgetPolicy.answerMs??synthesisTimeLimitMs)}),status:"running"});
     try{if(packet.blocked)throw Error("本轮合成的必要材料超过输入预算，未发送超限提示。");
       answer=await synthesizeAnswer(prompt,references,webHits,p=>runModel(p),signal,
-      diagnostic=>{repaired=true;repairInput=JSON.stringify(diagnostic);onStage?.("正在重新核对回答中的资料引用",searches);onTool?.({id:"synthesis-repair",kind:"tool",name:"回答引用与结构核对",status:"running",input:repairInput});},
+      diagnostic=>{
+        repaired=true;
+        if(diagnostic.fileClaim)fileRepairDiagnostics.push(diagnostic.fileClaim);
+        repairInput=JSON.stringify({...diagnostic,...(fileRepairDiagnostics.length?{fileRepairAttempts:fileRepairDiagnostics}:{})});
+        onStage?.("正在重新核对回答中的资料引用",searches);
+        onTool?.({id:"synthesis-repair",kind:"tool",name:"回答引用与结构核对",status:"running",input:repairInput});
+      },
       calculation=>{actualCalculations.push(calculation);onStage?.(calculation.status==="completed"?"已完成受控数值核算，正在核对解释":"数值核算条件未通过，保留待核边界",searches);
         onTool?.({id:"calculation-"+crypto.randomUUID(),kind:"tool",name:"受控数值核算",input:calculation.arguments||"未提供有效参数",status:calculation.status==="completed"?"done":"failed",output:JSON.stringify(calculation),...(calculation.error?{error:calculation.error}:{})});},
-      {maxPromptBytes:packet.stats.limitBytes,allowedSourceRefs:packet.allowedRefs,sourceReadComparisons:deliveredComparisons,validateAnswer:verifyExecutionAndReferences,enforceCalculations:true,onCalculationPlan:status=>{onStage?.(status==="running"?"正在核对具体演算的计算参数":status==="failed"?"核算参数准备未完成，正在保留已有内容":status==="done"?"已形成核算请求，继续处理答复":"未形成新增演算请求，继续整理答复",searches);onTool?.({id:"calculation-plan",kind:"tool",name:"核对数值演算参数",input:"草稿含具体演算，先形成有界计算请求",status:status==="running"?"running":status==="done"?"done":status==="failed"?"failed":"partial",...(status!=="running"?{output:status==="done"?"已形成计算请求；计算状态见受控数值核算记录。":status==="failed"?"核算参数准备未完成，保留已有内容。":"未形成新增演算请求；继续回答原问题，来源报告的指标仍按原出处保留。"}:{})});},
+      {maxPromptBytes:packet.stats.limitBytes,remainingMs:()=>budget.remainingMs(),allowedSourceRefs:packet.allowedRefs,sourceReadComparisons:deliveredComparisons,validateAnswer:verifyExecutionAndReferences,enforceCalculations:true,onCalculationPlan:status=>{onStage?.(status==="running"?"正在核对具体演算的计算参数":status==="failed"?"核算参数准备未完成，正在保留已有内容":status==="done"?"已形成核算请求，继续处理答复":"未形成新增演算请求，继续整理答复",searches);onTool?.({id:"calculation-plan",kind:"tool",name:"核对数值演算参数",input:"草稿含具体演算，先形成有界计算请求",status:status==="running"?"running":status==="done"?"done":status==="failed"?"failed":"partial",...(status!=="running"?{output:status==="done"?"已形成计算请求；计算状态见受控数值核算记录。":status==="failed"?"核算参数准备未完成，保留已有内容。":"未形成新增演算请求；继续回答原问题，来源报告的指标仍按原出处保留。"}:{})});},
       onNodeFailure:({node,error,retained})=>{
         if(node==="answer-repair")repairFailed=true;
         const id=node==="answer-repair"?"synthesis-repair":node==="calculation-plan"?"calculation-plan":"answer-generation";

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {materialAccessEvidence,validateAnswerMaterialClaims} from "./answer-material-guard";
+import {materialAccessEvidence,validateAnswerMaterialClaims,WebFileClaimError} from "./answer-material-guard";
+import {SourceReadClaimError} from "./source-read-provenance";
+import {assertModelContextSafe} from "./model-context-safety";
 import {webMaterial,materialLinkDisplay} from "../src/domain/web-material";
 import {citationDetails} from "../src/domain/answer-sources";
 import {assetById} from "../src/domain/datasets";
@@ -115,4 +117,75 @@ test("real reply assembly bounds file evidence and repairs false download claims
   assert.ok(!result.message.includes("原始文件入口"));
   assert.deepEqual(result.answerNotes?.webSources?.map(source=>source.url),[iso]);
   assert.equal(result.answerNotes?.webSources?.[0].pageExcerpt,hit.pageExcerpt);
+});
+
+test("reported legal table/negation examples remain statements about document evidence, not raw-file receipts",()=>{
+  // These are independent guard controls, not recovered real model drafts.
+  const legal=[
+    "| GPS 时间序列 | 已读取论文表2 | 原始数据文件：未找到 |",
+    "原始数据文件：本轮已读取论文表4，未下载原始 GNSS 时间序列。〔1〕",
+    "无法实际核实这个入口是否可下载原始数据文件。〔1〕",
+    "| 原始数据文件未取得 | 本轮已读取《年度监测报告》中的资料 |",
+    "并非本轮已下载原始数据文件〔1〕。",
+    "不能据此认定本轮已读取原始数据文件〔1〕。",
+    "没有证据表明本轮已下载原始数据文件〔1〕。",
+    "没有实际测试该入口可下载原始数据文件。〔1〕",
+    "如果本轮已下载原始数据文件，则应存在读取回执。〔1〕",
+    "原始数据文件：若本轮已下载，应有读取回执。〔1〕",
+    "只有本轮已下载原始数据文件，才可能有本地文件回执。〔1〕",
+    "If we have downloaded the raw data files, a receipt would be required.〔1〕",
+  ];
+  for(const text of legal)assert.doesNotThrow(()=>validateAnswerMaterialClaims(reply(text),new Map()),text);
+});
+
+test("one cell or predicate's negation/condition cannot excuse another affirmative file claim",()=>{
+  const assertions=[
+    "本轮已下载原始数据文件〔1〕。",
+    "原始 NetCDF 文件本轮已读取〔1〕。",
+    "We have actually downloaded the raw data files〔1〕.",
+    "尚未读取元数据，但本轮已下载原始数据文件。〔1〕",
+    "如果后续需要，可以再核对，但本轮已下载原始数据文件。〔1〕",
+    "| 已读取论文表2 | 本轮已下载原始数据文件 | 其他材料未找到 |",
+    "| 原始数据文件 | 本轮已读取 | 尚未验证目录 |",
+    "| 原始数据文件 | 已下载〔1〕 |",
+    "| 原始数据文件未取得 | 已下载〔1〕 |",
+    "| 原始数据文件未取得 | 本轮已读取《观测产品》 |",
+    "| 原始数据文件 | 尚未找到 | 本轮已下载原始数据文件 |",
+    "| 原始数据文件：本轮已读取论文表4 | 本轮已下载原始数据文件 |",
+    "| 本轮已下载原始数据文件 | 不能声称已下载原始数据文件 |",
+    "没有实际核验元数据，但本轮已核实入口可下载原始数据文件。〔1〕",
+    "本轮实际测试该入口是否可下载原始数据文件。〔1〕",
+    "原始数据文件：本轮已读取论文表4中的原始数据文件。〔1〕",
+    "不能否认本轮已下载原始数据文件。〔1〕",
+    "只有本轮已下载原始数据文件。〔1〕",
+    "若干原始数据文件本轮已读取。〔1〕",
+  ];
+  for(const text of assertions)assert.throws(()=>validateAnswerMaterialClaims(reply(text),new Map()),WebFileClaimError,text);
+});
+
+test("the web reference gate still applies across cells and does not block independently backed local asset records",()=>{
+  const asset:AnswerReference={kind:"asset",id:"fixture:observation",title:"Local verified observation",source:"受权观测"};
+  const row="| 原始数据文件 | 本轮已读取 | 尚未核验元数据 | 〔2〕 |";
+  assert.throws(()=>validateAnswerMaterialClaims(reply(row,[asset,ref]),new Map()),WebFileClaimError);
+  assert.doesNotThrow(()=>validateAnswerMaterialClaims(reply("本轮已读取原始数据文件〔1〕。",[asset]),new Map()));
+});
+
+test("a typed file-claim diagnostic names the actual field and a sanitized bounded offending clause",()=>{
+  for(const field of ["message","limitation","followUp"] as const){
+    const answer={message:"正文只据已得文献节选。",limitation:"",followUp:"",references:[ref]};
+    answer[field]="前文背景".repeat(160)+" 本轮已下载原始 NetCDF 文件〔1〕。";
+    assert.throws(()=>validateAnswerMaterialClaims(answer,new Map()),error=>{
+      assert.ok(error instanceof WebFileClaimError);assert.ok(error instanceof SourceReadClaimError);assert.equal(error.claim.field,field);assert.match(error.claim.clause,/本轮已下载原始 NetCDF 文件/);assert.ok(Array.from(error.claim.clause).length<=320);assertModelContextSafe(error.claim.clause);return true;
+    });
+  }
+  const unsafe="Authorization: Bearer CONTROLLED_PRIVATE; https://example.org/data?sig=CONTROLLED_SIGNATURE "+"本轮已下载原始数据文件〔1〕。";
+  const error=new WebFileClaimError("message",unsafe);
+  assert.doesNotMatch(JSON.stringify(error.claim),/CONTROLLED_PRIVATE|CONTROLLED_SIGNATURE|[?&]sig=/);assertModelContextSafe(error.claim.clause);
+  const incomplete=new WebFileClaimError("message","-----BEGIN PRIVATE KEY----- CONTROLLED_KEY 本轮已下载原始数据文件。");assert.doesNotMatch(JSON.stringify(incomplete.claim),/CONTROLLED_KEY|BEGIN PRIVATE KEY/);
+});
+
+test("negative wording cannot bypass the independent URL-role and access-evidence guards",()=>{
+  const access=materialAccessEvidence([hit,directory],[]);
+  assert.throws(()=>validateAnswerMaterialClaims(reply("尚未下载原始数据文件。 [直接下载]("+catalogue+")"),access),error=>error instanceof SourceReadClaimError&&!(error instanceof WebFileClaimError));
+  assert.throws(()=>validateAnswerMaterialClaims(reply("若本轮已下载原始文件，应有回执。 [原始文件下载]("+file.replace("release","guessed")+")"),access),/材料未确认/);
 });

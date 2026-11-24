@@ -5,16 +5,98 @@ import {mkdtemp,writeFile,rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import path from "node:path";
 import {synthesizeAnswer,needsVerifiedCalculation,retainedSourceAnswer} from "../../server/scientific-answer";
+import {validateAnswerMaterialClaims} from "../../server/answer-material-guard";
 import {modelReply} from "../../server/chat-executor";
 import {parseTurnPlan,turnMetadata,type TurnInput} from "../../server/turn-planning";
 import {emptyFilters} from "./spatial";
-import type {AnswerReference,ToolCall} from "./types";
+import type {AnswerReference,ToolCall,WebHit} from "./types";
 
 const ref:AnswerReference={kind:"asset",id:"source-a",title:"产品 A 的来源资料",source:"测试来源"};
 const references=[ref],signal=()=>new AbortController().signal;
 const sourceDraft={message:"来源列出产品 A 和产品 B，可继续核对各自的覆盖范围。[S1]\n\n例如，作者报告产品 A 的 RMSE 为 4.2 m、MAE 为 3.1 m，产品 B 为 5.0 m 和 3.6 m；这些不确定度是来源报告值，不是本轮演算。[S1]",calculationRequests:[]};
 const arithmeticDraft={message:"产品 A 的来源记录仍可用于后续核对。[S1]\n\n4000 × 0.0068948 = 27.597 MPa。",calculationRequests:[]};
 const internal={message:"这份草稿没有可供核验的数值输入，因此 calculationRequests 为空。",calculationRequests:[]};
+const paperUrl="https://example.org/paper";
+const locatorRef:AnswerReference={kind:"web",url:paperUrl,title:"Source paper",sourceChannel:"web"};
+const table="| Site | Reported rate (cm/a) |\n| --- | --- |\n| T-03 | -1.2 | [S1]";
+const method="式 (3) 说明沿观测方向投影速度。[S1]";
+const locatorSource:WebHit={url:paperUrl,title:locatorRef.title,snippet:"Source paper",stage:"page-excerpt",
+ pageExcerpt:"Site | Reported rate (cm/a)\nT-03 | -1.2\n式 (3) 沿观测方向投影速度。",
+ locatorResults:[{kind:"table",value:"2",status:"found",excerpt:"T-03 | -1.2"},{kind:"equation",value:"3",status:"found",excerpt:"沿观测方向投影速度"}]};
+const checkLocatorDraft=(answer:Parameters<typeof validateAnswerMaterialClaims>[0])=>validateAnswerMaterialClaims(answer,new Map());
+
+test("a changing unsupported file claim can be corrected twice without changing the published paper evidence",async()=>{
+ const message=[table,method].join("\n\n");
+ const drafts=[
+  {message,limitation:"本轮已下载原始数据文件。"},
+  {message,followUp:"本轮已核实此链接可下载。"},
+  {message,limitation:"原始数据文件未取得。"},
+ ];
+ const prompts:string[]=[];
+ const answer=await synthesizeAnswer("Authorized paper evidence",[locatorRef],[locatorSource],async prompt=>{
+  prompts.push(prompt);return JSON.stringify(drafts[prompts.length-1]);
+ },signal(),undefined,undefined,{validateAnswer:checkLocatorDraft,remainingMs:()=>1000});
+ assert.equal(prompts.length,3);
+ assert.match(prompts[1],/"field":"limitation".*本轮已下载原始数据文件/);
+ assert.match(prompts[1],/"missingReceipt"/);
+ assert.match(prompts[2],/"field":"followUp".*本轮已核实此链接可下载/);
+ assert.match(answer.message,/T-03 \| -1\.2/);
+ assert.match(answer.message,/式 \(3\)/);
+ assert.equal(answer.references[0],locatorRef);
+ assert.match(answer.limitation,/未取得/);
+ assert.equal(answer.recovery,undefined);
+});
+
+test("an identical file claim or spent budget doesn't trigger another call; valid cited blocks remain",async()=>{
+ for(const remainingMs of [0,1000]){
+  let calls=0;
+  const answer=await synthesizeAnswer("Authorized paper evidence",[locatorRef],[locatorSource],async()=>{
+   calls++;return JSON.stringify({message:[table,"本轮已下载原始数据文件。[S1]",method].join("\n\n")});
+  },signal(),undefined,undefined,{validateAnswer:checkLocatorDraft,remainingMs:()=>remainingMs});
+  assert.equal(calls,remainingMs?2:1);
+  assert.match(answer.message,/T-03 \| -1\.2/);
+  assert.match(answer.message,/式 \(3\)/);
+  assert.doesNotMatch(answer.message,/已下载/);
+  assert.deepEqual(answer.recovery?.failedNodes,["answer-repair"]);
+  assert.equal(answer.references[0],locatorRef);
+ }
+});
+
+test("a repaired file claim followed by an invalid reference can still be corrected within the same budget",async()=>{
+ const drafts=[
+  {message:table,limitation:"本轮已下载原始数据文件。"},
+  {message:table+"\n\n"+method.replace("[S1]","[S27]"),limitation:"原始文件未取得。"},
+  {message:table+"\n\n"+method,limitation:"原始文件未取得。"},
+ ];
+ const prompts:string[]=[];
+ const answer=await synthesizeAnswer("Authorized paper evidence",[locatorRef],[locatorSource],async prompt=>{
+  prompts.push(prompt);return JSON.stringify(drafts[prompts.length-1]);
+ },signal(),undefined,undefined,{validateAnswer:checkLocatorDraft,remainingMs:()=>1000,allowedSourceRefs:new Set(["S1"])});
+ assert.equal(prompts.length,3);
+ assert.match(prompts[1],/"field":"limitation"/);
+ assert.match(prompts[2],/"token":"\[S27\]"/);
+ assert.equal(answer.references[0],locatorRef);
+ assert.match(answer.message,/式 \(3\)/);
+ assert.doesNotMatch(answer.message,/S27|已下载/);
+});
+
+test("repair cannot spend more than the remaining shared byte allowance or survive cancellation",async()=>{
+ const bad=JSON.stringify({message:table,limitation:"本轮已下载原始数据文件。"});
+ let calls=0;
+ const small=await synthesizeAnswer("材料",[locatorRef],[locatorSource],async()=>{
+  calls++;return bad;
+ },signal(),undefined,undefined,{validateAnswer:checkLocatorDraft,maxPromptBytes:80});
+ assert.equal(calls,1);
+ assert.equal(small.references[0],locatorRef);
+ assert.deepEqual(small.recovery?.failedNodes,["answer-repair"]);
+ const controller=new AbortController();
+ calls=0;
+ await assert.rejects(synthesizeAnswer("材料",[locatorRef],[locatorSource],async()=>{
+  if(++calls===2)controller.abort();
+  return bad;
+ },controller.signal,undefined,undefined,{validateAnswer:checkLocatorDraft}),{name:"AbortError"});
+ assert.equal(calls,2);
+});
 
 test("source-reported accuracy values and versions do not trigger a calculation plan or replace the answer",async()=>{
  let calls=0;

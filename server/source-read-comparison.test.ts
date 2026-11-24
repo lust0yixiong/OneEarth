@@ -162,9 +162,13 @@ test("failed repair keeps an independently checked answer unit and removes the d
       assert.equal(decoded(prompt).issue.comparison.path,"sourceChanges[1].currentQuote");
       return JSON.stringify({...original,sourceChanges:[assessment(known,"reverified"),unknown]});
     }
+    if(calls===3){
+      assert.equal(decoded(prompt).issue.comparison.path,"sourceChanges[1].status");
+      return JSON.stringify({...original,sourceChanges:[assessment(known,"reverified"),unknown]});
+    }
     return JSON.stringify(original);
   });
-  assert.equal(calls,2);
+  assert.equal(calls,3);
   assert.match(result.message,new RegExp(known));
   assert.match(result.message,new RegExp(gap));
   assert.doesNotMatch(result.message,new RegExp(unsupported));
