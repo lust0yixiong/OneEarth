@@ -1,4 +1,7 @@
-import type {PublicLayerPoint,PublicLayerSelection} from "../domain/haina-public-layer";
+import {createViirsPainter,type ViirsRaster} from "./haina-viirs-painter";
+import {hainaBoundsOnScreen,type HainaViewport} from "./haina-viewport";
+import type {HainaPatch} from "../domain/haina-published-raster";
+import {inPublicBounds,type PublicLayerPoint,type PublicLayerSelection} from "../domain/haina-public-layer";
 import {createRainPainter} from "./rain-layer";
 import type {RainTiles} from "./rain-tiles";
 import {rainCell,rainGrid,rainFactors} from "../domain/rainfall";
@@ -75,7 +78,9 @@ export interface Scene {
   publicImage?:GeoImageFrame;
   publicRaster?:string;
   publicSample?:Coordinate;
-  publicPick?:(point:Coordinate)=>void;
+  publicPick?:(point:Coordinate,patch?:HainaPatch)=>void;
+  publicPatches?:HainaPatch[];
+  publicViirs?:ViirsRaster;
   fieldTexture?:Uint8ClampedArray|null;
   fieldImage?:GeoImageFrame|null;
   basemap?:GeoImageFrame|null;
@@ -99,6 +104,7 @@ export interface Scene {
 export interface FrameInfo {
   publicPoints?:PublicLayerPoint[];
   publicMarkers?:{id:string;label:string;x:number;y:number}[];
+  publicViewport?:HainaViewport;
   answerPins?: {assetId:string;number:number;x:number;y:number;kind:"local"|"range"}[];
   clusterKeys?: string[];
   coloredProducts?: number;
@@ -246,6 +252,54 @@ export function createRenderer(
       }
     });
   }
+  const drawViirs=createViirsPainter();
+  let publicViewport:HainaViewport|undefined;
+  let patchTargets:{patch:HainaPatch;x:number;y:number;coarse:boolean}[]=[];
+  function mapViewport(scene:Scene,width:number,height:number):HainaViewport|undefined {
+    const datasetId=scene.publicLayer?.id;
+    if(datasetId!==1835833&&datasetId!==1846104)return undefined;
+    const center=scene.camera.center,radius=projection.scale();
+    if(publicViewport?.datasetId===datasetId && publicViewport.width===width && publicViewport.height===height
+      && publicViewport.radius===radius && publicViewport.center[0]===center[0] && publicViewport.center[1]===center[1])return publicViewport;
+    return {datasetId,center,radius,width,height};
+  }
+
+  function drawPatchDirectory(scene:Scene,viewport:HainaViewport) {
+    const selected=scene.publicLayer?.view?.replace("-","_");
+    for(const patch of scene.publicPatches??[]){
+      if(!hainaBoundsOnScreen(patch.bounds,viewport)||geoDistance(viewport.center,patch.center)>=Math.PI/2)continue;
+      const [x,y]=projection(patch.center)!;
+      const [west,south,east,north]=patch.bounds;
+      const coarse=Math.max(east-west,north-south)*viewport.radius*Math.PI/180<12;
+      const color=patch.id===selected?"#ad570e":"#2f7764";
+      if(coarse){
+        ctx!.save();
+        ctx!.beginPath();ctx!.arc(x,y,patch.id===selected?4.5:3.5,0,Math.PI*2);
+        ctx!.fillStyle=color;ctx!.fill();ctx!.strokeStyle="#fff";ctx!.lineWidth=1;ctx!.stroke();
+        ctx!.restore();
+      }else{
+        paint({type:"Polygon",coordinates:[[[west,south],[west,north],[east,north],[east,south],[west,south]]]},
+          null,color,0.92,patch.id===selected?1.8:1.2);
+      }
+      patchTargets.push({patch,x,y,coarse});
+    }
+  }
+
+  function patchAt(point:Coordinate,x:number,y:number,selected:string|undefined) {
+    const geographic=patchTargets.filter(candidate=>inPublicBounds(point,candidate.patch.bounds));
+    if(geographic.length){
+      return geographic.find(candidate=>candidate.patch.id===selected)?.patch
+        ?? geographic.reduce((closest,item)=>Math.hypot(item.x-x,item.y-y)<Math.hypot(closest.x-x,closest.y-y)?item:closest).patch;
+    }
+    let distance=8, nearest:HainaPatch|undefined;
+    for(const candidate of patchTargets){
+      if(!candidate.coarse)continue;
+      const next=Math.hypot(candidate.x-x,candidate.y-y);
+      if(next<distance){distance=next;nearest=candidate.patch;}
+    }
+    return nearest;
+  }
+
   function drawPointSelection([x,y]:[number,number]) {
     ctx!.save();
     ctx!.beginPath();
@@ -312,17 +366,27 @@ export function createRenderer(
     let loading = "",
       visibleCells = 0;
     const publicMarkers:FrameInfo["publicMarkers"]=[];
+    const focusWidth=Math.max(1,width-(scene.rightInset||0));
+    publicViewport=mapViewport(scene,focusWidth,height);
+    patchTargets=[];
     canvas.dataset.publicRaster="";
     delete canvas.dataset.publicSample;
+    delete canvas.dataset.publicTileLevel;
     if(scene.publicLayer){
       paint({type:"Sphere"},"#dcebf2","#9bb6c3");
       paint(land,"#f5f8f4","#b4c6bf");
       if(scene.basemap)drawGeoImage(ctx!,projection,scene.basemap,width,height,interacting);
       if(zoom<15)paint(graticule,null,"#bad0d7",0.55);
+      if(scene.publicViirs){
+        drawViirs(ctx!,projection,scene.publicViirs,focusWidth,height,interacting);
+        canvas.dataset.publicRaster=scene.publicRaster??"global";
+        canvas.dataset.publicTileLevel=String(scene.publicViirs.level);
+      }
       if(scene.publicImage){
         drawGeoImage(ctx!,projection,scene.publicImage,width,height,interacting);
         canvas.dataset.publicRaster=scene.publicRaster??"";
       }
+      if(scene.publicPatches&&publicViewport)drawPatchDirectory(scene,publicViewport);
       if(scene.publicSample && geoDistance(center,scene.publicSample)<Math.PI/2){
         const point=projection(scene.publicSample);
         if(point && point[0]>=0 && point[0]<=width-(scene.rightInset??0) && point[1]>=0 && point[1]<=height){
@@ -805,7 +869,7 @@ export function createRenderer(
       if (p[0] >= 0 && p[0] <= width && p[1] >= 0 && p[1] <= height)
         anchor = { x: p[0], y: p[1] };
     }
-    onFrame({ publicPoints:scene.publicPoints, publicMarkers, answerPins,clusterKeys, coloredProducts, coloredSelection, coverageSelection, productCell, gridLabel: g.label, level: band, visibleCells, loading, anchor });
+    onFrame({ publicPoints:scene.publicPoints, publicMarkers, publicViewport, answerPins,clusterKeys, coloredProducts, coloredSelection, coverageSelection, productCell, gridLabel: g.label, level: band, visibleCells, loading, anchor });
     canvas.dataset.painted = "true";
     canvas.dataset.focusWidth = String(width - (scene.rightInset || 0));
   }
@@ -816,8 +880,13 @@ export function createRenderer(
     if (Math.hypot(x - originX, y - originY) > projection.scale()) return;
     const scene = {...getScene(),camera:motion.camera()};
     motion.settle();
-    const point = projection.invert!([x, y]) as Coordinate;
-    if(scene.publicLayer){scene.publicPick?.(point);return;}
+    const point = projection.invert!([x, y]);
+    if(!point||!point.every(Number.isFinite))return;
+    if(scene.publicLayer){
+      if(x<0||x>width-(scene.rightInset||0)||y<0||y>height)return;
+      scene.publicPick?.(point,scene.publicPatches?patchAt(point,x,y,scene.publicLayer.view?.replace("-","_")):undefined);
+      return;
+    }
     const g = gridSpec(scene.gridSystem, resolution(scene.camera.zoom));
     const id = cellAt(point, g);
     const version = ++selectVersion;

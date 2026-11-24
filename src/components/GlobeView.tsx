@@ -1,6 +1,8 @@
 import { createPortal } from "react-dom";
 import {HainaPublicLayerLegend} from "./HainaPublicLayerLegend";
 import type {HainaPublicLayer} from "./use-haina-public-layer";
+import {useHainaViirsSample,useHainaViirsTiles} from "./use-haina-viirs";
+import {coverageCamera,hainaPatchView,type HainaPatch} from "../domain/haina-published-raster";
 import {ResearchRegionLayer} from "./ResearchRegionLayer";
 import {gridScope,timeScope} from "../domain/question-scope";
 import {attachCoverageScope,CoverageScopeChanged} from "../domain/coverage-attachment";
@@ -150,9 +152,24 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
   const publicLayer=s.publicLayer;
   const hainaView=haina.view;
   const hainaManifest=haina.catalogue.manifest;
+  const viirsPublication=hainaManifest?.mode==="viirs"?hainaManifest:undefined;
+  const hainaCoverage=hainaManifest?.mode==="coverage"?hainaManifest:undefined;
+  const [frame,setFrame]=useState<FrameInfo>({gridLabel:"H3 R2",level:2,visibleCells:0,loading:"",anchor:null});
+  const viirs=useHainaViirsTiles(viirsPublication,frame.publicViewport);
   const [hainaSample,setHainaSample]=useState<{view:typeof hainaView;point:Coordinate}|null>(null);
   const publicSample=hainaSample?.view===hainaView ? hainaSample?.point : undefined;
+  const viirsSample=useHainaViirsSample(viirsPublication,publicSample);
   const positioned=useRef("");
+  const chooseHainaPatch=(id:string)=>{
+    if(!publicLayer || !hainaCoverage?.patches.some(patch=>patch.id===id))return;
+    setHainaSample(null);
+    patch({publicLayer:{id:publicLayer.id,view:hainaPatchView(id),month:haina.month}});
+  };
+  const chooseHainaMonth=(month:string)=>{
+    if(!publicLayer||!hainaCoverage?.months.includes(month))return;
+    setHainaSample(null);
+    patch({publicLayer:{...publicLayer,month}});
+  };
   const locateHaina=()=>{
     if(!hainaView||!hainaManifest)return;
     patch({camera:{center:hainaView.center,zoom:hainaView.zoom,reason:hainaManifest.title+" · "+hainaView.label},flight:null});
@@ -163,10 +180,15 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
       return;
     }
     const key=[publicLayer.id,hainaView.id,...hainaView.center,hainaView.zoom].join("/");
-    if(positioned.current===key)return;
+    const move=positioned.current!==key;
     positioned.current=key;
-    patch({camera:{center:hainaView.center,zoom:hainaView.zoom,reason:hainaManifest.title+" · "+hainaView.label},flight:null,
-      ...(publicLayer.view!==hainaView.id?{publicLayer:{id:publicLayer.id,view:hainaView.id}}:{})});
+    const normalizedMonth=hainaView.kind==="patch"?hainaView.month:undefined;
+    const canonical=publicLayer.view!==hainaView.id||normalizedMonth!==publicLayer.month;
+    if(!move&&!canonical)return;
+    patch({
+      ...(move?{camera:{center:hainaView.center,zoom:hainaView.zoom,reason:hainaManifest.title+" · "+hainaView.label},flight:null}:{}),
+      ...(canonical?{publicLayer:{...publicLayer,view:hainaView.id,month:normalizedMonth}}:{})});
+
   },[publicLayer,hainaView,hainaManifest,patch]);
   const selectedLayer=s.fieldLayer;
   const publication=useRainCatalog(selectedLayer?.id==="rain");
@@ -259,18 +281,17 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
   useEffect(()=>{renderer.current?.render();},[basemapFrame]);
   const publicPoints=haina.data?.points;
   const publicImage=haina.data?.image;
-  const publicRaster=publicImage?hainaView?.id:undefined;
-  const latest = useRef({ ...s, publicPoints,publicImage,publicRaster,publicSample,publicPick:undefined as ((point:Coordinate)=>void)|undefined, catalogStyle:distributionStyle,rightInset, windTheme,answerReferences,fieldTexture:fieldData.texture,fieldImage,fieldRain:fieldData.field?.rain, basemap:basemapFrame, basemapId:basemapId??undefined });
-  latest.current = { ...s, researchRegion:publicLayer?null:s.researchRegion,publicPoints,publicImage,publicRaster,publicSample,
-    publicPick:hainaView?.kind==="raster"?point=>setHainaSample({view:hainaView,point}):undefined, catalogStyle:distributionStyle,rightInset, windTheme,answerReferences,fieldTexture:fieldData.texture,fieldImage,fieldRain:fieldData.field?.rain, basemap:basemapFrame, basemapId:basemapId??undefined };
+  const publicRaster=publicImage||viirs.raster?hainaView?.id:undefined;
+  const publicPick=(point:Coordinate,target?:HainaPatch)=>{
+    if(target && hainaCoverage && target.id!==haina.patch?.id)chooseHainaPatch(target.id);
+    else if(hainaView?.kind!=="points")setHainaSample({view:hainaView,point});
+  };
+  const scene={...s,researchRegion:publicLayer?null:s.researchRegion,publicPoints,publicImage,publicRaster,publicSample,publicPick,
+    publicPatches:hainaCoverage?.patches,publicViirs:viirs.raster,catalogStyle:distributionStyle,rightInset,windTheme,answerReferences,
+    fieldTexture:fieldData.texture,fieldImage,fieldRain:fieldData.field?.rain,basemap:basemapFrame,basemapId:basemapId??undefined};
+  const latest=useRef(scene);
+  latest.current=scene;
   const c = caseById(s.caseId);
-  const [frame, setFrame] = useState<FrameInfo>({
-    gridLabel: "H3 R2",
-    level: 2,
-    visibleCells: 0,
-    loading: "",
-    anchor: null,
-  });
   const [gridList, setGridList] = useState<CandidateSet | null>(null);
   const scopeRequest=useRef<AbortController | null>(null);
   useEffect(()=>{
@@ -405,7 +426,7 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
       s.pushFeed,
       s.paperFeed,
       s.dataView,
-      s.visualization,layer,publicLayer,publicPoints,publicImage,publicSample,fieldData.texture,fieldImage,fieldData.revision,fieldData.field,
+      s.visualization,layer,publicLayer,publicPoints,publicImage,publicSample,viirs.raster,hainaCoverage,fieldData.texture,fieldImage,fieldData.revision,fieldData.field,
       distributionStyle,
       rightInset,
       windTheme,
@@ -643,9 +664,10 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
     let activeLayer: WorkspaceViewContext["activeLayer"];
     if (publicLayer) {
       activeLayer = {id:"haina-"+publicLayer.id,title:hainaManifest?.title??"海纳公开图层",datasetId:"haina:"+publicLayer.id,
-        status:haina.catalogue.error || haina.data?.error ? "unavailable" : haina.data ? "ready" : "loading",controls:[],
-        ...(hainaManifest && hainaView ? {display:[{label:"资料时间",value:hainaManifest.period},
-          {label:"已发布视窗",value:hainaView.label}]} : {})};
+        status:haina.catalogue.error||haina.data?.error||viirs.failed||hainaCoverage&&(!hainaView||hainaView.kind==="patch"&&!hainaView.image)
+          ? "unavailable" : haina.data||viirs.ready ? "ready" : "loading",controls:[],
+        ...(hainaManifest && hainaView ? {display:[{label:"资料时间",value:haina.month??hainaManifest.period},
+          {label:hainaView.kind==="patch"?"已选图斑":"图层范围",value:hainaView.kind==="tiles"?"随视野显示":hainaView.label}]} : {})};
     } else if (s.visualization) {
       const view = s.visualization;
       const status = windLoad.error ? "unavailable" : windLoad.ready ? "ready" : "loading";
@@ -795,7 +817,9 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
         {publicLayer ? <HainaPublicLayerLegend selection={publicLayer} layer={haina}
           sample={publicSample??null}
           chooseView={view=>{setHainaSample(null);patch({publicLayer:{id:publicLayer.id,view}});}}
-          choosePoint={point=>selectHainaPoint(point.id)} locate={locateHaina} inspect={inspectHaina}/>
+          choosePatch={chooseHainaPatch} chooseMonth={chooseHainaMonth} viirs={viirs} viirsSample={viirsSample}
+          overview={()=>{if(hainaCoverage)patch({camera:coverageCamera(hainaCoverage),flight:null});}} choosePoint={point=>selectHainaPoint(point.id)}
+          locate={locateHaina} inspect={inspectHaina}/>
           : forestLayer && forest.manifest ? <div className="map-legend forest-legend-bar">
           <span className="forest-legend-title">大兴安岭森林 · 嵌入 PCA</span>
           {forest.imageError ? <button onClick={forest.retryImage} data-forest-frame={forest.frame?.date}

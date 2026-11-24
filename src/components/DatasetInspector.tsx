@@ -433,7 +433,7 @@ function DataGlobeButton({asset,scope,published=false}:{
 
 function HainaLayerDetails({haina,selection}:{haina:HainaPublicLayer;selection:PublicLayerSelection}) {
   const {manifest}=haina.catalogue;
-  if(!manifest || !haina.view)return null;
+  if(!manifest)return null;
   const point:PublicLayerPoint|undefined=haina.data?.points?.find(item=>item.id===selection.point);
   return <>
     {point && <section className="haina-point-detail" aria-label="火山原始记录">
@@ -446,7 +446,13 @@ function HainaLayerDetails({haina,selection}:{haina:HainaPublicLayer;selection:P
       </dl>
     </section>}
     <dl className="haina-public-layer-details" aria-label="已发布图层详情">
-      <dt>已发布范围</dt><dd>{haina.view.label} · {manifest.period}</dd>
+      <dt>已发布范围</dt><dd>{manifest.mode==="viirs"
+        ? "随视野显示 · "+manifest.period : haina.view?.kind==="patch"
+        ? haina.view.label+" · "+haina.view.month+(haina.view.image?"":"（此月未发布）")
+        : haina.view ? haina.view.label+" · "+manifest.period : "此图斑未发布"}</dd>
+      {manifest.mode==="coverage" && <><dt>可用月份</dt>
+        <dd>{haina.patch?.months.join("、")||"当前图斑无已发布切片"}</dd>
+        <dt>颜色说明</dt><dd>{manifest.colors.kind==="shared-pca"?"共用 PCA 色轴":"逐帧独立 PCA，颜色不可直接跨期比较"}</dd></>}
       <dt>图层说明</dt><dd>{manifest.description}</dd>
       <dt>图层来源</dt><dd>{/^https?:\/\//i.test(manifest.source)
         ? <a href={manifest.source} target="_blank" rel="noreferrer">查看发布来源 <ExternalLink size={12}/></a>

@@ -66,7 +66,7 @@ export function createGeoImagePainter() {
       : Math.min(devicePixelRatio, 2, 1600 / Math.max(dw, dh));
     const w = Math.max(1, Math.ceil(dw * scale)),
       h = Math.max(1, Math.ceil(dh * scale));
-    const key = [width, height, w, h, left, top, dw, dh, ...projection.rotate(), ...frame.bounds, frame.width, frame.height].join("/");
+    const key = [width, height, w, h, left, top, dw, dh, ...projection.rotate(), ...projection.translate(), projection.scale(), ...frame.bounds, frame.width, frame.height].join("/");
     if (key !== geometryKey) {
       geometryKey = key;
       uv = new Float32Array(w * h * 2);

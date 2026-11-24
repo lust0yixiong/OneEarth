@@ -12,6 +12,7 @@ import {conversationReferenceMemory,modelHistoryMessages} from "./reference-memo
 import {researchRegionCamera,validResearchRegion,sameResearchRegion,type ResearchRegion,type ResearchRegionLayer} from "./research-region";
 import {answerMapBatch,answerFilters,initialAnswerCamera,gridCamera,evidenceCamera,evidenceSelection} from "./answer-map";
 import { globeCases,layerFrameCount,datasetLayers,isForestDate,type RegionalId } from "./regional-cases";
+import {validHainaMonth} from "./haina-published-raster";
 import {isPublicLayerId,validPublicViewId,type PublicLayerId,type PublicLayerSelection} from "./haina-public-layer";
 import {isRainYear} from "./rain-catalog";
 import { paperId } from "./paper-record";
@@ -368,8 +369,10 @@ function initial(sessionId: string, url = new URL(location.href), saved: Record<
         : null;
   const publicId=Number(url.searchParams.get("hainaLayer"));
   const publicView=url.searchParams.get("hainaView");
+  const publicMonth=url.searchParams.get("hainaMonth");
   const publicLayer=view==="earth"&&!caseId&&!fieldLayer&&!visualization&&!dataView&&!openPushGlobe&&isPublicLayerId(publicId)
-    ? {id:publicId,...(validPublicViewId(publicView)?{view:publicView}:{})} : null;
+    ? {id:publicId,...(validPublicViewId(publicView)?{view:publicView}:{}),
+      ...(publicId===1846104&&validHainaMonth(publicMonth)?{month:publicMonth}:{})} : null;
   if (dataView) {
     filters.need = dataView.kind === "ctd" ? 4 : 1;
     filters.type = "";
@@ -915,12 +918,15 @@ function useWorkspaceValue(initialState: State) {
       url.searchParams.set("hainaLayer",String(state.publicLayer.id));
       if(state.publicLayer.view)url.searchParams.set("hainaView",state.publicLayer.view);
       else url.searchParams.delete("hainaView");
+      if(state.publicLayer.month)url.searchParams.set("hainaMonth",state.publicLayer.month);
+      else url.searchParams.delete("hainaMonth");
     }else{
       url.searchParams.delete("hainaLayer");
       url.searchParams.delete("hainaView");
+      url.searchParams.delete("hainaMonth");
     }
     history.replaceState({ ...history.state, oneearthSession: state.sessionId, oneearthPath: url.pathname + url.search }, "", url);
-  }, [state.linkStatus, state.sessionId, state.caseId, state.view, state.search.source,state.search.section,state.search.page,state.search.query,state.search.type,state.search.capability,state.search.savedOnly, state.filters.source, state.mapResult, state.dataView, state.visualization,state.fieldLayer?.id,state.fieldLayer?.year,state.fieldLayer?.frame,state.fieldLayer?.city,state.fieldLayer?.date,state.publicLayer?.id,state.publicLayer?.view]);
+  }, [state.linkStatus, state.sessionId, state.caseId, state.view, state.search.source,state.search.section,state.search.page,state.search.query,state.search.type,state.search.capability,state.search.savedOnly, state.filters.source, state.mapResult, state.dataView, state.visualization,state.fieldLayer?.id,state.fieldLayer?.year,state.fieldLayer?.frame,state.fieldLayer?.city,state.fieldLayer?.date,state.publicLayer?.id,state.publicLayer?.view,state.publicLayer?.month]);
   useEffect(() => () => {
     for (const entry of requests.current.values()) entry.controller.abort();
     requests.current.clear();
