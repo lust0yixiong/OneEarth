@@ -3299,40 +3299,19 @@ html[data-panel-interaction="move"] * {
   background: #edf0ed;
   cursor: not-allowed;
 }
-.haina-public-mode .earth-side-controls { top: 90px; bottom: auto; }
-.haina-layer-panel {
-  position: absolute;
-  z-index: 3;
-  bottom: 34px;
-  left: 28px;
-  width: min(390px, calc(100% - var(--haina-inset, 0px) - 60px));
-  max-height: min(38%, 370px);
-  overflow: auto;
-  padding: 13px 14px;
-  color: #354d52;
-  background: rgba(249, 253, 253, .96);
-  border: 1px solid #c7d9d9;
-  border-radius: 10px;
-  box-shadow: 0 3px 14px #34525512;
-  font-size: 12px;
+.haina-public-mode :is(.map-footer, .earth-side-controls, .earth-location) { z-index: 4; }
+.haina-public-legend { min-width: 0; }
+.haina-point-switch select { max-width: min(194px, 50vw); }
+.haina-sample { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0 6px; overflow-wrap: anywhere; }
+.haina-volcano-key { width: 8px; height: 8px; background: #94521a; border-radius: 50%; }
+.haina-viirs-key {
+  width: 34px;
+  height: 5px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #00224d, #434e6b, #7c7b78, #bbad6c, #fde737);
 }
-.haina-layer-panel p { margin: 6px 0 0; overflow-wrap: anywhere; }
-.haina-layer-heading, .haina-layer-options, .haina-point-control {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.haina-layer-heading { justify-content: space-between; flex-wrap: nowrap; }
-.haina-layer-heading strong { font-size: 14px; }
-.haina-layer-options, .haina-point-control { margin-top: 6px; }
-.haina-layer-panel :is(button,select) { font-size: inherit; max-width: 100%; }
-.haina-layer-panel select { min-width: 0; }
-.haina-point-detail { padding-top: 8px; }
-.haina-point-detail small { display: block; }
-.haina-point-detail dl { margin: 4px 0 0; max-height: 9rem; overflow: auto; }
-.haina-point-detail dl div { display: grid; grid-template-columns: 2fr 3fr; gap: 6px; }
-.haina-point-detail dt, .haina-point-detail dd { margin: 0; overflow-wrap: anywhere; }
+.overview-body .haina-point-detail dl { grid-template-columns: minmax(0, 45%) minmax(0, 1fr); }
+.haina-point-detail dd, .haina-public-layer-details dd { overflow-wrap: anywhere; }
 .haina-point-marker {
   position: absolute;
   z-index: 2;
@@ -3350,7 +3329,4 @@ html[data-panel-interaction="move"] * {
   z-index: 3;
   outline: 2px solid #713e16;
   outline-offset: 3px;
-}
-@media (max-width: 620px) {
-  .haina-layer-panel { bottom: 16px; left: 10px; width: min(370px, calc(100% - 20px)); }
 }

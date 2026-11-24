@@ -59,3 +59,5 @@ export function useHainaPublicLayer(selection:PublicLayerSelection|null) {
   },[attempt,view]);
   return {catalogue,view,data:data?.view===view?data:null,grid:grid?.view===view?grid:null,retry:()=>retry(value=>value+1)};
 }
+
+export type HainaPublicLayer=ReturnType<typeof useHainaPublicLayer>;

@@ -17,6 +17,7 @@ const CasesView = lazy(() =>
 
 import { ChatBoundary, useChatLayout } from "./components/ChatBoundary";
 import { ChatPanel } from "./components/ChatPanel";
+import {useHainaPublicLayer} from "./components/use-haina-public-layer";
 import { DatasetInspector } from "./components/DatasetInspector";
 import { DataInspector } from "./components/DataInspector";
 import { EvidenceReader } from "./components/EvidenceReader";
@@ -33,6 +34,7 @@ const nav: { id: View; label: string; icon: typeof Globe }[] = [
 ];
 function Workspace() {
   const { state: s, resultLink, patch, openCatalog, openEarth, openMappedCatalog } = useWorkspace();
+  const haina=useHainaPublicLayer(s.view==="earth" && !s.linkStatus ? s.publicLayer : null);
   const [dataAccessNavigation] = useDataAccessNavigation();
   const [about, setAbout] = useState(false);
   const [mapToolsHost, setMapToolsHost] = useState<HTMLDivElement | null>(null);
@@ -146,12 +148,12 @@ function Workspace() {
             ) : s.view === "cases" ? (
               <CasesView />
             ) : (
-              <GlobeView rightInset={chatLayout.mapInset} toolsHost={mapToolsHost} />
+              <GlobeView haina={haina} rightInset={chatLayout.mapInset} toolsHost={mapToolsHost} />
             )}
           </Suspense>
         </div>
         {s.inspector ? (
-          <DatasetInspector
+          <DatasetInspector haina={haina}
             key={
               "assetId" in s.inspector
                 ? s.inspector.assetId

@@ -3,8 +3,8 @@ import {paperRecords} from "../domain/paper-record";
 import {useCatalogRevision} from "./use-catalog-revision";
 import {loadRemoteAssetIds} from "../domain/datasets";
 import {useWebPreview} from "./use-web-preview";
-import {publicLayerForDataset} from "../domain/haina-public-layer";
-import {usePublicLayerManifest} from "./use-haina-public-layer";
+import {publicLayerForDataset,type PublicLayerPoint,type PublicLayerSelection} from "../domain/haina-public-layer";
+import {usePublicLayerManifest,type HainaPublicLayer} from "./use-haina-public-layer";
 import {EntityVisualization} from "./EntityVisualization";
 import {regionalForDataset} from "../domain/regional-cases";
 import {readC40Catalogue} from "./use-c40-layer";
@@ -22,7 +22,7 @@ import { ResearchAssessment } from "./ResearchAssessment";
 import { BatchSpatialSummary } from "./BatchSpatialSummary";
 import { BatchContext, SaveResearchList } from "./ResearchLists";
 import { SeptemberComparison } from "./SeptemberComparison";
-import { useState, useEffect, useMemo } from "react";
+import { Fragment, useState, useEffect, useMemo } from "react";
 import {
   ChartNoAxesCombined,
   FileSearch,
@@ -385,13 +385,15 @@ function ResearchCollection({ batch }: { batch: CandidateSet }) {
     </>
   );
 }
-function DataGlobeButton({asset,scope}:{
+function DataGlobeButton({asset,scope,published=false}:{
   asset?:Asset;
+  published?:boolean;
   scope?:{filters:Filters;selection:Selection|null};
 }) {
   const {state:s,patch,openData,openVisualization,openPublicLayer}=useWorkspace();
   const pilot=publicLayerForDataset(asset?.id);
-  const publication=usePublicLayerManifest(pilot);
+  const publication=usePublicLayerManifest(published?undefined:pilot);
+  const readyPilot=published||!!publication.manifest;
   const layer=asset ? regionalForDataset(asset.datasetId) : undefined;
   const rain=useRainCatalog(layer==="rain");
   const [verified,setVerified]=useState<"forest"|"c40"|null>(null);
@@ -413,7 +415,7 @@ function DataGlobeButton({asset,scope}:{
     && scopedDataView(asset.caseId,asset.needIndex,{...scope.filters,need:asset.needIndex},scope.selection,s.dataView);
 
   function open() {
-    if (pilot && publication.manifest) {
+    if (pilot && readyPilot) {
       openPublicLayer(pilot);
     } else if (layer && readyLayer) {
       openVisualization(layer,null);
@@ -426,10 +428,34 @@ function DataGlobeButton({asset,scope}:{
       openData(asset.caseId,asset.needIndex,scope.filters,scope.selection);
     }
   }
-  return <button type="button" className="data-globe-button" disabled={pilot ? !publication.manifest : !(readyLayer || wind || native)} onClick={open}>数据上球</button>;
+  return <button type="button" className="data-globe-button" disabled={pilot ? !readyPilot : !(readyLayer || wind || native)} onClick={open}>数据上球</button>;
 }
 
-export function DatasetInspector() {
+function HainaLayerDetails({haina,selection}:{haina:HainaPublicLayer;selection:PublicLayerSelection}) {
+  const {manifest}=haina.catalogue;
+  if(!manifest || !haina.view)return null;
+  const point:PublicLayerPoint|undefined=haina.data?.points?.find(item=>item.id===selection.point);
+  return <>
+    {point && <section className="haina-point-detail" aria-label="火山原始记录">
+      <h3>{point.label}</h3>
+      <dl>
+        <dt>点位经纬度</dt><dd>{point.coordinate.map(value=>value.toFixed(4)+"°").join(", ")}</dd>
+        {Object.entries(point.properties).map(([label,value])=><Fragment key={label}>
+          <dt>{label}</dt><dd>{value===null||value==="" ? "缺测" : typeof value==="object" ? JSON.stringify(value) : String(value)}</dd>
+        </Fragment>)}
+      </dl>
+    </section>}
+    <dl className="haina-public-layer-details" aria-label="已发布图层详情">
+      <dt>已发布范围</dt><dd>{haina.view.label} · {manifest.period}</dd>
+      <dt>图层说明</dt><dd>{manifest.description}</dd>
+      <dt>图层来源</dt><dd>{/^https?:\/\//i.test(manifest.source)
+        ? <a href={manifest.source} target="_blank" rel="noreferrer">查看发布来源 <ExternalLink size={12}/></a>
+        : manifest.source}</dd>
+    </dl>
+  </>;
+}
+
+export function DatasetInspector({haina}:{haina:HainaPublicLayer}) {
   const { state: s, patch, inspectCandidates } = useWorkspace();
   const [collapsed, setCollapsed] = useState(false);
   const previewWeb=useWebPreview();
@@ -455,6 +481,7 @@ export function DatasetInspector() {
   const parent = "parent" in item ? item.parent : undefined;
   const collection = batch || parent;
   const comparison = "comparison" in item ? item.comparison : null;
+  const activeHaina=s.view==="earth" && s.publicLayer && publicLayerForDataset(asset?.id)===s.publicLayer.id ? s.publicLayer : null;
   return (
     <SourcePreviewSurface><section
       aria-label="数据速览" onClick={previewWeb}
@@ -474,7 +501,8 @@ export function DatasetInspector() {
             </button>
           )}
           {collection && s.view === "earth" &&
-            <DataGlobeButton asset={summary ? undefined : asset} scope={"assetId" in item ? item : undefined}/>}
+            <DataGlobeButton asset={summary ? undefined : asset} scope={"assetId" in item ? item : undefined}
+              published={!!activeHaina && !!haina.catalogue.manifest}/>}
           <button
             aria-label={compact ? "展开数据速览" : "收起数据速览"}
             onClick={() => {
@@ -494,6 +522,7 @@ export function DatasetInspector() {
       </div>
       <h2>{asset?.title || comparison?.title || batch?.title}</h2>
       <div className="overview-body" hidden={compact}>
+        {activeHaina && <HainaLayerDetails haina={haina} selection={activeHaina}/>}
         {parent && <BatchContext batch={parent} />}
         {asset && parent && "assetId" in item &&
           <SaveResearchList single batch={{...parent, ids:[asset.id], filters:item.filters, selection:item.selection,

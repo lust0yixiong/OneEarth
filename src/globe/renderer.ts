@@ -74,6 +74,7 @@ export interface Scene {
   publicPoints?:PublicLayerPoint[];
   publicImage?:GeoImageFrame;
   publicRaster?:string;
+  publicSample?:Coordinate;
   publicPick?:(point:Coordinate)=>void;
   fieldTexture?:Uint8ClampedArray|null;
   fieldImage?:GeoImageFrame|null;
@@ -245,6 +246,17 @@ export function createRenderer(
       }
     });
   }
+  function drawPointSelection([x,y]:[number,number]) {
+    ctx!.save();
+    ctx!.beginPath();
+    ctx!.arc(x,y,7,0,2*Math.PI);
+    ctx!.fillStyle="#fff1cf";
+    ctx!.fill();
+    ctx!.strokeStyle="#ad570e";
+    ctx!.lineWidth=2;
+    ctx!.stroke();
+    ctx!.restore();
+  }
   function draw() {
     frame = 0;
     if (disposed) return;
@@ -301,6 +313,7 @@ export function createRenderer(
       visibleCells = 0;
     const publicMarkers:FrameInfo["publicMarkers"]=[];
     canvas.dataset.publicRaster="";
+    delete canvas.dataset.publicSample;
     if(scene.publicLayer){
       paint({type:"Sphere"},"#dcebf2","#9bb6c3");
       paint(land,"#f5f8f4","#b4c6bf");
@@ -309,6 +322,13 @@ export function createRenderer(
       if(scene.publicImage){
         drawGeoImage(ctx!,projection,scene.publicImage,width,height,interacting);
         canvas.dataset.publicRaster=scene.publicRaster??"";
+      }
+      if(scene.publicSample && geoDistance(center,scene.publicSample)<Math.PI/2){
+        const point=projection(scene.publicSample);
+        if(point && point[0]>=0 && point[0]<=width-(scene.rightInset??0) && point[1]>=0 && point[1]<=height){
+          drawPointSelection(point);
+          canvas.dataset.publicSample=scene.publicSample.join(",");
+        }
       }
       for(const point of scene.publicPoints??[]){
         if(geoDistance(center,point.coordinate)>=Math.PI/2)continue;
@@ -747,8 +767,7 @@ export function createRenderer(
             const point=geometry.coordinates as Coordinate;
             if(geoDistance(center,point)>=Math.PI/2)continue;
             const p=projection(point);if(!p)continue;
-            ctx!.beginPath();ctx!.arc(p[0],p[1],7,0,2*Math.PI);
-            ctx!.fillStyle="#fff1cf";ctx!.fill();ctx!.strokeStyle="#ad570e";ctx!.lineWidth=2;ctx!.stroke();
+            drawPointSelection(p);
           } else paint(geometry,"rgba(255,188,73,.18)","#ad570e",1,2);
         }
         canvas.dataset.focusedAsset=focus!.assetId;
