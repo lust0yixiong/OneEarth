@@ -68,10 +68,12 @@ export function researchClarificationPrompt(result:import("./data-search").DataS
 export async function runForegroundTurn(services:RuntimeServices,taskId:string,body:RuntimeTurnInput,signal:AbortSignal,
   emit:(payload:Record<string,unknown>)=>void,options:RuntimeTurnOptions={}):Promise<ForegroundTurnOutcome>{
   const pending=options.pending,answer=pending?.answer,prompt=pending?.clarificationPrompt;
-  const exactConfirmation=prompt?.kind==="confirmation"&&answer?.parentTaskId===pending?.taskId&&
+  const boundAnswer=!!prompt&&answer?.parentTaskId===pending?.taskId&&body.previousTaskId===pending?.taskId&&
     body.clarificationAnswer?.parentTaskId===answer?.parentTaskId&&body.clarificationAnswer?.optionId===answer?.optionId&&
     body.clarificationAnswer?.text===answer?.text&&clarificationAnswerText(prompt,answer!)===body.query;
   signal.throwIfAborted();
+  if((answer||body.clarificationAnswer)&&!boundAnswer)return {kind:"reply",payload:{error:"本轮没有与原追问一致的实际弹框答复，未执行操作。",code:"TURN_CLARIFICATION_BINDING_INVALID"}};
+  const exactConfirmation=boundAnswer&&prompt?.kind==="confirmation";
   if(exactConfirmation&&answer?.optionId==="decline"&&answer.text===undefined){
     const runTrace:RunTrace={started:Date.now(),stages:[],calls:[{id:"workspace-confirmation",kind:"tool",name:"研究者拒绝原提案",input:pending!.taskId,status:"done",output:"未执行任何界面操作。"}]};
     emit({call:runTrace.calls[0],traceStarted:runTrace.started});return {kind:"reply",payload:{result:{message:"已取消这次提案，未执行任何界面操作。",runTrace}}};
@@ -361,14 +363,14 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         if(!current||["kind","id","url","basis"].some(key=>current[key as keyof typeof current]!==target[key as keyof typeof target]))
           throw Error("原计划的确切来源已无法核对，未执行研究。 ");
       }
-      return parseTurnPlan(JSON.stringify({...saved,targets:saved.targets.map(target=>target.key),evidenceGap:saved.evidenceGap??null}),planningInput,available);
+      return parseTurnPlan(JSON.stringify({...saved,targets:saved.targets.map(target=>target.key),evidenceGap:saved.evidenceGap??null}),{...planningInput,storedPlan:true},available);
     }
     function approvedPlan(){
       const goal=(internal.pending?.originalQuestion||query).slice(0,1200),meta=turnMetadata(goal,{history,conversationContext,previousResearchIntent:planningIntent});
       const plan:TurnPlan={action:"workspace",goal,evidenceNeed:"none",targets:[],reason:"研究者已通过存档确认问题明确批准原具体提案。",clarification:null,
         ...meta,pendingTaskId:internal.pending!.taskId,pendingApproval:true,workspaceAction:null};
       report({id:"turn-action",kind:"tool",name:"继续已核验的确认提案",input:JSON.stringify({parentTaskId:internal.pending!.taskId,optionId:"approve"}),status:"done",
-        output:JSON.stringify({...plan,decisionSource:"stored-confirmation",modelPlanning:{attempts:0,pendingTaskId:plan.pendingTaskId,pendingApproval:true,workspaceAction:internal.pending?.proposedAction}})});
+        output:JSON.stringify({...plan,decisionSource:"stored-confirmation",authorization:{parentTaskId:internal.pending!.taskId,optionId:"approve"},modelPlanning:{attempts:0,workspaceAction:internal.pending?.proposedAction}})});
       return {plan,retrieval:undefined as import("./data-search").DataSearchResult|undefined};
     }
     const prepared = internal.approvedConfirmation?approvedPlan():internal.handoff?{plan:resumedPlan(),retrieval:undefined as import("./data-search").DataSearchResult|undefined}:clarification?{plan:{action:"search",evidenceNeed:"discover",goal:clarification.goal,targets:[],
@@ -379,8 +381,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       stage, report,
       search:p=>internal.foreground||scopeUnverified||p.gridIntent==="count"||p.gridIntent==="catalogue"||gridLimits?.currentCoverageOnly||gridLimits?.noDiscovery?Promise.resolve(undefined):find(p),
     });
-    const restrictedConfirmation=internal.pending?.clarificationPrompt?.kind==="confirmation"&&!internal.approvedConfirmation&&
-      (internal.pending.answer!==undefined||prepared.plan.pendingTaskId===internal.pending.taskId||prepared.plan.pendingApproval);
+    const restrictedConfirmation=internal.pending?.clarificationPrompt?.kind==="confirmation"&&!internal.approvedConfirmation&&internal.pending.answer!==undefined;
     if(restrictedConfirmation&&(["read","search"].includes(prepared.plan.action)||prepared.plan.observationUse==="selected"))
       return {result:{message:"本次答复未批准原提案，也未启动新的研究。若要改变研究目的，请另行明确提出。",clarification:true,runTrace}};
     if(internal.foreground&&(["read","search"].includes(prepared.plan.action)||prepared.plan.observationUse==="selected")){
@@ -485,15 +486,13 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       };
       const continuity={researchIntent:turn.researchIntent,conversationContext:turn.conversationContext,conversationEvidence,conversationAssertionEvidence};
       const pending=internal.pending??internal.handoff?.pending;
-      const boundPending=turn.pendingTaskId&&turn.pendingTaskId===pending?.taskId?pending:undefined;
+      const boundPending=internal.approvedConfirmation||turn.pendingTaskId&&turn.pendingTaskId===pending?.taskId?pending:undefined;
       const boundProposal=boundPending?.proposedAction;
-      if(restrictedConfirmation&&turn.action==="workspace")return complete({message:"原提案尚未获得确认执行选项的批准，本轮未执行操作。可补充条件后重新确认。",clarification:true,...continuity});
-      const supplementingConfirmation=restrictedConfirmation&&pending?.answer?.text!==undefined;
       if(boundPending&&turn.pendingApproval&&!boundProposal){
         return complete({message:"原待办还没有确定的操作目标，不能仅凭同意替你选择。请明确要操作的对象。",clarification:true,
           workspacePending:{question:boundPending.question,originalQuestion:boundPending.originalQuestion},...continuity});
       }
-      const continuingProposal=!!boundProposal&&!supplementingConfirmation&&(turn.action==="workspace"||turn.workspacePending);
+      const continuingProposal=!!boundProposal&&internal.approvedConfirmation;
       if(continuingProposal){
         if(turn.action==="workspace"&&!turn.pendingApproval||turn.workspaceReply||turn.workspaceOperation||turn.workspaceNavigation)
           return complete({message:"这次决定不符合原待办的具体操作，尚未执行。请明确新的目标或确认原提案。",clarification:true,...continuity});
@@ -516,6 +515,26 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         const layer=context.workspaceView!.activeLayer!,control=layer.controls.find(control=>control.id==="time")!;
         if(!control.options.some(option=>option.id===resolved.choice!.id))control.options=[...control.options,resolved.choice];
         turn.workspaceAction={kind:"set-control",layerId:"forest",controlId:"time",valueId:resolved.choice.id,publicationRevision:forestResolution.proof.revision};
+      }
+      // A model action never releases an earlier proposal, including legacy
+      // records without a dialog. Re-issue that exact proposal for explicit UI approval.
+      const sameProposedTarget=!!pending?.proposedAction&&turn.workspaceAction?.kind===pending.proposedAction.kind&&
+        turn.workspaceAction.layerId===pending.proposedAction.layerId&&turn.workspaceAction.controlId===pending.proposedAction.controlId&&turn.workspaceAction.valueId===pending.proposedAction.valueId;
+      if(pending?.proposedAction&&!internal.approvedConfirmation&&turn.action==="workspace"&&(pending.answer!==undefined||sameProposedTarget)){
+        turn.action="clarify";turn.workspacePending=true;turn.clarification="原具体提案仍需明确确认；本轮没有执行。";
+        turn.workspaceAction=structuredClone(pending.proposedAction);
+        delete turn.workspaceLookup;delete turn.workspaceDateLookup;delete turn.workspaceNavigation;delete turn.workspaceReply;delete turn.workspaceOperation;
+        const action=turn.workspaceAction,control=context.workspaceView?.activeLayer?.controls.find(control=>control.id===action.controlId);
+        if(control&&!control.options.some(choice=>choice.id===action.valueId)&&control.publication?.revision===action.publicationRevision){
+          const choice=action.layerId==="forest"?forestResolution?.lookup?.({mode:"exact",date:action.valueId}).choice:workspaceResolution?.lookup?.(action.valueId).choice;
+          if(choice?.id===action.valueId)control.options=[...control.options,choice];
+        }
+        if(!pending.proposalOrigin)return complete({message:"旧提案缺少可核对的原控件状态，不能代为确认。请按当前视图重新提出目标。",clarification:true,...continuity});
+        if(pending.proposalOrigin){
+          const origin=pending.proposalOrigin,current=context.workspaceView?.activeLayer;
+          if(current?.id!==origin.layerId||current.controls.find(control=>control.id===origin.controlId)?.current.id!==origin.valueId)
+            return complete({message:"原提案的控件状态已变化，请按当前视图重新发问。",clarification:true,...continuity});
+        }
       }
       if(continuingProposal){
         const action=turn.workspaceAction,control=context.workspaceView?.activeLayer?.controls.find(control=>control.id===action?.controlId);

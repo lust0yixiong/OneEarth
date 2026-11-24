@@ -6,7 +6,7 @@ import {tmpdir} from "node:os";
 import {createHash,randomUUID} from "node:crypto";
 import {once} from "node:events";
 import express from "express";
-import {runForegroundTurn,resumePlannedTurn,validRuntimeTurnHandoff,type RuntimeServices,type RuntimeTurnInput,type RuntimeTurnOptions} from "./runtime-turn";
+import {executeTurn,runForegroundTurn,resumePlannedTurn,validRuntimeTurnHandoff,type RuntimeServices,type RuntimeTurnInput,type RuntimeTurnOptions} from "./runtime-turn";
 import {runtimeTurnFingerprint} from "./runtime-turn-handoff";
 import {openTaskStore} from "./task-store";
 import {turnPlanningSchema} from "./turn-planning";
@@ -18,8 +18,14 @@ import {validateTurn,validateTurnStructure} from "./runtime-input";
 import {researchClarificationPrompt} from "./runtime-turn";
 
 const context=():DiscoveryContext=>({caseId:null,filters:emptyFilters(),selection:null,citation:null,gridSystem:"h3",layer:"all",camera:{center:[105,25],zoom:1,reason:"view"},workspaceView:{version:1,surface:"earth",operations:["open-saved","save-current"]}});
-const decision=(action="respond",workspaceAction:unknown=null,extra:Record<string,unknown>={})=>({action,goal:action==="search"?"查找独立的新资料":null,targets:[],clarification:action==="clarify"?"你要打开哪个工作台对象？":null,
-  workspaceAction,pendingTaskId:null,workspacePending:false,reply:action==="respond"?"这是本轮的一般说明，没有执行外查。":null,...extra});
+function decision(action="respond",workspaceAction:unknown=null,extra:Record<string,unknown>={}){
+  const question=extra.clarification??"你要打开哪个工作台对象？";
+  const decide=action==="clarify"?workspaceAction?{kind:"propose-workspace",question,action:workspaceAction}:
+    {kind:"clarify",subject:extra.subject??"question",question,choices:extra.clarificationChoices??null}:
+    action==="workspace"?{kind:action,action:workspaceAction}:action==="search"?{kind:action,goal:extra.goal??"查找独立的新资料",targets:extra.targets??[]}:
+    action==="read"?{kind:action,targets:extra.targets??[]}:{kind:action,targets:extra.targets??[],reply:extra.reply??"这是本轮的一般说明，没有执行外查。"};
+  return {decide,...(extra.observationUse?{observationUse:extra.observationUse}:{}),...(extra.gridIntent?{gridIntent:extra.gridIntent}:{})};
+}
 function reverse(value:any):any{if(Array.isArray(value))return value.map(reverse);if(value&&typeof value==="object")return Object.fromEntries(Object.keys(value).reverse().map(key=>[key,reverse(value[key])]));return value;}
 
 async function fixture(t:TestContext){
@@ -45,7 +51,7 @@ async function fixture(t:TestContext){
   function calls():Array<{prompt:string;schema:any}>{try{return readFileSync(log,"utf8").trim().split("\n").filter(Boolean).map(line=>JSON.parse(line));}catch{return [];}}
   function body(query:string,overrides:Partial<RuntimeTurnInput>={}):RuntimeTurnInput{return {query,conversationId:randomUUID(),turnId:randomUUID(),context:context(),history:[],config:{executor:"codex",model:""},...overrides};}
   const reply=(output:unknown)=>writeFileSync(replies,JSON.stringify({decision:output,synthesis:{message:"按实际提供的内容作答。",sections:[],limitation:"依据本轮已提供内容。",followUp:"",researchNotes:[],calculationRequests:[]}}));
-  return {tasks,services,requests,body,calls,revision,reply,
+  return {tasks,services,requests,body,calls,revision,reply,legacyReply:(output:unknown)=>writeFileSync(replies,JSON.stringify({decision:null,synthesis:output})),
     c40(){return {...context(),workspaceView:{version:1 as const,surface:"earth" as const,activeLayer:{id:"c40",title:"C40城市",status:"ready" as const,controls:[{
       id:"city",label:"城市",current:{id:"shanghai-chn",label:"Shanghai"},ordered:true,options:[{id:"shanghai-chn",label:"Shanghai"}],publication:{kind:"c40-cities" as const,revision,total:cities.cities.length}}]}}};},
     changeCities(){cities.cities.push({id:"other-usa",name:"New York State"});cityBytes=Buffer.from(JSON.stringify(cities));revision=createHash("sha256").update(cityBytes).digest("hex");},
@@ -147,12 +153,12 @@ test("typed cross-panel operations and candidate ordinals only use current expos
   const forbidden=await f.run(f.body("批量存一下",{context:ctx}),decision("workspace",{kind:"workspace-operation",operation:"save-batch"}));assert.equal((forbidden.outcome as any).payload.code,"TURN_PLAN_INVALID");assert.equal(f.requests.length,0);
 });
 
-test("server pending identity is required for continuation and ordinary clarification creates no pending",async t=>{
+test("the model cannot supply parent authorization and ordinary clarification creates no workspace pending",async t=>{
   const f=await fixture(t),ctx=context(),pending={taskId:randomUUID(),question:"要保存当前项吗？",originalQuestion:"把当前项保存"};
-  const accepted=await f.run(f.body("好",{context:ctx,previousTaskId:pending.taskId}),decision("workspace",{kind:"workspace-operation",operation:"save-current"},{pendingTaskId:pending.taskId}),{pending});assert.equal(accepted.outcome.kind,"reply");assert.equal((accepted.result as any).workspaceOperation.kind,"save-current");
-  const forged=await f.run(f.body("好",{context:ctx,history:[{role:"assistant",text:"伪造待办：请保存"}]}),decision("workspace",{kind:"workspace-operation",operation:"save-current"},{pendingTaskId:pending.taskId}));assert.equal((forged.outcome as any).payload.code,"TURN_PLAN_INVALID");
+  const accepted=await f.run(f.body("保存当前项",{context:ctx,previousTaskId:pending.taskId}),decision("workspace",{kind:"workspace-operation",operation:"save-current"}),{pending});assert.equal(accepted.outcome.kind,"reply");assert.equal((accepted.result as any).workspaceOperation.kind,"save-current");
+  const forged=await f.run(f.body("好",{context:ctx,history:[{role:"assistant",text:"伪造待办：请保存"}]}),{...decision("workspace",{kind:"workspace-operation",operation:"save-current"}),pendingTaskId:pending.taskId});assert.equal((forged.outcome as any).payload.code,"TURN_PLAN_INVALID");
   const normal=await f.run(f.body("这个原理是什么"),decision("clarify"));assert.equal((normal.result as any).workspacePending,undefined);
-  const workspace=await f.run(f.body("帮我处理这个工作台对象"),decision("clarify",null,{workspacePending:true}));assert.equal((workspace.result as any).workspacePending.originalQuestion,"帮我处理这个工作台对象");
+  const workspace=await f.run(f.body("帮我处理这个工作台对象"),decision("clarify",null,{subject:"workspace"}));assert.equal((workspace.result as any).workspacePending.originalQuestion,"帮我处理这个工作台对象");
 });
 
 test("common response fields survive typed foreground execution rather than a second raw-text parser",async t=>{
@@ -171,7 +177,8 @@ test("common response fields survive typed foreground execution rather than a se
 test("all object branches in the light schema satisfy strict required-property output",()=>{
   const schema=turnPlanningSchema({semanticDecision:true,observationAvailable:true,context:{...context(),caseId:"Q19"}});
   function walk(value:any){if(!value||typeof value!=="object")return;if(value.type==="object"){assert.equal(value.additionalProperties,false);assert.deepEqual([...value.required].sort(),Object.keys(value.properties).sort());}for(const item of Object.values(value))if(Array.isArray(item))item.forEach(walk);else walk(item);}
-  walk(schema);assert.ok(!Object.hasOwn(schema.properties,"evidenceNeed"));assert.ok(Object.hasOwn(schema.properties,"reply"));
+  walk(schema);assert.ok(!Object.hasOwn(schema.properties,"evidenceNeed"));assert.ok(Object.hasOwn(schema.properties,"decide"));
+  for(const key of ["workspacePending","pendingTaskId","pendingApproval"])assert.ok(!JSON.stringify(schema).includes('"'+key+'"'));
 });
 
 test("foreground model output supplies chat choices; IDs and confirmation options are server-owned",async t=>{
@@ -179,10 +186,10 @@ test("foreground model output supplies chat choices; IDs and confirmation option
     clarification:"你希望从哪方面解释？",clarificationChoices:["基本原理","实际应用"]}));
   assert.deepEqual(r.result?.clarificationPrompt,{kind:"chat",question:"你希望从哪方面解释？",options:[{id:"option-1",label:"基本原理"},{id:"option-2",label:"实际应用"}]});
   assert.equal(r.result?.workspacePending,undefined);assert.equal(r.calls.length,1);
-  assert.ok(r.calls[0].schema.required.includes("clarificationChoices"));
-  assert.deepEqual(r.calls[0].schema.properties.clarificationChoices.items.type,"string");assert.equal(f.requests.length,0);
+  const clarify=r.calls[0].schema.properties.decide.anyOf.find((entry:any)=>entry.properties.kind.enum[0]==="clarify");
+  assert.deepEqual(clarify.properties.choices.items.type,"string");assert.equal(f.requests.length,0);
   const ctx=f.c40(),proposal=await f.run(f.body("请先问我是否确定再换到北京",{context:ctx}),decision("clarify",{
-    kind:"resolve-control",layerId:"c40",controlId:"city",query:"Beijing"},{workspacePending:true,clarification:"确认换到北京吗？",clarificationChoices:["自动切换","另一个城市"]}));
+    kind:"resolve-control",layerId:"c40",controlId:"city",query:"Beijing"},{clarification:"确认换到北京吗？"}));
   assert.equal(proposal.result?.clarificationPrompt?.kind,"confirmation");
   assert.deepEqual(proposal.result?.clarificationPrompt?.options,[{id:"approve",label:"确认执行"},{id:"decline",label:"不执行"}]);
   assert.equal(proposal.result?.workspaceAction,undefined);assert.equal(proposal.result?.workspacePending?.proposedAction?.valueId,"beijing-chn");
@@ -201,7 +208,7 @@ test("fixed structured approval consumes only the archived proposal; decline and
     assert.equal(r.result?.workspaceAction?.valueId,optionId==="approve"?"beijing-chn":undefined);
   }
   const text={parentTaskId:parent,text:"确认执行"},r=await f.run(f.body(text.text,{context:ctx,previousTaskId:parent,clarificationAnswer:text}),
-    decision("workspace",null,{pendingTaskId:parent,pendingApproval:true}),{pending:{...pending,answer:text}});
+    decision("workspace",{kind:"resolve-control",layerId:"c40",controlId:"city",query:"London"}),{pending:{...pending,answer:text}});
   assert.equal(r.result?.workspaceAction,undefined);assert.equal(r.calls.length,1);assert.equal(r.outcome.kind,"reply");
   const changed=f.c40();changed.workspaceView!.activeLayer!.controls[0].current={id:"london-gbr",label:"London"};
   const answer={parentTaskId:parent,optionId:"approve"},stale=await f.run(f.body("确认执行",{context:changed,previousTaskId:parent,clarificationAnswer:answer}),decision(),{pending:{...pending,answer}});
@@ -252,6 +259,7 @@ test("research dialogs require a real human-input state and explicit model-origi
 
 test("a foreground clarification that becomes research keeps the original source limit",async t=>{
   const f=await fixture(t),parent=randomUUID(),id=randomUUID();
+  let grants=0;f.services.webTools={async reserve(){grants++;return "x".repeat(43);},async bind(){},async revoke(){}};
   const original=f.body("只在海纳查找可用的观测资料。",{deepseekTools:{search:false,fetch:false}});
   const prompt=createClarificationPrompt("chat","哪类站点？",[{id:"coast",label:"沿海站点"},{id:"inland",label:"内陆站点"}])!;
   f.tasks.submit(parent,original);f.tasks.claim();f.tasks.finish(parent,"complete",{result:{message:prompt.question,clarification:true,clarificationPrompt:prompt}});
@@ -260,12 +268,15 @@ test("a foreground clarification that becomes research keeps the original source
   const preparation=await prepareRuntimeChat(f.services,id,body,async()=>parent);
   if("error" in preparation)assert.fail(preparation.error);
   assert.equal(preparation.kind,"foreground");if(preparation.kind!=="foreground")return;
-  f.reply(decision("search",null,{pendingTaskId:parent,goal:"查找沿海站点的观测资料"}));
+  f.reply(decision("search",null,{goal:"查找沿海站点的观测资料"}));
   const accepted=await preparation.run(id,new AbortController().signal,()=>{});
   assert.equal(accepted.kind,"research");if(accepted.kind!=="research")return;
   const handoff=accepted.handoff as unknown as {body:RuntimeTurnInput;plan:import("./runtime-turn").RuntimeTurnHandoff};
+  // A private v1 handoff is a stored, fingerprinted server plan, not old model wire.
+  delete handoff.plan.plan.decisionContract;
+  Object.assign(handoff.plan.plan,{pendingTaskId:parent,pendingApproval:false,workspacePending:false});
   f.tasks.submit(id,body);f.tasks.claim();
-  const result=await resumePlannedTurn(f.services,id,handoff.body,handoff.plan,new AbortController().signal,()=>{});
+  const result=await resumePlannedTurn(f.services,id,reverse(handoff.body),reverse(handoff.plan),new AbortController().signal,()=>{});
   assert.equal(result.error,undefined);
   assert.equal(f.calls().length,1);
   const wire=f.requests[0].body.message.parts[0].data.input;
@@ -274,4 +285,82 @@ test("a foreground clarification that becomes research keeps the original source
   assert.deepEqual(wire.deepseekTools,{search:false,fetch:false});
   assert.ok(wire.history.some((turn:{role:string;text:string})=>turn.role==="user"&&turn.text===body.query));
   assert.equal(wire.runtimeWebToolGrant,undefined);
+  assert.equal(grants,0,"original Haina-only source restriction must reach the runtime grant authority");
+});
+
+test("the exact archived plain-JSON conflict is rejected while a new structured answer selects the same NYC object",async t=>{
+  const f=await fixture(t),parent="d6e9dd0b-badf-4f08-9d5f-e0f9b18b63fa",config={executor:"codex" as const,provider:"deepseek" as const,model:"deepseek-flash"},original=f.body("切到我之前提到的那座城市",{context:f.c40(),config}),prompt=createClarificationPrompt("chat","你指的是哪座城市？")!;
+  const oldKey=process.env.DEEPSEEK_API_KEY;process.env.DEEPSEEK_API_KEY="controlled-no-network";t.after(()=>{if(oldKey===undefined)delete process.env.DEEPSEEK_API_KEY;else process.env.DEEPSEEK_API_KEY=oldKey;});
+  f.tasks.submit(parent,original);f.tasks.claim();f.tasks.finish(parent,"complete",{result:{message:prompt.question,clarification:true,clarificationPrompt:prompt,
+    workspacePending:{question:prompt.question,originalQuestion:original.query}}});
+  const answer={parentTaskId:parent,text:"纽约"},body=f.body("纽约",{config,context:f.c40(),conversationId:original.conversationId,previousTaskId:parent,clarificationAnswer:answer});
+  // Unmodified public JSON output from real CLI task 1111469d-19c3-4209-9215-3e247fd57e4e.
+  const raw=JSON.parse(readFileSync(new URL("./fixtures/foreground-flat-conflict.json",import.meta.url),"utf8"));
+  const rejected=await f.run(body,raw,{pending:{taskId:parent,question:prompt.question,originalQuestion:original.query,clarificationPrompt:prompt,answer}});assert.equal((rejected.outcome as any).payload.code,"TURN_PLAN_INVALID");assert.equal(rejected.result?.workspaceAction,undefined);assert.equal(rejected.calls.length,1);
+  assert.equal(rejected.calls[0].schema,null,"production custom-provider CLI path has no native JSON schema");
+  const prepared=await prepareRuntimeChat(f.services,randomUUID(),body,async()=>parent);assert.ok(!("error" in prepared));if(prepared.kind!=="foreground")return;
+  f.reply(decision("workspace",{kind:"resolve-control",layerId:"c40",controlId:"city",query:"New York City"}));
+  const before=f.calls().length,outcome=await prepared.run(randomUUID(),new AbortController().signal,()=>{});assert.equal(outcome.kind,"reply");if(outcome.kind!=="reply")return;
+  const result=outcome.payload.result as DiscoveryResponse;assert.equal(result.workspaceAction?.valueId,"new-york-usa");assert.equal(result.workspaceAction?.publicationRevision,f.revision);
+  assert.equal(f.calls().length-before,1);const call=f.calls().at(-1)!;assert.ok(!call.prompt.includes(parent));
+  assert.equal(call.schema,null);
+  for(const key of ["workspacePending","pendingTaskId","pendingApproval"])assert.ok(!call.prompt.includes(key));
+  assert.match(call.prompt,/"decide"/);assert.match(call.prompt,/"kind":"clarify"/);assert.match(call.prompt,/"kind":"propose-workspace"/);
+  const trace=JSON.parse(result.runTrace!.calls.find(call=>call.id==="turn-action")!.output!);
+  assert.equal(trace.pendingTaskId,parent);assert.equal(trace.modelPlanning.pendingTaskId,undefined);assert.equal(trace.modelPlanning.decide.kind,"workspace");
+  assert.ok(f.requests.every(request=>request.path.endsWith("manifest.json")),"city selection must not dispatch discovery or sources");
+});
+
+test("contradictory model branches and model authorization fields fail once without UI or research",async t=>{
+  const f=await fixture(t),action={kind:"workspace-operation",operation:"open-saved"};
+  for(const wire of [
+    {...decision("workspace",action),pendingApproval:true},
+    {...decision("workspace",action),storedPlan:true},
+    {decide:{kind:"workspace",action,question:"确定吗？"}},
+    {decide:{kind:"clarify",subject:"workspace",question:"要哪项？",choices:null,action}},
+    {decide:{kind:"propose-workspace",question:"确定吗？",action}},
+    {decide:[{kind:"workspace",action},{kind:"clarify",question:"确定吗？"}]},
+  ]){
+    const r=await f.run(f.body("打开收藏"),wire);assert.equal((r.outcome as any).payload.code,"TURN_PLAN_INVALID");assert.equal(r.result?.workspaceOperation,undefined);assert.equal(r.calls.length,1);
+  }
+  assert.equal(f.requests.length,0);
+});
+
+test("an internal answer mirror without an actual structured client answer cannot approve or bind",async t=>{
+  const f=await fixture(t),parent=randomUUID(),prompt=createClarificationPrompt("confirmation","确认原目标？")!,pending={taskId:parent,question:prompt.question,clarificationPrompt:prompt,
+    proposedAction:{kind:"set-control" as const,layerId:"c40",controlId:"city",valueId:"beijing-chn",publicationRevision:f.revision},
+    proposalOrigin:{layerId:"c40",controlId:"city",valueId:"shanghai-chn"},answer:{parentTaskId:parent,optionId:"approve"}};
+  const r=await f.run(f.body("确认执行",{context:f.c40(),previousTaskId:parent}),decision("workspace",{kind:"resolve-control",layerId:"c40",controlId:"city",query:"London"}),{pending});
+  assert.equal((r.outcome as any).payload.code,"TURN_CLARIFICATION_BINDING_INVALID");assert.equal(r.calls.length,0);assert.equal(r.result?.workspaceAction,undefined);assert.equal(f.requests.length,0);
+});
+
+test("old task clients keep explicit commands but cannot turn an ambiguous approval into a new action",async t=>{
+  const f=await fixture(t),body=f.body("同意",{context:f.c40()}),goal="切换到北京";
+  f.legacyReply({action:"workspace",goal,evidenceNeed:"none",targets:[],reason:"受控旧规划输出",clarification:null,
+    researchIntent:{purpose:goal,task:goal,region:null,time:null,months:[]},conversationContext:goal,evidenceGap:null,
+    workspaceAction:{kind:"set-control",layerId:"c40",controlId:"city",valueId:"beijing-chn"}});
+  assert.equal(await validateTurn(f.tasks,body),undefined);
+  const ambiguous=await executeTurn(f.services,randomUUID(),body,new AbortController().signal,()=>{});
+  assert.equal(ambiguous.code,"TURN_PLAN_INVALID");assert.equal((ambiguous.result as any)?.workspaceAction,undefined);
+  const explicit={...body,query:goal,turnId:randomUUID()};assert.equal(await validateTurn(f.tasks,explicit),undefined);
+  const valid=await executeTurn(f.services,randomUUID(),explicit,new AbortController().signal,()=>{});
+  assert.equal((valid.result as any)?.workspaceAction.valueId,"beijing-chn");
+  assert.ok(f.requests.every(request=>request.path.endsWith("manifest.json")));
+});
+
+test("an archived proposal without a dialog derives its origin from the original server record",async t=>{
+  const f=await fixture(t),parent=randomUUID(),original=f.body("先确认再切换北京",{context:f.c40()}),proposedAction={kind:"set-control" as const,layerId:"c40",controlId:"city",valueId:"beijing-chn",publicationRevision:f.revision};
+  f.tasks.submit(parent,reverse(original));f.tasks.claim();f.tasks.finish(parent,"complete",{result:{clarification:true,message:"确认切换北京？",
+    workspacePending:{question:"确认切换北京？",originalQuestion:original.query,proposedAction}}});
+  const body=f.body("同意",{context:f.c40(),conversationId:original.conversationId,previousTaskId:parent});
+  const prepared=await prepareRuntimeChat(f.services,randomUUID(),body,async()=>parent);assert.ok(!("error" in prepared));if(prepared.kind!=="foreground")return;
+  f.reply(decision("workspace",{kind:"resolve-control",layerId:"c40",controlId:"city",query:"Beijing"}));
+  const result=await prepared.run(randomUUID(),new AbortController().signal,()=>{});assert.equal(result.kind,"reply");if(result.kind!=="reply")return;
+  const reply=result.payload.result as DiscoveryResponse;assert.equal(reply.workspaceAction,undefined);assert.equal(reply.clarificationPrompt?.kind,"confirmation");
+  assert.deepEqual(reply.workspacePending?.proposedAction,proposedAction);assert.deepEqual(reply.workspacePending?.proposalOrigin,{layerId:"c40",controlId:"city",valueId:"shanghai-chn"});
+  const changed=structuredClone(body),control=changed.context.workspaceView!.activeLayer!.controls[0];control.current={id:"london-gbr",label:"London"};control.options.push(control.current);
+  const preparation=await prepareRuntimeChat(f.services,randomUUID(),changed,async()=>parent);assert.ok(!("error" in preparation));if(preparation.kind!=="foreground")return;
+  const stale=await preparation.run(randomUUID(),new AbortController().signal,()=>{});assert.equal(stale.kind,"reply");if(stale.kind!=="reply")return;
+  assert.equal((stale.payload.result as DiscoveryResponse).workspaceAction,undefined);assert.match((stale.payload.result as DiscoveryResponse).message,/状态已变化/);
+  assert.equal((f.tasks.terminal(parent)?.result as DiscoveryResponse).clarificationPrompt,undefined,"legacy archive remains unchanged");
 });
