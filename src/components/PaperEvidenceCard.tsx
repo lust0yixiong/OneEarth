@@ -43,7 +43,7 @@ function metadataText(raw:string|null|undefined) {
 }
 const cache=new Map<string,PaperDatasetEvidence>();
 function AssertionPaperEvidence({reference:r,deferCurrentEvidence}:{reference:AssetReference;deferCurrentEvidence:boolean}) {
-  const [expanded,setExpanded]=useState(!deferCurrentEvidence);
+  const [expanded,setExpanded]=useState(false);
   const [data,setData]=useState(()=>cache.get(r.id));
   const [status,setStatus]=useState<"loading"|"ready"|"failed">(data?"ready":"loading");
   const [attempt,retry]=useState(0);
@@ -135,7 +135,7 @@ function CuratedPaperEvidence({reference:r}:{reference:AssetReference}) {
   const a=assetById.get(r.id),doi=doiFor(r.id);
   const sources=linkedPapers(a);
   const local=a?.origins.includes("haina") || a?.datasetId.startsWith("haina:");
-  return <details className="oe-paper" open>
+  return <details className="oe-paper">
     <summary><CitationIcon type={citationDetails(r).type}/> <span>{r.title}</span></summary>
     <section className="oe-dataset-overview" aria-label="数据集说明">
       {a?.description && <EvidenceText text={a.description}/>}

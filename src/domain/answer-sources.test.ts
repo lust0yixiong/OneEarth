@@ -61,6 +61,7 @@ test("Haina paper links list multiple papers without duplicating a legacy link",
     assert.deepEqual(evidenceGroups([ref]).papers,[]);
     assert.deepEqual(evidenceGroups([ref]).local,[ref]);
     const html=renderToStaticMarkup(createElement(PaperEvidenceCard,{reference:ref}));
+    assert.match(html,/<details class="oe-paper"><summary>/);
     assert.match(html,/First paper/);assert.match(html,/Second paper/);
     assert.equal((html.match(/class="oe-paper-study"/g)||[]).length,2);
     assert.ok(!html.includes("海纳目录元数据"),"dataset metadata cannot stand in for paper evidence");
@@ -68,6 +69,15 @@ test("Haina paper links list multiple papers without duplicating a legacy link",
   }finally{local.paperSources=prior;local.paperSource=legacy;}
 });
 
+
+test("current and archived assertion evidence start collapsed",()=>{
+  const reference={kind:"asset",id:"earthnano:"+"a".repeat(64),title:"Assertion source",source:"文献资料"} as const;
+  for(const deferCurrentEvidence of [false,true]){
+    const html=renderToStaticMarkup(createElement(PaperEvidenceCard,{reference,deferCurrentEvidence}));
+    assert.match(html,/<details class="oe-paper"><summary>/);
+    assert.match(html,/Assertion source/);
+  }
+});
 
 test("a grid catalogue citation does not advertise excerpts bundled with its exact record",()=>{
   const ref={kind:"asset",id:"earthnano:"+"6".repeat(64),title:"A saved catalogue record",source:"文献资料"} as const;
