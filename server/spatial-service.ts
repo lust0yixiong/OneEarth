@@ -10,6 +10,7 @@ import { emptyFilters } from "../src/domain/spatial";
 import { regionRecords } from "../src/domain/product-distribution";
 import { accessGuard } from "./access";
 import { layerObjects, spatialStore, type Bounds } from "./spatial-store";
+import { hainaPublicLayerRoute } from "./haina-public-layer-routes";
 
 const index = await spatialStore();
 const objects = layerObjects();
@@ -56,7 +57,7 @@ app.get("/api/spatial/layers/:layer/chunks", async (req,res) => {
   const bounds:Bounds=[w,s,e,n];
   res.json({chunks:await index.chunks(req.params.layer,start,end,level,bounds)});
 });
-app.get([/^\/precip-data\//,/^\/visualizations\/haina\/(?:1846764|1846639)\//], async (req,res) => {
+app.get([/^\/precip-data\//,/^\/visualizations\/haina\/(?:1846764|1846639)\//,hainaPublicLayerRoute], async (req,res) => {
   const row = await index.object(req.path);
   if (!row) {res.status(404).json({error:"图层对象不存在。"});return;}
   const etag='"'+row.hash+'"';

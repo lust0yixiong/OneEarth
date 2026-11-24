@@ -18,6 +18,7 @@ import {sourcePreview} from "./source-preview";
 import { simulationGrid } from "./simulation-grid";
 import { parseSources } from "./constellations";
 import { spatialProxy } from "./spatial-proxy";
+import { hainaPublicLayerRoute } from "./haina-public-layer-routes";
 import { createRuntimeApi } from "./runtime-api-service";
 import { serveHttp } from "./http-lifecycle";
 import express from "express";
@@ -78,6 +79,7 @@ if (runtime) {
 }
 const geo = spatialProxy(process.env.ONEEARTH_SPATIAL_URL || "http://127.0.0.1:5276");
 app.use(["/precip-data","/visualizations/haina/1846764","/visualizations/haina/1846639"],geo);
+app.get(hainaPublicLayerRoute, geo);
 app.get("/api/lightning/world",worldLightning(path.join(root,".local","lightning")));
 app.get("/api/lightning", lightning);
 app.get("/api/earthquakes/day",earthquakeDay);

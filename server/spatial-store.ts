@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { productDatabase } from "./product-database";
 import { createHash } from "node:crypto";
 import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
@@ -29,23 +30,43 @@ export async function spatialStore() {
   }
   try{await pg.query(schema);}
   catch(error){await pg.end();throw error;}
+  const writeLayer = async (layer: Layer, target: Pick<PoolClient,"query"> = pg) => {
+    await target.query(`INSERT INTO layers SELECT * FROM jsonb_populate_record(null::layers,$1::jsonb)
+      ON CONFLICT(id) DO UPDATE SET entity_id=EXCLUDED.entity_id,version=EXCLUDED.version,title=EXCLUDED.title,source=EXCLUDED.source`,[JSON.stringify(layer)]);
+  };
+  const writeChunks = async (rows: Chunk[], target: Pick<PoolClient,"query"> = pg) => {
+    await target.query(`INSERT INTO layer_chunks
+      SELECT route,layer_id,starts,ends,level,
+        CASE WHEN bounds IS NULL THEN NULL ELSE ST_MakeEnvelope(bounds[1],bounds[2],bounds[3],bounds[4],4326) END,
+        hash,size,media
+      FROM jsonb_to_recordset($1::jsonb) AS data(route text,layer_id text,starts date,ends date,level integer,
+        bounds double precision[],hash text,size integer,media text)
+      ON CONFLICT(route) DO UPDATE SET layer_id=EXCLUDED.layer_id,starts=EXCLUDED.starts,ends=EXCLUDED.ends,
+      level=EXCLUDED.level,geom=EXCLUDED.geom,hash=EXCLUDED.hash,size=EXCLUDED.size,media=EXCLUDED.media`,[JSON.stringify(rows)]);
+  };
   return {
     engine:"postgresql" as const,
     async version() {return (await query<{version:string}>("SELECT PostGIS_Lib_Version() AS version"))[0].version;},
     layers:() => query<Layer>("SELECT * FROM layers ORDER BY id"),
-    async writeLayer(layer:Layer) {
-      await query(`INSERT INTO layers SELECT * FROM jsonb_populate_record(null::layers,$1::jsonb)
-        ON CONFLICT(id) DO UPDATE SET entity_id=EXCLUDED.entity_id,version=EXCLUDED.version,title=EXCLUDED.title,source=EXCLUDED.source`,[JSON.stringify(layer)]);
-    },
-    async writeChunks(rows:Chunk[]) {
-      await query(`INSERT INTO layer_chunks
-        SELECT route,layer_id,starts,ends,level,
-          CASE WHEN bounds IS NULL THEN NULL ELSE ST_MakeEnvelope(bounds[1],bounds[2],bounds[3],bounds[4],4326) END,
-          hash,size,media
-        FROM jsonb_to_recordset($1::jsonb) AS data(route text,layer_id text,starts date,ends date,level integer,
-          bounds double precision[],hash text,size integer,media text)
-        ON CONFLICT(route) DO UPDATE SET layer_id=EXCLUDED.layer_id,starts=EXCLUDED.starts,ends=EXCLUDED.ends,
-          level=EXCLUDED.level,geom=EXCLUDED.geom,hash=EXCLUDED.hash,size=EXCLUDED.size,media=EXCLUDED.media`,[JSON.stringify(rows)]);
+    writeLayer,
+    writeChunks,
+    async publishLayerSet(entries: {layer: Layer; chunks: Chunk[]}[]) {
+      const client = await pg.connect();
+      try {
+        await client.query("BEGIN");
+        for (const {layer,chunks} of [...entries].sort((a,b)=>a.layer.id.localeCompare(b.layer.id))) {
+          await writeLayer(layer,client);
+          // Keep old immutable URLs readable while removing them from active spatial/temporal queries.
+          await client.query(`UPDATE layer_chunks SET starts=NULL,ends=NULL,level=NULL,geom=NULL
+            WHERE layer_id=$1 AND starts IS NOT NULL AND NOT (route=ANY($2::text[]))`,
+            [layer.id,chunks.map(chunk=>chunk.route)]);
+          await writeChunks(chunks,client);
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
     },
     async object(route:string) {
       return (await query<ObjectRow>("SELECT hash,size,media FROM layer_chunks WHERE route=$1",[route]))[0];
