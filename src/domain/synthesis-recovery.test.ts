@@ -83,15 +83,21 @@ test("cancellation during an auxiliary node never publishes a retained answer or
  assert.equal(calls,2);
 });
 
-test("source-only recovery lists real identities and keeps channel metadata without scientific or calculation claims",()=>{
+test("source recovery quotes actual material and keeps channel metadata without upgrading identity-only entries",()=>{
  const web={kind:"web" as const,title:"实际读到的网页",url:"https://example.org/source",sourceChannel:"web" as const};
- const answer=retainedSourceAnswer([{...ref,sourceChannel:"assertion"},web],[{title:web.title,url:web.url,snippet:"已返回的摘要"}])!;
+ const materials=[{...ref,sourceChannel:"assertion" as const},web];
+ const unchanged=JSON.stringify(materials);
+ const answer=retainedSourceAnswer(materials,[{title:web.title,url:web.url,snippet:"已返回的摘要"}],[
+  {ref:"S1",identity:"asset:"+ref.id,title:ref.title,quote:"产品 A 的说明列出变量单位。",level:"文献资料已提供片段",sourceGroup:"assertion",quality:1,score:1,mentionsRequestedYear:false,relevant:true,pinned:true},
+  {ref:"S2",identity:web.url,title:web.title,quote:"已返回的摘要",level:"仅检索摘要，未读正文",sourceGroup:"web",quality:0,score:1,mentionsRequestedYear:false,relevant:true,pinned:false},
+ ])!;
  assert.equal(answer.references.length,2);assert.equal(answer.references[0].sourceChannel,"assertion");assert.equal(answer.references[1].sourceChannel,"web");
- assert.match(answer.message,/来源条目/);assert.match(answer.message,/产品 A/);assert.match(answer.limitation,/未能|未形成/);assert.equal(answer.webSources.length,1);
+ assert.match(answer.message,/可定位的文字/);assert.match(answer.message,/产品 A/);assert.match(answer.message,/仅检索摘要，未读正文/);assert.match(answer.limitation,/不是完整研究回答/);assert.equal(answer.webSources.length,1);
+ assert.equal(JSON.stringify(materials),unchanged);assert.deepEqual(retainedSourceAnswer(materials,[])!.references,[],"identity alone is not an adopted scientific basis");
  assert.equal(retainedSourceAnswer([],[]),undefined);
 });
 
-test("the live reply builder preserves selected source identities when the model executable fails",async()=>{
+test("the live reply builder retains the failed generation but does not cite identity-only attachments as scientific evidence",async()=>{
  const dir=await mkdtemp(path.join(tmpdir(),"oneearth-compose-failure-")),oldPath=process.env.PATH;
  try{
   await writeFile(path.join(dir,"codex"),"#!/bin/sh\nexit 1\n",{mode:0o755});process.env.PATH=dir+path.delimiter+(oldPath||"");
@@ -99,7 +105,8 @@ test("the live reply builder preserves selected source identities when the model
   const plan=parseTurnPlan(JSON.stringify({action:"respond",goal:input.question,evidenceNeed:"existing",targets:["asset:wind-0"],reason:"依据指定对象",clarification:null,...turnMetadata(input.question,input),evidenceGap:null}),input);
   const calls:ToolCall[]=[];
   const reply=await modelReply(input.question,input.context,{message:"仅解释已提供材料"},[],researchExecutor({executor:"codex",model:""},undefined,new AbortController().signal),signal(),()=>{},[],"",undefined,undefined,c=>calls.push(c),{plan,searches:[]});
-  assert.match(reply.message,/来源条目/);assert.deepEqual(reply.modelIds,["wind-0"]);assert.equal(reply.answerNotes?.references?.length,1);
+  assert.match(reply.message,/没有足以直接回答原目标的可核片段/);assert.deepEqual(reply.modelIds,[]);assert.equal(reply.answerNotes?.references?.length,0);
+  assert.equal(input.context.attachedScope?.[0].kind,"dataset");assert.ok(calls.some(c=>c.id==="answer-delivery"&&JSON.parse(c.output||"{}").mode==="no-direct-evidence"));
   assert.ok(calls.some(c=>c.id==="answer-generation"&&c.status==="failed"));assert.ok(!calls.some(c=>c.id==="synthesis-repair"&&c.status==="done"));
  }finally{if(oldPath===undefined)delete process.env.PATH;else process.env.PATH=oldPath;await rm(dir,{recursive:true,force:true});}
 });
