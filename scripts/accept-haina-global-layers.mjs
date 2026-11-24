@@ -37,10 +37,12 @@ const samples = {};
 for (const [name,lon,lat] of [
   ["NYC",-73.9875,40.75],["Tokyo",139.766666,35.68],["Nairobi",36.8172,-1.2864],
   ["Sydney",151.2093,-33.8688],["east",179.994,-16.5],["west",-179.994,-16.5],
-  ["north",0,85],["south",0,-85],["longDecimal",0.1+0.2,-1.2345678901234567],
+  ["north",0,85],["south",0,-85],["longDecimal",0.1+0.2,-1.2345678901234567],["zeroRoundoff",-1e-7,60],
 ]) samples[name]=await sample(lon,lat);
 assert.equal(samples.NYC.value,275.8699951171875);
 assert.equal(samples.Nairobi.value,53.90999984741211);
+assert.equal(samples.zeroRoundoff.status,"value");
+assert.equal(samples.zeroRoundoff.value,0);
 assert.equal(samples.north.status,"out-of-coverage");
 assert.equal(samples.south.status,"out-of-coverage");
 assert.notEqual(samples.east.column,samples.west.column);

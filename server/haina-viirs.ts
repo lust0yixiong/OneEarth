@@ -128,7 +128,7 @@ export function hainaViirs(): RequestHandler {
         res.status(400).json({error:"取值需要有效 WGS84 经度与纬度。"});return;
       }
       const longitude = Number(lon);
-      args = ["sample",String(longitude===180 ? -180 : longitude),String(Number(lat))];
+      args = ["sample","--",String(longitude===180 ? -180 : longitude),String(Number(lat))];
     }
     try {
       const body = await results(args,controller.signal);
