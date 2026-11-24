@@ -102,11 +102,17 @@ export function packSynthesisContext(instructions:string,input:Record<string,any
   const years=(options.time||"").match(/(?:19|20)\d{2}/g)?.map(Number)||[];
   const earliest=Math.min(...years),latest=Math.max(...years);
   const retained=ranked.map(({item,rank}):RetainedEvidence=>{
-    const content=normalize(JSON.stringify(item));
+    // Retrieval provenance may repeat the requested region even for an unrelated result.
+    // Match literal source fields and supplied excerpts, never the enclosing search receipt.
+    const sourceExcerpts=[...(item.currentAssertionReadings||[]).flatMap((entry:any)=>entry.excerpts||[]),
+      ...(item.excerpts||[]),...(item.historicalExcerpts||[])];
+    const sourceText=[item.title,item.snippet,item.pageExcerpt,item.coverage,item.summary,item.study,item.paper,
+      ...sourceExcerpts.map((entry:any)=>entry.quote)].filter(value=>typeof value==="string").join("\n");
+    const content=normalize(sourceText);
     const areaMatched=!requestedArea.length||area.some(name=>content.includes(name));
     const snippet=typeof item.pageExcerpt!=="string"||!item.pageExcerpt||item.stage==="search-snippet";
     const quote=!snippet?window(item.pageExcerpt,queries,1600).text:typeof item.snippet==="string"?window(item.snippet,queries,650).text:
-      [...(item.currentAssertionReadings||[]).flatMap((r:any)=>r.excerpts||[]),...(item.excerpts||[]),...(item.historicalExcerpts||[])].find((entry:any)=>typeof entry.quote==="string")?.quote;
+      sourceExcerpts.find((entry:any)=>typeof entry.quote==="string")?.quote;
     return {ref:item.ref,identity:sourceIdentity(item),title:item.title||"已取得来源",quote:quote?utf8Prefix(quote,!snippet?1600:650):undefined,
       level:typeof item.snippet==="string"&&snippet?"仅检索摘要，未读正文":typeof item.pageExcerpt==="string"?(item.previousRead?"历史已读片段":item.stage==="abstract"?"已读摘要":item.stage==="pdf-excerpt"?"已读PDF片段":"已读网页或元数据片段"):quote?(item.sourceChannel==="assertion"?"文献资料已提供片段":"目录资料已提供片段"):"目录身份",
       sourceGroup:item.sourceChannel||(!item.id?"web":"catalogue"),

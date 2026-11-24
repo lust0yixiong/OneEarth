@@ -30,6 +30,16 @@ test("a region/time matching snippet remains an unread clue, without elevating c
  assert.ok(!packet.retained.filter(row=>row.ref!=="S51").some(row=>row.relevant),"same variable in another region is not a locally relevant quote");
 });
 
+test("search receipt keywords never qualify an unrelated excerpt for the requested region",()=>{
+ const other={ref:"S1",title:"Southern Basin canopy height",url:"https://example.org/other-region",
+   snippet:"A canopy height map surveyed in the Southern Basin in 2021.",
+   snippetSources:[{origins:[{engine:"Search",query:"Northern Basin canopy height 2021"}]}]};
+ const packet=packSynthesisContext("rules",{webResults:[other]},options);
+ assert.equal(packet.retained[0].relevant,false);
+ const refs:AnswerReference[]=[{kind:"web",url:other.url,title:other.title}];
+ assert.deepEqual(retainedSourceAnswer(refs,[],packet.retained,true)?.references,[]);
+});
+
 test("multiple distinct versions and unproven same-title pages are not silently grouped",()=>{
  const later={...read,ref:"S53",doi:"10.1234/other-version",version:"2",url:"https://example.org/other-version"};
  const packet=packSynthesisContext("rules",{question:query,webResults:[read,later,{...read,ref:"S54",doi:undefined,url:"https://example.org/same-title"}],catalogue:[]},options);
