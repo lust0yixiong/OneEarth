@@ -128,3 +128,26 @@ for(const fallback of [false,true])test("a Haina search cannot read a prior web 
   assert.equal(trace.at(-1)?.status,"failed");
   assert.equal(JSON.parse(trace.at(-1)!.output!).fallback,"answer-with-available-materials");
 });
+
+for(const marker of ["W1","[w1]"," w1 "])test("only an existing W marker can normalize to an exact read: "+marker,async()=>{
+ let modelCalls=0,reads=0;
+ await continueResearch(question,plan,{retrieval:{...start,searches:[{engine:"DeepSeek Search",query:question,status:"done",hits:[{url:address,title:"Known",snippet:"units"}]}]},reads:[]},new AbortController().signal,{
+  model:async prompt=>{assert.match(prompt,/"action":"read"/);assert.match(prompt,/例子不代表W1实际存在/);return ++modelCalls===1?JSON.stringify({action:"read",reason:"units",gap:"units",targets:[marker],clarification:null}):answer;},
+  read:async targets=>{reads++;assert.equal(targets[0].url,address);return [];},discover:async()=>assert.fail(),stage:()=>{},report:()=>{},
+ });assert.equal(reads,1);assert.equal(modelCalls,2);
+});
+for(const marker of ["1","S1",address,"W99"])test("invalid reference syntax does not grant reading: "+marker,async()=>{
+ let modelCalls=0;const trace:ToolCall[]=[];
+ await continueResearch(question,plan,{retrieval:{...start,searches:[{engine:"DeepSeek Search",query:question,status:"done",hits:[{url:address,title:"Known",snippet:"units"}]}]},reads:[]},new AbortController().signal,{
+  model:async()=>{modelCalls++;return JSON.stringify({action:"read",reason:"units",gap:"units",targets:[marker],clarification:null});},
+  read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:call=>trace.push(call),
+ });assert.equal(modelCalls,1);assert.equal(trace.at(-1)?.status,"failed");
+});
+
+test("a conflicting extra action field is rejected without guessing the original failed output",async()=>{
+ const trace:ToolCall[]=[];
+ await continueResearch(question,plan,{retrieval:start,reads:[]},new AbortController().signal,{
+  model:async()=>JSON.stringify({action:"answer",reason:"enough",gap:null,targets:[],clarification:null,read:"W1"}),
+  read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:call=>trace.push(call),
+ });assert.equal(trace.at(-1)?.status,"failed");
+});

@@ -28,10 +28,12 @@ import {webMaterial} from "../src/domain/web-material";
 import type { TurnHistoryEntry as Turn } from "./turn-history";
 import type { ParentResearchEvidence } from "./parent-research-evidence";
 import {withCurrentAssertionReadings,rememberCurrentAssertionReadings,type CurrentAssertionReading} from "./runtime-assertion-evidence";
-import {compareSourceReadings,validateSourceChanges,sourceChangeInstructions,sourceChangeSchema,type SourceReadHistory} from "./source-read-comparison";
+import {compareSourceReadings,validateSourceChanges,sourceChangeInstructions,sourceChangeSchema,readSourceIdentity,type SourceReadHistory} from "./source-read-comparison";
 import {modelTurnContext,modelResultBatch,type RuntimeTurnContext} from "./runtime-turn-context";
 import type {ResultBatch} from "../src/domain/turn-context";
 import {modelSafeText} from "./model-context-safety";
+import {packSynthesisContext,answerTimeBudget,synthesisPromptByteLimit} from "./synthesis-context-budget";
+import {ExecutorFailure} from "./executor-failure";
 
 // Only bundled public catalogue entries may authorize a structured file URL.
 const publishedFileUrls=new Set(cases.flatMap(c=>c.needs.flatMap(n=>
@@ -238,7 +240,7 @@ export function shouldReviewAnswerEvidence(answer:{message:string;limitation?:st
   if(verifiedExample&&explicitMathExample&&text.length<500&&!sourceClaim)return false;
   return answer.message.length>=300 || /论文|清单|版本|\d/.test(answer.message);
 }
-export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[];priorEvidence?:ParentResearchEvidence},assertionReadings:CurrentAssertionReading[]=[],sourceHistory:SourceReadHistory={},turnContext?:RuntimeTurnContext,currentBatch?:ResultBatch) {
+export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[];priorEvidence?:ParentResearchEvidence},assertionReadings:CurrentAssertionReading[]=[],sourceHistory:SourceReadHistory={},turnContext?:RuntimeTurnContext,currentBatch?:ResultBatch,budgetPolicy:{promptBytes?:number;answerMs?:number}={}) {
     if(retrieval?.questionCheck || retrieval?.clarification || retrieval?.plan.questionMode==="reframe")
       throw Error("转换后的问题尚未得到用户确认，不能生成答复。");
     const start=Date.now();
@@ -263,7 +265,8 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     if (restricted?!restricted.includes("constellation"):context.filters.source && context.filters.source !== "constellation") constellationFeed = undefined;
     const target=[retrieval?.plan.questionMode==="confirmed"?retrieval.plan.dataQuestion:query,
       retrieval?.plan.conversationContext].filter(Boolean).join("\n");
-    const searchPhrases=[...(retrieval?.plan.paper.facets.flatMap(f=>f.queries)||[]),...(retrieval?.plan.web.map(q=>q.web)||[]),...(retrieval?.plan.hainaQueries||[])];
+    const sourceMatchHints=(retrieval?.plan.paper.region||[]).filter(value=>typeof value==="string").slice(0,8).map(value=>value.slice(0,240));
+    const searchPhrases=[...sourceMatchHints,...(retrieval?.plan.paper.facets.flatMap(f=>f.queries)||[]),...(retrieval?.plan.web.map(q=>q.web)||[]),...(retrieval?.plan.hainaQueries||[])];
     const previousAssertions=history.filter(t=>t.role==="assistant" && t.conversationAssertionEvidence!==undefined).at(-1)?.conversationAssertionEvidence || [];
     const priorAssertions=turn?.priorEvidence?.assertions??(selectedOnly?previousAssertions.filter(r=>selectedOnly.has(r.assetId)):previousAssertions);
     const rows=withCurrentAssertionReadings(withAssertionMemory(catalogueRows(target,context,base,history,
@@ -308,6 +311,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     const citedParent=(answer:SynthesisAnswer)=>answer.references.some(ref=>parentCitations.some(({reference})=>ref.kind==="asset"
       ?reference.kind==="asset"&&reference.id===ref.id:reference.kind==="web"&&reference.url===ref.url));
     function verifyExecutionAndReferences(answer:SynthesisAnswer){
+      if(answer.references.some(ref=>{const index=references.findIndex(source=>ref.kind==="asset"?source.kind==="asset"&&source.id===ref.id:source.kind==="web"&&source.url===ref.url);return index<0||!packet.allowedRefs.has("S"+(index+1));}))throw new SourceReadClaimError("引用未包含在本次有界证据输入中，不能猜测省略材料。保留原编号，只引用实际提供的来源。");
       validateSourceReadClaim(answer,readReceipts,!!retrieval);
       validateSourceChanges(answer,sourceReadComparisons);
       validateAnswerMaterialClaims(answer,accessLinks);
@@ -318,7 +322,8 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         throw new SourceReadClaimError("本轮根据已保存材料作答，请对实际采用的证据添加相应引用 "+
           parentCitations.map(ref=>ref.token).join("、")+"。同名材料可能是不同对象，不能把文献记录当作文件或目录原页。");
     }
-    const prompt=modelSafeText(synthesisInstructions+(turnContext?"\nturnContext是按原轮次归属的服务器上下文。history.assistantText只是历史答复，不能当执行回执；旧批次只据其原query/conditions引用，不冒称本轮查获；currentResultBatch若存在才是本轮实际受托返回的批次，含真实原query/渠道/条件及有界成员，与旧批分开；渠道完成不等于读过数据文件。当前工具/新材料仍以本轮executionScope和readAt为准。workspace.operation是原目标，receipt是原操作的历史报告，applied仅提交变更；匹配目标的rendered只证明当次已呈现。atSubmission/browserObservations是原发问快照（capturedAt为其采集时点），即使合成前刷新了receipt也不能用迟到观察替换它，更不能将原目标当次已呈现说成当前仍显示该条目。loading/失败/被替代/unknown如实说明，拒因及recovery说明不是执行或再次授权；本次不自动重试、夺回手动视图或扩大范围。浏览器可见数量不是新检索事实。\n":"")+(context.workspaceView?"\nworkspace.workspaceView 是发问当刻的工作台可见状态。可据此回答当前图层、选择、期次和显示信息；与用户研究附件分开，不把显示标签或图例冒充来源原文、科学观测或QC结论，不声称执行了未记录的切换或外查。\n":"")+(sourceReadComparisons.length?"\n"+sourceChangeInstructions:"")+"\n"+JSON.stringify({question:query,questionMode:retrieval?.plan.questionMode,turnContext:modelTurnContext(turnContext),currentResultBatch:currentBatch?modelResultBatch(currentBatch):undefined,
+    const instructions=synthesisInstructions+(turnContext?"\nturnContext是按原轮次归属的服务器上下文。history.assistantText只是历史答复，不能当执行回执；旧批次只据其原query/conditions引用，不冒称本轮查获；currentResultBatch若存在才是本轮实际受托返回的批次，含真实原query/渠道/条件及有界成员，与旧批分开；渠道完成不等于读过数据文件。当前工具/新材料仍以本轮executionScope和readAt为准。workspace.operation是原目标，receipt是原操作的历史报告，applied仅提交变更；匹配目标的rendered只证明当次已呈现。atSubmission/browserObservations是原发问快照（capturedAt为其采集时点），即使合成前刷新了receipt也不能用迟到观察替换它，更不能将原目标当次已呈现说成当前仍显示该条目。loading/失败/被替代/unknown如实说明，拒因及recovery说明不是执行或再次授权；本次不自动重试、夺回手动视图或扩大范围。浏览器可见数量不是新检索事实。\n":"")+(context.workspaceView?"\nworkspace.workspaceView 是发问当刻的工作台可见状态。可据此回答当前图层、选择、期次和显示信息；与用户研究附件分开，不把显示标签或图例冒充来源原文、科学观测或QC结论，不声称执行了未记录的切换或外查。\n":"")+(sourceReadComparisons.length?"\n"+sourceChangeInstructions:"");
+    const synthesisInput={question:query,materialMatchingHints:sourceMatchHints.length?{regionAliases:sourceMatchHints,notice:"仅辅助对应已取得材料，不改原研究区、不授予范围，也不证明空间覆盖。"}:undefined,questionMode:retrieval?.plan.questionMode,turnContext:modelTurnContext(turnContext),currentResultBatch:currentBatch?modelResultBatch(currentBatch):undefined,
       turnAction:turn&&{action:turn.plan.action,goal:turn.plan.goal,evidenceNeed:turn.plan.evidenceNeed,targets:turn.plan.targets.map(({excerpt,...t})=>t),
         rule:"本轮没有执行数据发现检索。只围绕指定对象、已提供摘录和相关历史证据回答；通用原理可解释，但不能伪称本轮查获。未读来源不能说已读，缺少具体事实时明确边界，不补造数据集、论文事实或观测数。不要把本轮问题重新改成找数据。"},
       sourceConstraint:restricted||source?{sources:restricted||[source],rule:"用户明确限定本轮的来源范围。正文、引用和结论只能依据本轮提供的各指定渠道记录。没有匹配材料时说明缺项；如需要扩大来源，询问用户是否同意。"}:undefined,
@@ -350,15 +355,30 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         count:base.gridCoverage.status==="ready"?base.gridCoverage.count:undefined,
         revision:base.gridCoverage.revision,
         rule:"所附范围的覆盖结论以本字段为准。未知须写覆盖未知，不能写零。文献和目录线索可独立说明，不能当作该格的覆盖或现场观测。"},
-      lookups:base.catalogMatch?.lookups?.map(l=>({matched:l.matched,point:l.point})),gap:base.gap?.missing}}));
+      lookups:base.catalogMatch?.lookups?.map(l=>({matched:l.matched,point:l.point})),gap:base.gap?.missing}};
+    const pinnedRefs=[...exactReadRefs,...parentCitations].map(ref=>ref.token.replace(/[\[\]]/g,""));
+    const packet=packSynthesisContext(instructions,synthesisInput,{question:query,matchHints:sourceMatchHints,areaTerms:[retrieval?.plan.researchIntent?.region||"",...sourceMatchHints],time:retrieval?.plan.researchIntent?.time,pinnedRefs,maxBytes:budgetPolicy.promptBytes});
+    const prompt=packet.prompt,budget=answerTimeBudget(signal,budgetPolicy.answerMs);
+    let modelCalls=0;const sentPromptBytes:number[]=[];
+    const runModel=(value:string,schema:Record<string,unknown>=answerSchema,extraSignal?:AbortSignal)=>budget.run(modelSignal=>{
+      const safe=modelSafeText(value),bytes=Buffer.byteLength(safe);
+      if(bytes>synthesisPromptByteLimit)throw Error("合成后续节点的输入超过本轮字节预算，未发出调用。");
+      modelCalls++;sentPromptBytes.push(bytes);
+      return executor.model(safe,{outputSchema:schema},extraSignal?AbortSignal.any([modelSignal,extraSignal]):modelSignal);
+    });
+    onTool?.({id:"synthesis-context-budget",kind:"tool",name:"核对合成整包输入预算",input:"仅记录UTF-8字节和来源数量，不记录原始提示",status:packet.blocked?"partial":"done",output:JSON.stringify(packet.stats)});
+    try{
     let repaired=false,repairFailed=false,repairInput="";
     const actualCalculations:CalculationReport[]=[];
     let answer:SynthesisAnswer;
-    try{answer=await synthesizeAnswer(prompt,references,webHits,p=>executor.model(p,{outputSchema:answerSchema}),signal,
+    let origin="model-validated";
+    onTool?.({id:"answer-generation",kind:"tool",name:"回答整理",input:JSON.stringify({promptBytes:packet.stats.promptBytes,budgetMs:Math.min(110000,budgetPolicy.answerMs??110000)}),status:"running"});
+    try{if(packet.blocked)throw Error("本轮合成的必要材料超过输入预算，未发送超限提示。");
+      answer=await synthesizeAnswer(prompt,references,webHits,p=>runModel(p),signal,
       diagnostic=>{repaired=true;repairInput=JSON.stringify(diagnostic);onStage?.("正在重新核对回答中的资料引用",searches);onTool?.({id:"synthesis-repair",kind:"tool",name:"回答引用与结构核对",status:"running",input:repairInput});},
       calculation=>{actualCalculations.push(calculation);onStage?.(calculation.status==="completed"?"已完成受控数值核算，正在核对解释":"数值核算条件未通过，保留待核边界",searches);
         onTool?.({id:"calculation-"+crypto.randomUUID(),kind:"tool",name:"受控数值核算",input:calculation.arguments||"未提供有效参数",status:calculation.status==="completed"?"done":"failed",output:JSON.stringify(calculation),...(calculation.error?{error:calculation.error}:{})});},
-      {validateAnswer:verifyExecutionAndReferences,enforceCalculations:true,onCalculationPlan:status=>{onStage?.(status==="running"?"正在核对具体演算的计算参数":status==="failed"?"核算参数准备未完成，正在保留已有内容":status==="done"?"已形成核算请求，继续处理答复":"未形成新增演算请求，继续整理答复",searches);onTool?.({id:"calculation-plan",kind:"tool",name:"核对数值演算参数",input:"草稿含具体演算，先形成有界计算请求",status:status==="running"?"running":status==="done"?"done":status==="failed"?"failed":"partial",...(status!=="running"?{output:status==="done"?"已形成计算请求；计算状态见受控数值核算记录。":status==="failed"?"核算参数准备未完成，保留已有内容。":"未形成新增演算请求；继续回答原问题，来源报告的指标仍按原出处保留。"}:{})});},
+      {allowedSourceRefs:packet.allowedRefs,validateAnswer:verifyExecutionAndReferences,enforceCalculations:true,onCalculationPlan:status=>{onStage?.(status==="running"?"正在核对具体演算的计算参数":status==="failed"?"核算参数准备未完成，正在保留已有内容":status==="done"?"已形成核算请求，继续处理答复":"未形成新增演算请求，继续整理答复",searches);onTool?.({id:"calculation-plan",kind:"tool",name:"核对数值演算参数",input:"草稿含具体演算，先形成有界计算请求",status:status==="running"?"running":status==="done"?"done":status==="failed"?"failed":"partial",...(status!=="running"?{output:status==="done"?"已形成计算请求；计算状态见受控数值核算记录。":status==="failed"?"核算参数准备未完成，保留已有内容。":"未形成新增演算请求；继续回答原问题，来源报告的指标仍按原出处保留。"}:{})});},
       onNodeFailure:({node,error,retained})=>{
         if(node==="answer-repair")repairFailed=true;
         const id=node==="answer-repair"?"synthesis-repair":node==="calculation-plan"?"calculation-plan":"answer-generation";
@@ -366,29 +386,39 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         onTool?.({id,kind:"tool",name:node==="answer-repair"?"回答引用与结构核对":node==="calculation-plan"?"核对数值演算参数":"回答整理",input:node==="answer-repair"?repairInput:"依据本轮已取得材料处理",status:"failed",error:error instanceof Error?error.message:"本步骤未完成。",output:retained?"已保留此前通过结构及引用校验的内容，不保留未核验的新计算结果。":"未取得可直接恢复的正文，将仅保留实际取得的来源线索。"});
       }});
     }catch(error){
-      signal.throwIfAborted();const retained=retainedSourceAnswer(references,webHits);if(!retained)throw error;
+      signal.throwIfAborted();let retained=retainedSourceAnswer(references,webHits,packet.retained,!!retrieval);if(!retained)throw error;
+      if(sourceReadComparisons.length){const statement="本轮未核对新旧材料差异，不能判断事实新增。";retained.limitation+="\n"+statement;
+        retained.sourceChanges=sourceReadComparisons.filter(comparison=>retained!.references.some(ref=>ref.kind==="web"&&readSourceIdentity(ref.url)===comparison.identity)).map(comparison=>({ref:comparison.ref,statement,status:"unknown" as const,historyWindow:null,historyQuote:null,currentWindow:null,currentQuote:null}));}
+      try{verifyExecutionAndReferences(retained);}catch(rejected){
+        onTool?.({id:"retained-evidence-validation",kind:"tool",name:"核对保留片段的引用与动作层级",input:"不发布未通过既有证据校验的降级内容",status:"failed",error:modelSafeText(rejected instanceof Error?rejected.message:"保留片段未通过校验。")});
+        retained=retainedSourceAnswer(references,webHits,[],!!retrieval)!;
+      }
+      origin=retained.references.length?"evidence-retained":"no-direct-evidence";
       if(repaired){repairFailed=true;onTool?.({id:"synthesis-repair",kind:"tool",name:"回答引用与结构核对",input:repairInput,status:"failed",error:error instanceof Error?error.message:"答复校验未完成。"});}
-      onTool?.({id:"answer-generation",kind:"tool",name:"回答整理",input:"根据本轮已取得资料生成答复",status:"failed",error:error instanceof Error?error.message:"回答整理未完成。",output:"没有发布未通过校验的草稿；已保留实际来源条目与读取记录。"});
+      onTool?.({id:"answer-generation",kind:"tool",name:"回答整理",input:"根据本轮已取得资料生成答复",status:"failed",error:error instanceof Error?error.message:"回答整理未完成。",output:JSON.stringify({mode:origin,promptBytes:packet.stats.promptBytes,modelCalls,sentPromptBytes,elapsedMs:Date.now()-start,...(error instanceof ExecutorFailure?{executorDiagnostic:error.diagnostic}:{}),budgetExhausted:budget.remainingMs()===0,notice:"没有发布未通过校验的草稿；保留实际依据及读取记录。"})});
       onStage?.("回答整理未完成，已保留本轮取得的来源线索",searches);answer=retained;
     }
+    if(answer.recovery&&origin==="model-validated")origin="validated-checkpoint";
     if(repaired&&!repairFailed)onTool?.({id:"synthesis-repair",kind:"tool",name:"回答引用与结构核对",input:repairInput,status:"done",output:"已按原材料修正并通过编号与结构校验；不代表科学判断全部已核。"});
     // Keep the experimental second model pass opt in: live checks are not yet
     // reliable enough to add its latency and incomplete-review notices to every answer.
-    if(process.env.ONEEARTH_ANSWER_EVIDENCE_AUDIT==="1" && shouldReviewAnswerEvidence(answer,query,actualCalculations)){
+    if(budget.remainingMs()>0&&!answer.recovery&&process.env.ONEEARTH_ANSWER_EVIDENCE_AUDIT==="1" && shouldReviewAnswerEvidence(answer,query,actualCalculations)){
       onStage?.("正在对照具体陈述与已取得的来源",searches);
       const reviewed=await reviewAnswerEvidence({parsedAnswer:answer,catalogue:rows,references,webHits,sourceReadComparisons,question:query,originalSynthesisPrompt:prompt,
-        calculations:actualCalculations,parentSignal:signal,
-        run:(p,schema,reviewSignal)=>executor.model(p,{outputSchema:schema===synthesisResponseSchema?answerSchema:schema},reviewSignal),onTool});
+        calculations:actualCalculations,parentSignal:budget.signal,
+        run:(p,schema,reviewSignal)=>runModel(p,schema===synthesisResponseSchema?answerSchema:schema,reviewSignal),onTool});
       signal.throwIfAborted();
       try{verifyExecutionAndReferences(reviewed.answer);answer=reviewed.answer;}
       catch(error){onTool?.({id:"source-read-provenance",kind:"tool",name:"核对来源访问记录",input:"核对模型审读生成的动作描述",
         status:"failed",error:error instanceof Error?error.message:"来源访问记录不相符。"});}
     }
+    onTool?.({id:origin==="model-validated"?"answer-generation":"answer-delivery",kind:"tool",name:origin==="model-validated"?"回答整理":"保留可核依据",input:"区分模型成文通过校验、保留依据与无直接依据",status:origin==="model-validated"?"done":"partial",output:JSON.stringify({mode:origin,promptBytes:packet.stats.promptBytes,modelCalls,sentPromptBytes,elapsedMs:Date.now()-start,references:answer.references.length})});
     const {message,sources,webSources}=answer;
-    return {...base,message,researchIntent:retrieval?.plan.researchIntent||turn?.plan.researchIntent,conversationContext:retrieval?.plan.conversationContext||turn?.plan.conversationContext,
+    return {...base,message:modelSafeText(message),researchIntent:retrieval?.plan.researchIntent||turn?.plan.researchIntent,conversationContext:retrieval?.plan.conversationContext||turn?.plan.conversationContext,
       conversationEvidence:rememberReadEvidence(previousReadings,searches,memoryOptions),modelExecutor:executor.name,modelIds:sources.map(s=>s.id),
       conversationAssertionEvidence:rememberCurrentAssertionReadings(previousAssertions,rows,sources.map(s=>s.id),target),
-      answerNotes:{researchNotes:answer.researchNotes,references:answer.references,sources,searches,webSources,limitation:[answer.limitation,webIssue].filter(Boolean).join("\n"),followUp:answer.followUp,reviewed:rows.length,
+      answerNotes:{researchNotes:answer.researchNotes,references:answer.references,sources,searches,webSources,limitation:modelSafeText([answer.limitation,webIssue].filter(Boolean).join("\n")),followUp:modelSafeText(answer.followUp),reviewed:rows.length,
         elapsedMs:Date.now()-start,executor:executor.name==="codex"?"Codex":"Claude Code"}};
+    }finally{budget.close();}
 
 }

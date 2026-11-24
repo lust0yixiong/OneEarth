@@ -3,6 +3,7 @@ import {verifyCalculationRequests,type CalculationReport} from "./verified-calcu
 import type { AnswerReference, WebHit } from "../src/domain/types";
 import {sourceIdentityInstructions} from "./source-identity";
 import {parseSourceChanges} from "./source-read-comparison";
+import type {RetainedEvidence} from "./synthesis-context-budget";
 
 export const synthesisInstructions = sourceIdentityInstructions+`回答原则是依据可追溯的事实作判断。介绍论文与研究用法的来源时统一称为“文献资料”。围绕用户当前问题，先核对文献资料及已接入数据集已提供的事实，结合发布方原始资料交叉核验；引用要支撑具体判断。researchQuestions、usage、researchCombinations、researchPaths、evidenceLinks 和 excerpts 可揭示作者研究什么、使用哪些变量与数据、怎样联合分析及其前提，应将相关信息用于本轮比较和解释，不能停在罗列候选名称。论文研究问题表示研究目标，数据共现表示联合使用线索；方法有效性、因果关系和当前时空适用性还需相应原文或记录支持。
 searchStatus.webChecks 是围绕本轮文献资料和数据目录提出的网页补充核查计划，不是已经核实的事实。结合实际读取的 webResults 回答哪些缺口补上、哪些仍未知。用户明确指定的资料，其他数据集或论文的读数、参数和文件不能替代它；相关资料只能另作比较。来源存在身份、版本、量纲或方法冲突时保留各自出处与适用条件，不能将文献资料或网页任一方自动视为最终正确，也不能静默修改源值。
@@ -145,7 +146,7 @@ export function needsVerifiedCalculation(draft:{message?:string;sections?:Array<
 
 type SynthesisNode="calculation-plan"|"final-answer"|"answer-repair";
 export type SynthesisAnswer=ReturnType<typeof parseSynthesis>&{recovery?:{failedNodes:SynthesisNode[]}};
-type SynthesisOptions={validateAnswer?:(answer:SynthesisAnswer)=>void;enforceCalculations?:boolean;onCalculationPlan?:(status:"running"|"done"|"partial"|"failed")=>void;
+type SynthesisOptions={allowedSourceRefs?:ReadonlySet<string>;validateAnswer?:(answer:SynthesisAnswer)=>void;enforceCalculations?:boolean;onCalculationPlan?:(status:"running"|"done"|"partial"|"failed")=>void;
  onNodeFailure?:(failure:{node:SynthesisNode;error:unknown;retained:boolean})=>void};
 const decodeDraft=(raw:string)=>JSON.parse(raw.trim().replace(/^```(?:json)?\s*|\s*```$/gi,""));
 function intermediateCalculationReply(raw:string){
@@ -168,12 +169,20 @@ function answerCheckpoint(draft:any,materials:AnswerReference[],web:WebHit[]):Sy
 }
 
 /** Last resort: expose only real returned identities, without inventing a scientific answer. */
-export function retainedSourceAnswer(materials:AnswerReference[],web:WebHit[]):SynthesisAnswer|undefined{
- if(!materials.length)return;
+export function retainedSourceAnswer(materials:AnswerReference[],web:WebHit[],evidence:RetainedEvidence[]=[],allowEmpty=false):SynthesisAnswer|undefined{
+ if(!materials.length&&!allowEmpty)return;
  const title=(value:string)=>value.replace(/[\[\]〔〕`<>]/g,"").replace(/\s+/g," ").slice(0,300);
- const message="回答整理未能完成，已保留本轮取得的以下资料线索。这里列出的是实际返回的来源条目，相关性、覆盖范围和可获取性仍需逐项核对。\n\n"+
-  materials.slice(0,8).map((r,i)=>"- "+title(r.title)+" [S"+(i+1)+"]").join("\n");
- return {...parseSynthesis(JSON.stringify({message,calculationRequests:[],limitation:"本轮尚未形成完整分析；检索与实际读取记录仍可查看，未完成的计算或核验不视作成功。"}),materials,web),recovery:{failedNodes:["final-answer"]}};
+ const literal=(value:string)=>value.replace(/\[([^\]\n]+)\]\([^\s)]+\)/g,"$1").replace(/\[/g,"［").replace(/\]/g,"］").replace(/〔/g,"（").replace(/〕/g,"）");
+ const eligible=evidence.filter(row=>(row.relevant||row.pinned)&&row.quote&&/^S[1-9]\d*$/.test(row.ref)&&materials[Number(row.ref.slice(1))-1])
+   .sort((a,b)=>Number(b.pinned)-Number(a.pinned)||Number(b.mentionsRequestedYear)-Number(a.mentionsRequestedYear)||b.quality-a.quality||b.score-a.score),selected:RetainedEvidence[]=[];
+ const add=(row:RetainedEvidence)=>{if(selected.length<3&&!selected.some(item=>item.ref===row.ref||item.identity===row.identity))selected.push(row);};
+ eligible.filter(row=>row.pinned).forEach(add);
+ for(const row of eligible)if(!selected.some(item=>item.sourceGroup===row.sourceGroup))add(row);
+ eligible.forEach(add);
+ const message=selected.length?"回答整理未能完成。以下仅保留实际材料中可定位的文字，尚未完成原目标的适用性分析：\n\n"+
+   selected.map(row=>"- **"+title(row.title)+"**（"+row.level+"）：\n  > "+literal(row.quote!).replace(/\n/g,"\n  > ")+" ["+row.ref+"]").join("\n\n"):
+   "回答整理未能完成。本轮委托记录已保留，但当前没有足以直接回答原目标的可核片段；不能据目录标题、地区或变量关键词确认资料适用。可从本轮检索批次查看实际来源与读取记录。";
+ return {...parseSynthesis(JSON.stringify({message,calculationRequests:[],limitation:"这不是完整研究回答。片段所述输入时段、标称年份或地域相交不证明逐年或完整研究区覆盖；原目标的完整年份、范围与变量口径仍未核实。目录/网页/文献片段不等于取得原始数据文件或实际测量，未完成的计算与核验不视作成功。"}),materials,web),recovery:{failedNodes:["final-answer"]}};
 }
 
 /** Calculation planning is a control step, never an answer. Keep a validated
@@ -216,6 +225,8 @@ export async function synthesizeAnswer(prompt:string,materials:AnswerReference[]
   }
   if(needsPlan||requests!==undefined&&(!Array.isArray(requests)||requests.length)){
    signal.throwIfAborted();finalized=true;
+   if(options?.allowedSourceRefs&&Array.isArray(requests)&&requests.some(request=>Array.isArray(request?.sourceRefs)&&request.sourceRefs.some((ref:unknown)=>typeof ref!=="string"||!options.allowedSourceRefs!.has(ref))))
+    throw new SourceReadClaimError("核算引用未包含在本次有界材料中，不能猜测省略来源。");
    const reports:CalculationReport[]=requests?.length||!Array.isArray(requests)?verifyCalculationRequests(requests,materials.length):[];
    completedCalculations=reports.filter(r=>r.status==="completed").length;
    for(const report of reports)onCalculation?.(report);
