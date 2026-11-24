@@ -18,6 +18,13 @@ function checkedManifest(data: HainaForestManifest) {
   return data;
 }
 
+export async function readForestPublication(signal:AbortSignal):Promise<ForestPublication> {
+  const response=await fetch(forestFrameManifestPath,{signal,cache:"no-cache"});
+  if (!response.ok) throw Error("森林日期目录读取失败");
+  const {bytes,revision}=await readWorkspacePublication(response);
+  return {manifest:checkedManifest(JSON.parse(new TextDecoder().decode(bytes))),revision};
+}
+
 export function useForestLayer(layer: { frame: number; date?: string } | null, playing: boolean) {
   const active = layer !== null;
   const [publication, setPublication] = useState<ForestPublication | null>(null);
@@ -31,13 +38,10 @@ export function useForestLayer(layer: { frame: number; date?: string } | null, p
     if (!active) { setPublication(null); setCatalogLoading(false); setCatalogError(false); return; }
     const request = new AbortController();
     setCatalogLoading(true);
-    void fetch(forestFrameManifestPath,{signal:AbortSignal.any([request.signal,AbortSignal.timeout(10000)]),cache:"no-cache"})
-      .then(async response => {
-        if (!response.ok) throw Error("森林日期目录读取失败");
-        const {bytes,revision}=await readWorkspacePublication(response);
-        const manifest=checkedManifest(JSON.parse(new TextDecoder().decode(bytes)));
+    void readForestPublication(AbortSignal.any([request.signal,AbortSignal.timeout(10000)]))
+      .then(next => {
         if (request.signal.aborted) return;
-        setPublication(current=>current?.revision && current.revision===revision ? current : {manifest,revision});
+        setPublication(current=>current?.revision && current.revision===next.revision ? current : next);
         setCatalogError(false);
       }).catch(() => { if (!request.signal.aborted) setCatalogError(true); })
       .finally(()=>{if (!request.signal.aborted) setCatalogLoading(false);});

@@ -1,4 +1,4 @@
-import { catalogQueryUrl, openDataAccessNavigation } from "./data-access-ui-helpers.mjs";
+import { catalogQueryUrl, openDataAccessNavigation, restoreInspectedBatchInCatalog } from "./data-access-ui-helpers.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { chromium } from "playwright-core";
@@ -138,7 +138,7 @@ try {
 
   const science = await pageAt(base + "/?task=Q08");
   await science.getByRole("button", { name: "查看研究所需资料" }).click();
-  await science.getByRole("button", { name: "在数据触达中展开" }).click();
+  await restoreInspectedBatchInCatalog(science);
   const cards = science.locator(".catalog-card");
   await cards.first().waitFor();
   assert.equal(await cards.count(), 4);
@@ -201,7 +201,7 @@ try {
 
   const cited = await pageAt(base + "/?task=Q08");
   await cited.getByRole("button", { name: "查看研究所需资料" }).click();
-  await cited.getByRole("button", { name: "在数据触达中展开" }).click();
+  await restoreInspectedBatchInCatalog(cited);
   const sourceCard = cited.locator(".catalog-card").first();
   await sourceCard.getByRole("button", { name: /数据速览/ }).click();
   await cited

@@ -5,6 +5,8 @@ import {loadRemoteAssetIds} from "../domain/datasets";
 import {useWebPreview} from "./use-web-preview";
 import {EntityVisualization} from "./EntityVisualization";
 import {regionalForDataset} from "../domain/regional-cases";
+import {readC40Catalogue} from "./use-c40-layer";
+import {readForestPublication} from "./use-forest-layer";
 import {rainCoverageLabel, refreshRainCatalog, useRainCatalog} from "./use-rain-catalog";
 import { PaperResearchQuestions } from "./PaperResearchQuestions";
 import { hainaScopeReview } from "../domain/haina-space";
@@ -40,7 +42,7 @@ import {
   windTimeLabel,
   windFrame,
 } from "../domain/wind";
-import { supportsDataView, selectedStation } from "../domain/visualization";
+import { scopedDataView, supportsDataView, selectedStation } from "../domain/visualization";
 import { regionLabel } from "../domain/regions";
 import type {
   CandidateSet,
@@ -381,8 +383,48 @@ function ResearchCollection({ batch }: { batch: CandidateSet }) {
     </>
   );
 }
+function DataGlobeButton({asset,scope}:{
+  asset?:Asset;
+  scope?:{filters:Filters;selection:Selection|null};
+}) {
+  const {state:s,patch,openData,openVisualization}=useWorkspace();
+  const layer=asset ? regionalForDataset(asset.datasetId) : undefined;
+  const rain=useRainCatalog(layer==="rain");
+  const [verified,setVerified]=useState<"forest"|"c40"|null>(null);
+  useEffect(()=>{
+    setVerified(null);
+    if (layer!=="forest" && layer!=="c40") return;
+    const request=new AbortController();
+    const signal=AbortSignal.any([request.signal,AbortSignal.timeout(10000)]);
+    const read=layer==="forest" ? readForestPublication(signal) : readC40Catalogue(signal);
+    void read.then(()=>{
+      if (!request.signal.aborted) setVerified(layer);
+    }).catch(()=>{});
+    return ()=>request.abort();
+  },[layer]);
+  const readyLayer=layer==="rain" ? rain.status==="ready" && rain.catalog.years.length>0
+    : layer==="forest" || layer==="c40" ? verified===layer : layer!==undefined;
+  const wind=asset?.datasetId==="gfs-wind";
+  const native=asset && scope && supportsDataView(asset.caseId,asset.needIndex)
+    && scopedDataView(asset.caseId,asset.needIndex,{...scope.filters,need:asset.needIndex},scope.selection,s.dataView);
+
+  function open() {
+    if (layer && readyLayer) {
+      openVisualization(layer,null);
+    } else if (wind && scope) {
+      if (s.visualization?.id==="gfs-wind")
+        patch({fieldLayer:null,dataView:null,inspector:null,evidence:null,selection:scope.selection,
+          ...(scope.selection ? {camera:{...s.camera,center:scope.selection.point}} : {})});
+      else openVisualization("gfs-wind",scope.selection);
+    } else if (native && asset && scope) {
+      openData(asset.caseId,asset.needIndex,scope.filters,scope.selection);
+    }
+  }
+  return <button type="button" className="data-globe-button" disabled={!(readyLayer || wind || native)} onClick={open}>数据上球</button>;
+}
+
 export function DatasetInspector() {
-  const { state: s, patch, showCandidates, inspectCandidates } = useWorkspace();
+  const { state: s, patch, inspectCandidates } = useWorkspace();
   const [collapsed, setCollapsed] = useState(false);
   const previewWeb=useWebPreview();
   const item = s.inspector;
@@ -425,11 +467,8 @@ export function DatasetInspector() {
               同批资料（{parent.ids.length}）
             </button>
           )}
-          {collection && s.view === "earth" && (
-            <button onClick={() => showCandidates(collection, asset?.id)}>
-              在数据触达中展开
-            </button>
-          )}
+          {collection && s.view === "earth" &&
+            <DataGlobeButton asset={summary ? undefined : asset} scope={"assetId" in item ? item : undefined}/>}
           <button
             aria-label={compact ? "展开数据速览" : "收起数据速览"}
             onClick={() => {

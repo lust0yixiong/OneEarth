@@ -1,4 +1,4 @@
-import { catalogQueryUrl, filterLinkedCatalog, openDataAccessNavigation } from "./data-access-ui-helpers.mjs";
+import { catalogQueryUrl, filterLinkedCatalog, openDataAccessNavigation, restoreInspectedBatchInCatalog } from "./data-access-ui-helpers.mjs";
 import assert from "node:assert/strict";
 import { readActiveWorkspace } from "./read-active-workspace.mjs";
 import { chromium } from "playwright-core";
@@ -39,7 +39,7 @@ async function send(page, text) {
 
 async function directory(page) {
   await page.getByRole("button", { name: "查看研究所需资料", exact: true }).click();
-  await page.locator(".overview-inspector").getByRole("button", { name: "在数据触达中展开", exact: true }).click();
+  await restoreInspectedBatchInCatalog(page);
   try { await page.locator(".catalog-card").first().waitFor(); }
   catch (error) {
     await page.screenshot({ path: `${destination}/directory-failure.png`, animations: "disabled" });

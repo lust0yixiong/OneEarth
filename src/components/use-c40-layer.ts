@@ -19,7 +19,7 @@ function validCity(city: C40City) {
     Number.isSafeInteger(city.samples) && city.samples > 0;
 }
 
-async function readCatalogue(signal:AbortSignal):Promise<PublishedCities> {
+export async function readC40Catalogue(signal:AbortSignal):Promise<PublishedCities> {
   const response = await fetch(c40CityManifestPath, {signal, cache:"no-cache"});
   if (!response.ok) throw Error("C40 城市目录读取失败");
   const {bytes,revision}=await readWorkspacePublication(response);
@@ -49,7 +49,7 @@ export function useC40Layer(layer:{frame:number;city?:string}|null) {
     }
     const request = new AbortController();
     setCatalogLoading(true);
-    void readCatalogue(AbortSignal.any([request.signal, AbortSignal.timeout(10000)]))
+    void readC40Catalogue(AbortSignal.any([request.signal, AbortSignal.timeout(10000)]))
       .then(next=>{
         if (request.signal.aborted) return;
         setPublished(current=>current?.revision && current.revision===next.revision ? current : next);

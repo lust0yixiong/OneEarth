@@ -1,4 +1,4 @@
-import { openDataAccessNavigation } from "./data-access-ui-helpers.mjs";
+import { openDataAccessNavigation, restoreInspectedBatchInCatalog } from "./data-access-ui-helpers.mjs";
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 const browser = await chromium.launch({
@@ -26,17 +26,13 @@ try {
     .first()
     .click();
   assert.match(await dock.locator(".overview-body > dl").first().innerText(), /时间指数/);
-  const title = await dock.locator("h2").innerText();
-  await dock.getByRole("button", { name: "在数据触达中展开" }).click();
-  assert.equal(await dock.locator("h2").innerText(), title);
-  await p.getByRole("button", { name: "返回之前的球面" }).click();
-  assert.equal(await dock.locator("h2").innerText(), title);
+  assert.ok(await dock.getByRole("button", { name: "数据上球", exact: true }).isDisabled());
   await dock.getByRole("button", { name: /同批资料/ }).click();
   assert.equal(await choose.inputValue(), "2010");
   await p.screenshot({ path: "/tmp/oneearth-q08-collection.png" });
   await p.goto(base + "/?task=Q15");
   await p.getByRole("button", { name: "查看研究所需资料" }).click();
-  await dock.getByRole("button", { name: "在数据触达中展开" }).click();
+  await restoreInspectedBatchInCatalog(p);
   await p.getByRole("button", { name: /需申请资料/ }).click();
   const card = p.locator(".catalog-card");
   assert.equal(await card.count(), 1);
@@ -57,7 +53,7 @@ try {
   await p.setViewportSize({ width: 390, height: 844 });
   await p.reload();
   await p.getByRole("button", { name: "查看研究所需资料" }).click();
-  await dock.getByRole("button", { name: "在数据触达中展开" }).click();
+  assert.ok(await dock.getByRole("button", { name: "数据上球", exact: true }).isDisabled());
   assert.equal(
     await p.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -66,7 +62,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "PASS Q08 paired table and selected asset round-trip; Q15 access links and map exclusion; Q10 model inputs; global catalog and mobile.",
+    "PASS Q08 paired table, selected asset and disabled globe action; Q15 access links and map exclusion; Q10 model inputs; global catalog and mobile.",
   );
 } finally {
   await browser.close();

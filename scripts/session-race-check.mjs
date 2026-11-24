@@ -1,3 +1,4 @@
+import { restoreInspectedBatchInCatalog } from "./data-access-ui-helpers.mjs";
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 
@@ -10,7 +11,7 @@ async function readingPosition() {
   try {
     await page.goto(base + "/?task=Q08");
     await page.getByRole("button", {name:"查看研究所需资料"}).click();
-    await page.getByRole("button", {name:"在数据触达中展开"}).click();
+    await restoreInspectedBatchInCatalog(page);
     const card = page.locator(".catalog-card").filter({hasText:"NSIDC Sea Ice Index"});
     await card.getByRole("button", {name:/数据速览/}).click();
     await page.locator(".overview-inspector").getByRole("button", {name:"预览表格",exact:true}).first().click();

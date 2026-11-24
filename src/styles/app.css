@@ -2202,6 +2202,19 @@ select {
 .data-inspector-heading .icon-actions button:hover {
   background: #e3eee2;
 }
+.data-inspector-heading .icon-actions .data-globe-button {
+  background: #e3eee2;
+  white-space: nowrap;
+}
+.data-inspector-heading .icon-actions .data-globe-button:hover:not(:disabled) {
+  background: #d5e7d5;
+}
+.data-inspector-heading .icon-actions .data-globe-button:disabled {
+  color: #667067;
+  background: #edf0ed;
+  cursor: not-allowed;
+  opacity: 1;
+}
 /* Long-form content has its own drawer, independent of the local data card. */
 .evidence-reader {
   position: absolute;
