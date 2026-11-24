@@ -130,3 +130,7 @@
   .oe-clarification-option, .oe-clarification-card footer button { min-block-size: 44px; }
   .oe-clarification-card .oe-clarification-text textarea { min-block-size: 44px; }
 }
+
+@media (max-width: 520px) {
+  .chat-compose .oe-clarification-card form { max-block-size: min(58dvh, 380px); }
+}
