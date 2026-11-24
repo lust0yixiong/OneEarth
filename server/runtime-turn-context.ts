@@ -8,6 +8,8 @@ import {validBrowserTurnFrame} from "../src/domain/turn-context";
 import {modelSafeValue} from "./model-context-safety";
 import {runtimeWorkspaceState,type RuntimeWorkspaceState} from "./runtime-workspace-state";
 
+import type {ConversationProjection} from "./conversation-history";
+
 type ResearchState="not-requested"|"planned"|"running"|"waiting-input"|"complete"|"partial"|"failed"|"cancelled"|"unknown";
 type ResearchExecution={status:"queued"|"running"|"complete"|"failed"|"cancelled";bindings:{taskId:string;messageId:string;state:string;operation:"discover"|"read"}[]};
 type ContextStore=TaskStore&{workspaceReceipt?:(id:string)=>Promise<WorkspaceReceipt|undefined>;researchExecution?:(id:string)=>Promise<ResearchExecution|undefined>};
@@ -17,7 +19,7 @@ type ContextRecord={taskId:string;turnId?:string;submittedAt?:number;question:st
   execution:{research:ResearchState;plannedAction?:string;bindings?:ResearchExecution["bindings"];tools:{id:string;state:string;title:string}[];workspace:RuntimeWorkspaceState};
   batch?:ResultBatch;referenceKeys?:string[];observationFacts?:"separate-authority"};
 export type RuntimeTurnContext={version:1;current:{taskId:string;turnId:string;conversationId:string;question:string};
-  history:ContextRecord[];unavailableRelations:{taskId:string;reason:"unavailable"|"foreign-conversation"|"turn-mismatch"|"limit"}[];
+  history:ContextRecord[];conversation?:ConversationProjection;unavailableRelations:{taskId:string;reason:"unavailable"|"foreign-conversation"|"turn-mismatch"|"limit"}[];
   frozenView?:WorkspaceViewContext;browserObservations?:RuntimeTurnInput["context"]["browserTurnFrame"];
   recentOutcome?:{source:"same-conversation-server-task";taskId:string;turnId?:string;submittedAt:number;question:string;
     taskState:string;research:ResearchState;hasResultBatch:boolean};
@@ -141,7 +143,14 @@ export function boundTurnContext(context:DiscoveryContext,turn:RuntimeTurnContex
 export function modelTurnContext(context:RuntimeTurnContext|undefined){
   if(!context)return;
   const {frozenView:_view,...rest}=context;
-  const history=context.history.map(({referenceKeys:_keys,...record})=>record);
-  if(history.every(record=>record.submittedAt!==undefined))history.sort((a,b)=>a.submittedAt!-b.submittedAt!);
+  const history=context.history.map(({referenceKeys:_keys,...record})=>{
+    if(!context.conversation)return record;
+    const {assistantText:_text,question:_question,...provenance}=record;
+    return {...provenance,question:"原问答在conversation区按稳定轮次提供。",conditions:record.conditions.filter(condition=>condition.origin!=="user-message")};
+  });
+  if(context.conversation){
+    const order=new Map([...context.conversation.turns,...context.conversation.index].map(turn=>[turn.taskId,turn.order]));
+    history.sort((a,b)=>(order.get(a.taskId)??Infinity)-(order.get(b.taskId)??Infinity));
+  }else if(history.every(record=>record.submittedAt!==undefined))history.sort((a,b)=>a.submittedAt!-b.submittedAt!);
   return {...rest,history};
 }

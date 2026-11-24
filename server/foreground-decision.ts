@@ -1,3 +1,4 @@
+import {historyReadSchema} from "./conversation-history";
 import type {TurnInput} from "./turn-planning";
 
 const object=(properties:Record<string,unknown>)=>({type:"object",additionalProperties:false,required:Object.keys(properties),properties});
@@ -7,10 +8,10 @@ const question={type:"string",minLength:1,maxLength:500};
 const choices={type:["array","null"],minItems:2,maxItems:4,items:{type:"string",minLength:1,maxLength:100}};
 
 /** The model expresses one intent, never a platform authorization or parent ID. */
-export function foregroundDecisionSchema(actions:{anyOf:unknown[]},observationAvailable=false){
+export function foregroundDecisionSchema(actions:{anyOf:unknown[]},observationAvailable=false,historyAvailable=false){
   const controls=actions.anyOf.filter((branch:any)=>["set-control","resolve-control","resolve-published-date"].includes(branch?.properties?.kind?.enum?.[0]));
   const operations=actions.anyOf.filter((branch:any)=>branch?.type!=="null");
-  return {anyOf:[
+  return {anyOf:[...(historyAvailable?[historyReadSchema]:[]),
     object({kind:kind("respond"),reply:{type:["string","null"],maxLength:8000},targets}),
     object({kind:kind("read"),targets:{...targets,minItems:observationAvailable?0:1,maxItems:3}}),
     object({kind:kind("search"),goal:{type:"string",minLength:1,maxLength:1200},targets}),

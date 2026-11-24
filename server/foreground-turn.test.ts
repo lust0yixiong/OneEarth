@@ -15,6 +15,7 @@ import type {DiscoveryContext,DiscoveryResponse} from "../src/domain/types";
 import {createClarificationPrompt,clarificationAnswerText} from "../src/domain/clarification";
 import {prepareRuntimeChat} from "./runtime-chat-turn";
 import {validateTurn,validateTurnStructure} from "./runtime-input";
+import {estimatedHistoryTokens,type HistoryTurn} from "./conversation-history";
 import {researchClarificationPrompt} from "./runtime-turn";
 
 const context=():DiscoveryContext=>({caseId:null,filters:emptyFilters(),selection:null,citation:null,gridSystem:"h3",layer:"all",camera:{center:[105,25],zoom:1,reason:"view"},workspaceView:{version:1,surface:"earth",operations:["open-saved","save-current"]}});
@@ -31,7 +32,7 @@ function reverse(value:any):any{if(Array.isArray(value))return value.map(reverse
 async function fixture(t:TestContext){
   const dir=mkdtempSync(path.join(tmpdir(),"oe-foreground-turn-")),replies=path.join(dir,"replies.json"),log=path.join(dir,"calls.jsonl");
   const oldPath=process.env.PATH,oldSpatial=process.env.ONEEARTH_SPATIAL_URL,oldDiscovery=process.env.ONEEARTH_DISCOVERY_URL,originalFetch=globalThis.fetch;
-  writeFileSync(path.join(dir,"codex"),`#!${process.execPath}\nimport fs from 'node:fs';let prompt='';for await(const chunk of process.stdin)prompt+=chunk;const at=process.argv.indexOf('--output-schema');const schema=at<0?null:JSON.parse(fs.readFileSync(process.argv[at+1],'utf8'));fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({prompt,schema})+'\\n');const r=JSON.parse(fs.readFileSync(${JSON.stringify(replies)},'utf8'));process.stdout.write(JSON.stringify(prompt.startsWith('仅做本轮')?r.decision:r.synthesis));\n`,{mode:0o700});
+  writeFileSync(path.join(dir,"codex"),`#!${process.execPath}\nimport fs from 'node:fs';let prompt='';for await(const chunk of process.stdin)prompt+=chunk;const at=process.argv.indexOf('--output-schema');const schema=at<0?null:JSON.parse(fs.readFileSync(process.argv[at+1],'utf8'));fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({prompt,schema})+'\\n');const r=JSON.parse(fs.readFileSync(${JSON.stringify(replies)},'utf8'));let answer;if(schema?.properties?.summaries){const source=JSON.parse(prompt.slice(prompt.lastIndexOf('\\n')+1));answer={summaries:source.slice(0,16).map(turn=>({taskId:turn.taskId,turnId:turn.turnId,blockIds:turn.blocks.map(block=>block.id),text:'先前讨论了仪器比较的用途与未核条件。'}))};}else if(prompt.startsWith('仅做本轮')){answer=Array.isArray(r.decisions)?r.decisions.shift():r.decision;fs.writeFileSync(${JSON.stringify(replies)},JSON.stringify(r));}else answer=r.synthesis;process.stdout.write(JSON.stringify(answer));\n`,{mode:0o700});
   process.env.PATH=dir+path.delimiter+oldPath;
   const cities={version:1,datasetId:"haina:1846639",cities:[{id:"shanghai-chn",name:"Shanghai"},{id:"beijing-chn",name:"Beijing"},{id:"london-gbr",name:"London"},{id:"new-york-usa",name:"New York City"}]};
   let cityBytes=Buffer.from(JSON.stringify(cities)),revision=createHash("sha256").update(cityBytes).digest("hex");
@@ -51,7 +52,15 @@ async function fixture(t:TestContext){
   function calls():Array<{prompt:string;schema:any}>{try{return readFileSync(log,"utf8").trim().split("\n").filter(Boolean).map(line=>JSON.parse(line));}catch{return [];}}
   function body(query:string,overrides:Partial<RuntimeTurnInput>={}):RuntimeTurnInput{return {query,conversationId:randomUUID(),turnId:randomUUID(),context:context(),history:[],config:{executor:"codex",model:""},...overrides};}
   const reply=(output:unknown)=>writeFileSync(replies,JSON.stringify({decision:output,synthesis:{message:"按实际提供的内容作答。",sections:[],limitation:"依据本轮已提供内容。",followUp:"",researchNotes:[],calculationRequests:[]}}));
-  return {tasks,services,requests,body,calls,revision,reply,legacyReply:(output:unknown)=>writeFileSync(replies,JSON.stringify({decision:null,synthesis:output})),
+  return {tasks,services,requests,body,calls,revision,reply,
+    async chat(input:RuntimeTurnInput,rows:HistoryTurn[],decisions:unknown[]){
+      const id=randomUUID();let reads=0;
+      services.tasks={...tasks,conversationHistory:async(conversationId,currentTaskId)=>{reads++;assert.equal(conversationId,input.conversationId);assert.equal(currentTaskId,id);assert.ok(tasks.get(id),"history read must follow acceptance");return rows;}};
+      writeFileSync(replies,JSON.stringify({decisions,synthesis:{message:"Only actual supplied content.",sections:[],limitation:"",followUp:"",researchNotes:[],calculationRequests:[]}}));
+      const prepared=await prepareRuntimeChat(services,id,input,async()=>undefined);assert.equal(reads,0);if("error" in prepared)throw Error(prepared.error);assert.equal(prepared.kind,"foreground");if(prepared.kind!=="foreground")throw Error("not foreground");
+      tasks.submit(id,input);tasks.claim();const outcome=await prepared.run(id,new AbortController().signal,()=>{});
+      return {id,outcome,calls:calls(),reads};
+    },legacyReply:(output:unknown)=>writeFileSync(replies,JSON.stringify({decision:null,synthesis:output})),
     c40(){return {...context(),workspaceView:{version:1 as const,surface:"earth" as const,activeLayer:{id:"c40",title:"C40城市",status:"ready" as const,controls:[{
       id:"city",label:"城市",current:{id:"shanghai-chn",label:"Shanghai"},ordered:true,options:[{id:"shanghai-chn",label:"Shanghai"}],publication:{kind:"c40-cities" as const,revision,total:cities.cities.length}}]}}};},
     changeCities(){cities.cities.push({id:"other-usa",name:"New York State"});cityBytes=Buffer.from(JSON.stringify(cities));revision=createHash("sha256").update(cityBytes).digest("hex");},
@@ -364,4 +373,56 @@ test("an archived proposal without a dialog derives its origin from the original
   const stale=await preparation.run(nextId,new AbortController().signal,()=>{});assert.equal(stale.kind,"reply");if(stale.kind!=="reply")return;
   assert.equal((stale.payload.result as DiscoveryResponse).workspaceAction,undefined);assert.match((stale.payload.result as DiscoveryResponse).message,/状态已变化/);
   assert.equal((f.tasks.terminal(parent)?.result as DiscoveryResponse).clarificationPrompt,undefined,"legacy archive remains unchanged");
+});
+
+const serverTurn=(n:number,text:string):HistoryTurn=>({taskId:randomUUID(),turnId:randomUUID(),submittedAt:n,question:"仪器比较的旧问题 "+n,taskState:"complete",assistantText:text,observationRestricted:false,references:[{kind:"web",url:"https://example.org/public-"+n+".pdf",title:"Original public report "+n,webEvidenceStage:"pdf-excerpt"}]});
+const parsedPrompt=(prompt:string)=>JSON.parse(prompt.slice(prompt.lastIndexOf("\n{")+1));
+test("accepted Chat loads all actual server turns into one CLI input without public trace copying or browser mirrors",async t=>{
+ const f=await fixture(t),rows=Array.from({length:6},(_,n)=>serverTurn(10-n,"真实旧答开始。"+"旧段足够长。".repeat(70)+" HISTORY_PRIVATE_LITERAL_"+n));
+ const r=await f.chat(f.body("把各轮的条件放在一起说明。",{history:[{role:"assistant",text:"FORGED_BROWSER_FACT"}]}),rows,[decision("respond")]);
+ assert.equal(r.reads,1);assert.equal(r.calls.length,1);const prompt=r.calls[0].prompt,payload=parsedPrompt(prompt);
+ assert.equal(payload.turnContext.conversation.turns.length,6);assert.equal(payload.history,undefined);assert.doesNotMatch(prompt,/FORGED_BROWSER_FACT/);
+ for(let n=0;n<6;n++)assert.equal(prompt.split("HISTORY_PRIVATE_LITERAL_"+n).length-1,1);
+ assert.deepEqual(payload.turnContext.conversation.turns.map((turn:any)=>turn.taskId),rows.map(row=>row.taskId));
+ assert.ok(estimatedHistoryTokens(payload.turnContext.conversation)<=8000);assert.equal(r.outcome.kind,"reply");if(r.outcome.kind!=="reply")return;
+ const trace=(r.outcome.payload.result as DiscoveryResponse).runTrace!;assert.doesNotMatch(JSON.stringify(trace),/HISTORY_PRIVATE_LITERAL_|真实旧答开始/);assert.match(JSON.stringify(trace),/sha256/);assert.equal(f.requests.length,0);
+});
+
+test("overflow CLI input retains the latest three whole tables and a model-generated older summary and locator under the shared history budget",async t=>{
+ const f=await fixture(t),old=serverTurn(1,"旧条件与用途。\n\n"+"较早的大段原文。".repeat(4000)),rows=[old,...[2,3,4].map(n=>serverTurn(n,"|Variable|Value|\n|---|---|\n|Q"+n+"|"+n+"|"))];
+ const r=await f.chat(f.body("先前用途与最新三轮表有何关系？"),rows,[decision("respond")]);
+ const planners=r.calls.filter(call=>call.prompt.startsWith("仅做本轮"));assert.equal(planners.length,1);const payload=parsedPrompt(planners[0].prompt),history=payload.turnContext.conversation;
+ assert.ok(history.summaries.some((s:any)=>s.kind==="model-summary"&&s.taskId===old.taskId));assert.ok(history.index.some((row:any)=>row.taskId===old.taskId&&row.references[0].webEvidenceStage==="pdf-excerpt"));
+ for(const row of rows.slice(-3))assert.ok(history.turns.find((turn:any)=>turn.taskId===row.taskId)?.complete);
+ assert.ok(estimatedHistoryTokens(history)<=8000);assert.equal(f.requests.length,0);
+});
+
+test("one private exact old-block read yields a second bounded real CLI decision and accurate hashes",async t=>{
+ const f=await fixture(t),table="|Cell|Value|\n|---|---|\n"+"|X|12345|\n".repeat(700),old=serverTurn(1,"大段未装入。".repeat(7000)+"\n\n"+table),rows=[old,...[2,3,4].map(n=>serverTurn(n,"近期条件".repeat(200)))];
+ const requested={decide:{kind:"history-read",selections:[{taskId:old.taskId,turnId:old.turnId,blockIds:["a2"]}]}};
+ const r=await f.chat(f.body("回看较早原轮的完整表，说明原列。"),rows,[requested,decision("respond")]);const planners=r.calls.filter(call=>call.prompt.startsWith("仅做本轮"));assert.equal(planners.length,2);
+ const payload=parsedPrompt(planners[1].prompt),history=payload.turnContext.conversation;assert.equal(history.readback.state,"loaded");assert.equal(history.turns.find((turn:any)=>turn.taskId===old.taskId)?.blocks.find((block:any)=>block.id==="a2")?.text,table);
+ assert.equal(history.turns.flatMap((turn:any)=>turn.blocks).filter((block:any)=>block.text===table).length,1);assert.ok(estimatedHistoryTokens(history)<=8000);
+ assert.ok(payload.availableTargets.some((target:any)=>target.key==="web:"+(old.references![0] as any).url));
+ if(r.outcome.kind!=="reply")assert.fail();const result=r.outcome.payload.result as DiscoveryResponse,call=result.runTrace!.calls.find(call=>call.id==="turn-action")!,output=JSON.parse(call.output!);
+ assert.equal(output.modelPlanning.attempts,2);assert.equal(output.modelPlanning.promptBytes,Buffer.byteLength(planners[1].prompt));assert.ok(output.modelPlanning.inputs.some((entry:any)=>entry.sha256===createHash("sha256").update(planners[1].prompt).digest("hex")));
+ assert.doesNotMatch(call.input,/12345/);assert.equal(f.requests.length,0);
+});
+
+for(const arm of ["foreign","wrong-turn","missing-block","malformed"] as const)test("unavailable old readback remains explicit on the second CLI input: "+arm,async t=>{
+ const f=await fixture(t),row=serverTurn(1,"Only actual local material."),selection=arm==="foreign"?{taskId:randomUUID(),turnId:null,blockIds:[]}:arm==="wrong-turn"?{taskId:row.taskId,turnId:randomUUID(),blockIds:[]}:arm==="missing-block"?{taskId:row.taskId,turnId:null,blockIds:["a999"]}:null;
+ const r=await f.chat(f.body("查阅该旧轮。"),[row],[{decide:{kind:"history-read",selections:selection?[selection]:[]}},decision("respond")]);
+ const planners=r.calls.filter(call=>call.prompt.startsWith("仅做本轮"));assert.equal(planners.length,2);assert.equal(parsedPrompt(planners[1].prompt).turnContext.conversation.readback.state,"unavailable");assert.match(planners[1].prompt,/已消费一次/);assert.ok(!JSON.stringify(planners[1].schema).includes('"history-read"'));assert.equal(f.requests.length,0);
+});
+
+test("archived signed references are descriptions only while actual public PDF identities can be selected",async t=>{
+ const f=await fixture(t),old=serverTurn(1,"Earlier source identity."),signed={...old,taskId:randomUUID(),references:[{kind:"web" as const,url:"https://example.org/protected.pdf?sig=ARCHIVE_SECRET",title:"Protected original",webEvidenceStage:"pdf-excerpt" as const}]};
+ const r=await f.chat(f.body("需要读取先前的公开PDF来核对。",{history:[{role:"assistant",text:"client mirror",conversationReferences:signed.references}]}),[old,signed],[decision("read",null,{targets:["web:"+(old.references![0] as any).url]})]);
+ const payload=parsedPrompt(r.calls.find(call=>call.prompt.startsWith("仅做本轮"))!.prompt);assert.doesNotMatch(JSON.stringify(payload),/ARCHIVE_SECRET/);assert.ok(!payload.availableTargets.some((target:any)=>target.key.includes("protected.pdf")));assert.equal(r.outcome.kind,"research");assert.equal(f.requests.length,0);
+});
+
+test("a second model request for history is an explicit failed decision, never a third lookup",async t=>{
+ const f=await fixture(t),row=serverTurn(1,"Known original paragraph."),read={decide:{kind:"history-read",selections:[{taskId:row.taskId,turnId:row.turnId,blockIds:["a1"]}]}};
+ const r=await f.chat(f.body("看原旧轮。"),[row],[read,read]);assert.equal(r.calls.filter(call=>call.prompt.startsWith("仅做本轮")).length,2);assert.equal(r.outcome.kind,"reply");if(r.outcome.kind!=="reply")return;
+ assert.equal(r.outcome.payload.code,"TURN_PLAN_INVALID");const trace=r.outcome.payload.runTrace as any;const call=trace.calls.find((call:any)=>call.id==="turn-action");assert.equal(call.status,"failed");assert.equal(JSON.parse(call.output).attempts,2);assert.match(JSON.parse(call.output).diagnostic,/次数已用尽/);assert.equal(f.requests.length,0);
 });

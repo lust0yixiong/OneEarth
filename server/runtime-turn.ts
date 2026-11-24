@@ -382,7 +382,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     const planningInput:TurnInput={
       question:decision?.dataQuestion||query,context,history,conversationContext,gridCoverage,workspacePublication:workspaceResolution?.proof,
       forestPublication:forestResolution?.proof,
-      turnContext,
+      turnContext,conversationHistory:internal.conversationHistory,historicalTargets:internal.handoff?.historicalTargets,
       ...(internal.semanticDecision?{semanticDecision:true,pending:internal.pending??internal.handoff?.pending}:{}),...(internal.observationUnavailable?{observationUnavailable:true}:{}),
       ...(internal.observationAvailable?{observationAvailable:true,observationMaterials:internal.observationMaterials}:{}),
       previousResearchIntent:planningIntent,confirmedQuestion:decision?.dataQuestion,numbered:selected,
@@ -410,7 +410,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       reason:"研究者明确补充原委托，沿已受理发现身份和等待水位继续。",clarification:null,
       ...turnMetadata(query,{previousResearchIntent:planningIntent,history,conversationContext})} as TurnPlan,retrieval:undefined as import("./data-search").DataSearchResult|undefined}:
       navigation ? navigationTurn(navigation) : await prepareTurn(planningInput, signal, {
-      run: prompt => executor.model(prompt, {outputSchema:turnPlanningSchema({...planningInput,workspaceView:context.workspaceView})}),
+      run: (prompt,modelSignal,schema) => executor.model(prompt, {outputSchema:schema??turnPlanningSchema({...planningInput,workspaceView:context.workspaceView})},modelSignal||signal),
       stage, report,
       search:p=>internal.foreground||p.gridIntent==="count"||p.gridIntent==="catalogue"||!discoveryAuthority(p).allowDiscovery?Promise.resolve(undefined):find(p),
     });
@@ -418,7 +418,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     if(restrictedConfirmation&&(["read","search"].includes(prepared.plan.action)||prepared.plan.observationUse==="selected"))
       return {result:{message:"本次答复未批准原提案，也未启动新的研究。若要改变研究目的，请另行明确提出。",clarification:true,runTrace}};
     if(internal.foreground&&(["read","search"].includes(prepared.plan.action)||prepared.plan.observationUse==="selected")){
-      signal.throwIfAborted();return {runtimeTurnHandoff:runtimeTurnHandoff(body,prepared.plan,runTrace,{...internal,turnContext})};
+      signal.throwIfAborted();return {runtimeTurnHandoff:runtimeTurnHandoff(body,prepared.plan,runTrace,{...internal,turnContext,historicalTargets:internal.conversationHistory?turnPlanningTargets(planningInput).filter(target=>target.basis==="history"&&internal.conversationHistory!.sourceTargets(query).some(({reference})=>reference.kind==="asset"?target.id===reference.id:target.url===reference.url)):internal.handoff?.historicalTargets})};
     }
     const turn=prepared.plan,evidenceAuthority=discoveryAuthority(turn);
     if((clarification||internal.handoff&&turn.action==="search")&&evidenceAuthority.allowDiscovery&&turn.gridIntent!=="count"&&turn.gridIntent!=="catalogue")

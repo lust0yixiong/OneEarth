@@ -8,6 +8,7 @@ import type {ChatPreparation} from "./runtime-chat-channel";
 import type {Payload,TaskStore} from "./task-store";
 import {workspaceActionState} from "../src/domain/workspace-view-projection";
 import {isDeepStrictEqual} from "node:util";
+import {RuntimeConversationHistory} from "./conversation-history";
 import {runtimeTurnContext,boundTurnContext} from "./runtime-turn-context";
 
 export type ChatResearchHandoff = {
@@ -75,8 +76,7 @@ export async function prepareRuntimeChat(services: RuntimeServices, id: string, 
   const materials = (checkpoint?.materials ?? []) as PinnedObservationMaterial[];
   const modelMaterials = materials.map(({artifactId, version, title, variables}) => ({artifactId, version, title, variables}));
   const preparedBody = observationOrdinaryInput(continuation, unavailable, archivedObservation) as RuntimeTurnInput;
-  const turnContext=await runtimeTurnContext(tasks,id,preparedBody);
-  const cleanBody={...preparedBody,context:boundTurnContext(preparedBody.context,turnContext)};
+  // Full server history is loaded only by run(), after this message is admitted.
   const parentId = previousId;
   const workspacePending = previous?.workspacePending;
   const eligible=parentId&&(answered?.prompt.kind==="chat"||await latestCompleted(original.conversationId)===parentId);
@@ -93,11 +93,17 @@ export async function prepareRuntimeChat(services: RuntimeServices, id: string, 
   return {
     kind: "foreground",
     async run(taskId, signal, emit) {
+      signal.throwIfAborted();
+      const rows=await tasks.conversationHistory?.(original.conversationId,taskId);
+      const conversationHistory=rows?new RuntimeConversationHistory(rows,taskId):undefined;
+      const turnContext=await runtimeTurnContext(tasks,taskId,preparedBody);
+      if(conversationHistory)turnContext.conversation=conversationHistory.projection();
+      const cleanBody={...preparedBody,context:boundTurnContext(preparedBody.context,turnContext)};
       const outcome = await runForegroundTurn(services, taskId, cleanBody, signal, emit, {
         observationAvailable: modelMaterials.length > 0,
         observationMaterials: modelMaterials.length ? modelMaterials : undefined,
         observationUnavailable: unavailable,
-        pending,turnContext,
+        pending,turnContext,conversationHistory,
       });
       if (outcome.kind === "reply") return outcome;
       const selectedObservation = outcome.checkpoint.plan.observationUse === "selected";
