@@ -292,11 +292,12 @@ export function createRenderer(
       return geographic.find(candidate=>candidate.patch.id===selected)?.patch
         ?? geographic.reduce((closest,item)=>Math.hypot(item.x-x,item.y-y)<Math.hypot(closest.x-x,closest.y-y)?item:closest).patch;
     }
-    let distance=8, nearest:HainaPatch|undefined;
+    let distance=Infinity, nearest:HainaPatch|undefined;
     for(const candidate of patchTargets){
       if(!candidate.coarse)continue;
       const next=Math.hypot(candidate.x-x,candidate.y-y);
-      if(next<distance){distance=next;nearest=candidate.patch;}
+      const markerRadius=candidate.patch.id===selected?5:4;
+      if(next<=markerRadius&&next<distance){distance=next;nearest=candidate.patch;}
     }
     return nearest;
   }
