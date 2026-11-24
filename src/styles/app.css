@@ -3300,14 +3300,14 @@ html[data-panel-interaction="move"] * {
   cursor: not-allowed;
 }
 .haina-public-mode :is(.map-footer, .earth-side-controls, .earth-location) { z-index: 4; }
+.haina-public-mode.haina-docked .basemap-menu {
+  bottom: 12px;
+  width: min(268px, calc(100% - 28px));
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+}
 @media (max-width: 760px) {
   .haina-public-mode.haina-docked .earth-side-controls { bottom: 12px; }
-  .haina-public-mode.haina-docked .basemap-menu {
-    bottom: 12px;
-    width: min(268px, calc(100% - 28px));
-    max-height: calc(100% - 24px);
-    overflow-y: auto;
-  }
 }
 .haina-public-legend { min-width: 0; }
 .haina-point-switch select { max-width: min(194px, 50vw); }
