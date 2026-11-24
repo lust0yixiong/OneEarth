@@ -58,9 +58,19 @@ function workTitle(title:string) {
 }
 export interface FetchPage {hit:WebHit; urls:string[]}
 export interface FetchFocus {targets:WebHit[];strict?:boolean;excludeUrls?:string[]}
-export function pagesToRead(runs: SearchRun[], queries: SearchQuery[],focus?:FetchFocus): FetchPage[] {
+function placeText(value:string){
+  return value.normalize("NFKC").toLowerCase().replace(/['’]/g,"").replace(/[^\p{L}\p{N}]+/gu," ").trim();
+}
+export function pagesToRead(runs: SearchRun[], queries: SearchQuery[],focus?:FetchFocus,regionHints:string[]=[]): FetchPage[] {
+  const places=[...new Set(regionHints.map(placeText).filter(name=>name.length>=2))];
+  function mentionsPlace(value:string){
+    const text=" "+placeText(value)+" ";
+    return places.some(name=>text.includes(/\p{Script=Han}/u.test(name)?name:" "+name+" "));
+  }
   const facets=queries.map(q=>words(q.web));
   const datasetTerms=queries.map(q=>words(q.dataset));
+  const placeTerms=new Set([...regionHints,...places].flatMap(name=>[...words(name)]));
+  const topicalTerms=new Set([...facets,...datasetTerms].flatMap(terms=>[...terms]).filter(term=>!placeTerms.has(term)));
   const ranked=[];
   const excluded=new Set((focus?.excludeUrls||[]).map(normalizedPage));
   const matches=(hit:WebHit,target:WebHit)=>doiOf(target)?doiOf(hit)===doiOf(target)
@@ -114,7 +124,11 @@ export function pagesToRead(runs: SearchRun[], queries: SearchQuery[],focus?:Fet
     const breadth=scores.reduce((sum,value)=>sum+value,0)/Math.max(1,scores.length);
     const score=(relevance+.5*breadth)*(1+recordBoost)+(relevance>0 ? .02/(item.index+1) : 0);
     const sourceBonus=item.engine==='DataCite' && relevance>=.15 ? .10/(item.index+1) : 0;
-    return {...item,scores,score:score+sourceBonus+(item.focused?4:0)};
+    // A place name helps prioritize reading a topical result. It does not establish coverage.
+    const regionBonus=places.length && [...item.terms].some(term=>topicalTerms.has(term))
+      ? mentionsPlace(item.hit.title) ? .3 : mentionsPlace(item.hit.snippet) ? .2 : 0
+      : 0;
+    return {...item,scores,score:score+sourceBonus+regionBonus+(item.focused?4:0)};
   }).filter(item=>item.score>0);
   // Group concept/version DOIs, publisher links and repeated landing pages before spending a read.
   const groups=new Map<string,typeof candidates[number]>();

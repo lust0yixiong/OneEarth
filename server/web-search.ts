@@ -44,7 +44,7 @@ function failure(error:unknown) {
   return "检索请求失败";
 }
 type SearchOptions={deepseekTools?: DeepSeekTools;fetchImpl?:typeof fetch;timeoutMs?:number;
-  initialRuns?:SearchRun[];readPages?:boolean;focus?:WebComplementPlan;
+  initialRuns?:SearchRun[];readPages?:boolean;focus?:WebComplementPlan;regionHints?:string[];
   originRead?:typeof readOriginPage|false;
   archiveRead?:typeof readArchiveIndex|false;
   pdfRead?:DiscoveryWebTools["pdfRead"];
@@ -119,7 +119,7 @@ export async function searchSources(queries:SearchQuery[],signal:AbortSignal,upd
     const explicitArchive=explicitArchiveTarget([{web:options.archiveQuestion||"",dataset:""}])||explicitArchiveTarget(activeQueries)
       ||priorArchiveTarget(options.archiveQuestion||"",options.priorArchiveTargets);
     if(archiveRead&&(explicitArchive||/(?:metadata|index|manifest|csv|sample|specimen|raw|scale|原图|索引|元数据|样品|标本|原始|记录|字段|文件|标尺)/i.test(activeQueries.map(q=>q.web+" "+q.dataset).join(" ")))){
-      const archive=explicitArchive||pagesToRead(runs,activeQueries,options.focus).slice(0,3).find(p=>zenodoRecordId(p.hit))?.hit;
+      const archive=explicitArchive||pagesToRead(runs,activeQueries,options.focus,options.regionHints).slice(0,3).find(p=>zenodoRecordId(p.hit))?.hit;
       if(archive)await performSearch("https://zenodo.org/api/records/"+zenodoRecordId(archive),"原站读取",async requestSignal=>{
         const result=await archiveRead(archive,requestSignal,options.archiveQuestion||activeQueries.map(q=>q.web).join(" "));
         attachmentTargets.push(...(result.attachmentTargets||[]));
@@ -128,7 +128,7 @@ export async function searchSources(queries:SearchQuery[],signal:AbortSignal,upd
     }
     const attachedUrls=new Set(attachmentTargets.map(hit=>hit.url));
     const queue=[...attachmentTargets.map(hit=>({hit,urls:[hit.url],attempt:0,forcePdf:true})),
-      ...pagesToRead(runs,activeQueries,options.focus).filter(page=>!page.hit.pageExcerpt&&!attachedUrls.has(page.hit.url)).map(page=>({...page,attempt:0,forcePdf:false}))];
+      ...pagesToRead(runs,activeQueries,options.focus,options.regionHints).filter(page=>!page.hit.pageExcerpt&&!attachedUrls.has(page.hit.url)).map(page=>({...page,attempt:0,forcePdf:false}))];
     const seenText=new Set(runs.flatMap(r=>r.hits.flatMap(h=>h.pageExcerpt?[h.pageExcerpt.replace(/\s+/g," ").trim()]:[]))),originUrls=new Set<string>();
     const originRead=tools ? tools.originRead : options.originRead;
     const pdfRead=tools ? tools.pdfRead : options.pdfRead;

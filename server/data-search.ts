@@ -260,7 +260,7 @@ type Dependencies={
   plan:(correction?:{issue:string;previous:string})=>Promise<string>;
   paper:(plan:PaperPlan)=>Promise<{records:PaperRecord[];incomplete:string[];tools:string[];notices?:string[];truncated?:boolean}>;
   haina:(queries:string[])=>Promise<HainaSearchResult>|HainaSearchResult;
-  web:(queries:SearchQuery[],options?:{readPages?:boolean;initialRuns?:SearchRun[];focus?:WebComplementPlan})=>Promise<SearchRun[]>;
+  web:(queries:SearchQuery[],options?:{readPages?:boolean;initialRuns?:SearchRun[];focus?:WebComplementPlan;regionHints?:string[]})=>Promise<SearchRun[]>;
   refineWeb?:(input:WebComplementInput,signal:AbortSignal)=>Promise<string>;
   report:(call:ToolCall)=>void;
   stage:(message:string)=>void;
@@ -419,7 +419,8 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
   let webChecks:WebComplementPlan|undefined;
   const lookupWeb=()=>runSource("web",()=>search(discoverySourceNames.web,"source-web",plan.web,async()=>{
     // Spend the page-read budget after taking stock of any other searches already in progress.
-    if(!deps.refineWeb){const result=await deps.web(plan.web);webFinding(result,false);return result;}
+    const regionHints=plan.researchIntent?.region ? [plan.researchIntent.region,...plan.paper.region] : [];
+    if(!deps.refineWeb){const result=await deps.web(plan.web,{regionHints});webFinding(result,false);return result;}
     const initial=await deps.web(plan.web,{readPages:false});
     webFinding(initial,true);
     // A complement may inspect receipts from branches already started. It cannot open a branch itself.
@@ -444,7 +445,7 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
       }
     }
     if(webChecks?.checks.length)deps.stage("正在按具体资料补充核查原文与发布记录");
-    const result=await deps.web(plan.web,{initialRuns:initial,focus:webChecks});
+    const result=await deps.web(plan.web,{initialRuns:initial,focus:webChecks,regionHints});
     webFinding(result,false);
     return result;
   },r=>new Set(r.flatMap(s=>s.hits.map(h=>h.url))).size,

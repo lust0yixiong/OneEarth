@@ -271,3 +271,18 @@ test('official named PDF attachment with /content URL is actually parsed through
   assert.equal(read!.hits[0].url,contentUrl);assert.equal(read!.hits[0].doi,'10.5281/zenodo.'+id);assert.equal(read!.hits[0].version,'1.0');
   assert.deepEqual(transportUrls,[api,contentUrl]);assert.ok(!searchUrls.some(u=>new URL(u).hostname==='api.deepseek.com'));
 });
+
+test("named-region hints prioritize topical pages and preserve broader method candidates",()=>{
+  const global={title:"Snow depth field measurements",url:"https://example.org/global",snippet:"Calibration methods and regional field observations."};
+  const regional={title:"Snow depth field measurements…",url:"https://example.org/local",snippet:"Snow depth field measurements over O'Brien Basin."};
+  const wrong={title:"O’Brien Basin visitor directory",url:"https://example.org/visitors",snippet:"Travel opening hours."};
+  const runs:SearchRun[]=[{engine:"Bing",query:"snow depth",status:"done",hits:[global,regional,wrong]}];
+  const queries=[{web:"snow depth field measurements",dataset:"snow depth"}];
+  assert.deepEqual(pagesToRead(runs,queries).map(page=>page.hit.url),[global.url,regional.url]);
+  const ranked=pagesToRead(runs,queries,undefined,["O’Brien Basin"]);
+  assert.deepEqual(ranked.map(page=>page.hit.url),[regional.url,global.url]);
+  assert.deepEqual(pagesToRead(runs,queries,{targets:[global],strict:true},["O’Brien Basin"]).map(page=>page.hit.url),[global.url]);
+  const placeOnly=pagesToRead(runs,[{web:"O'Brien Basin",dataset:"O'Brien Basin"}],undefined,["O’Brien Basin"]);
+  assert.deepEqual(placeOnly,pagesToRead(runs,[{web:"O'Brien Basin",dataset:"O'Brien Basin"}]));
+  assert.deepEqual(runs[0].hits,[global,regional,wrong]);
+});

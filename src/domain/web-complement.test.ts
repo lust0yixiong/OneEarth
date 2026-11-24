@@ -207,3 +207,25 @@ test("phased web lookup reuses completed keyword calls and spends its read budge
   assert.equal(result.filter(r=>r.engine==="DeepSeek Fetch").length,1);
   assert.equal(initial.some(r=>r.engine==="DeepSeek Fetch"),false,"initial trace is retained without later mutation");
 });
+
+test("failed web planning retains named region hints without reissuing the initial searches",async()=>{
+  const question="核对银谷流域的雪深观测记录",queries=[{web:"Silver Valley snow depth",dataset:"snow depth"}];
+  const hit={title:"Silver Valley snow depth",url:"https://example.org/snow",snippet:"Catalog entry"};
+  const initial:SearchRun[]=[{engine:"Bing",query:queries[0].web,status:"done",hits:[hit]}];
+  const result=await requiredDataSearch(question,new AbortController().signal,{
+    plan:async()=>JSON.stringify({...plan,dataQuestion:question,web:queries,paper:{...plan.paper,region:["Silver Valley"]},
+      researchIntent:{purpose:"核对雪深观测",task:question,region:"银谷流域",time:null,months:[]}}),
+    paper:async()=>({records:[],incomplete:[],tools:[]}),haina:()=>haina,report:()=>{},stage:()=>{},
+    refineWeb:async()=>{throw Error("fixture planning deadline");},
+    web:async(input,options)=>{
+      assert.deepEqual(input,queries);
+      if(options?.readPages===false)return initial;
+      assert.deepEqual(options?.regionHints,["银谷流域","Silver Valley"]);
+      assert.equal(options?.initialRuns,initial);
+      assert.deepEqual(options?.focus?.queries,[]);
+      return initial;
+    },
+  });
+  assert.equal(result.searches,initial);
+  assert.match(result.issues.join(),/规划未完成/);
+});
