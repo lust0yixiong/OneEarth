@@ -39,12 +39,12 @@ export async function fetchField(id:Exclude<RegionalId,"c40"|"forest">,signal:Ab
   return {rain:null,data:await res.json()};
 }
 let baseCanvas:HTMLCanvasElement|undefined;
-export function fieldTexture(id:RegionalId,frame:number,{rain,data}:FieldData){
-    if(id==="forest"||id==="c40")return null;
-    const base=baseCanvas??=basemap(),info=globeCases[id];
-    if(rain)return null;
-    const c=document.createElement("canvas");c.width=base.width;c.height=base.height;
-    const ctx=c.getContext("2d")!;ctx.drawImage(base,0,0);
+export function fieldTexture(id:RegionalId,frame:number,{rain,data}:FieldData,overlay=false){
+    if(id==="forest"||id==="c40"||rain)return null;
+    const info=globeCases[id];
+    const c=document.createElement("canvas");c.width=textureWidth;c.height=textureHeight;
+    const ctx=c.getContext("2d")!;
+    if(!overlay)ctx.drawImage(baseCanvas??=basemap(),0,0);
     if(data){
       if(data.network){ctx.strokeStyle="#a2c8c7";ctx.lineWidth=.65;ctx.beginPath();for(const line of data.network)line.forEach(([x,y],i)=>i?ctx.lineTo((x+180)*4,(90-y)*4):ctx.moveTo((x+180)*4,(90-y)*4));ctx.stroke();}
       data.points.forEach((p,i)=>{const v=data.frames[frame][i];if(v===null||v<=0)return;
@@ -93,7 +93,7 @@ export function createFieldPainter(){
       }
     }
     const target=buffer.getContext("2d")!,image=target.createImageData(w,h);
-    for(let i=0;i<indices.length;i++){const j=indices[i];if(j<0)continue;for(let c=0;c<3;c++)image.data[4*i+c]=texture[j+c]*shading[i];image.data[4*i+3]=255;}
+    for(let i=0;i<indices.length;i++){const j=indices[i];if(j<0)continue;for(let c=0;c<3;c++)image.data[4*i+c]=texture[j+c]*shading[i];image.data[4*i+3]=texture[j+3];}
     target.putImageData(image,0,0);ctx.drawImage(buffer,left,top,dw,dh);
   };
 }

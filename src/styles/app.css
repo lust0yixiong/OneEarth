@@ -3342,3 +3342,59 @@ html[data-panel-interaction="move"] * {
   outline: 2px solid #713e16;
   outline-offset: 3px;
 }
+
+.globe-layer-menu {
+  box-sizing: border-box;
+  width: min(310px, calc(100% - 28px));
+  max-height: calc(100% - 124px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.globe-docked .globe-layer-menu {
+  bottom: 12px;
+  width: min(310px, calc(100% - 28px));
+  max-height: calc(100% - 24px);
+}
+.globe-layer-menu fieldset { margin: 0; padding: 0; min-width: 0; border: 0; }
+.globe-layer-menu legend { padding: 0 0 4px; font-size: 11px; font-weight: 600; color: #315847; }
+.globe-layer-menu .basemap-list label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.globe-layer-menu .basemap-list label:hover { background: #f1f7ef; }
+.globe-layer-menu .basemap-list label.active { border-color: #a9cdbb; background: #eef6ef; }
+.globe-layer-menu input { flex: none; accent-color: #3c7867; }
+.globe-layer-menu .globe-dataset-list { margin-top: 12px; }
+.globe-dataset-choice {
+  display: flex;
+  min-height: 34px;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid #e7eee9;
+  font-size: 11px;
+  color: #315847;
+}
+.globe-dataset-choice label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; cursor: pointer; }
+.globe-dataset-choice label span { overflow-wrap: anywhere; }
+.globe-dataset-focus {
+  flex: none;
+  padding: 4px 6px;
+  border: 1px solid #cbded3;
+  border-radius: 6px;
+  color: #315847;
+  background: #f6faf5;
+  font-size: 10px;
+}
+.globe-dataset-focus[aria-pressed="true"] { color: #205b48; background: #e2efe5; }
+.globe-dataset-focus:disabled { opacity: 0.58; }
+.globe-dataset-list p { color: #5c7263; }
+@media (max-width: 700px) {
+  .globe-layer-menu { max-height: calc(100% - 162px); }
+  .globe-docked .globe-layer-menu { max-height: calc(100% - 24px); }
+}

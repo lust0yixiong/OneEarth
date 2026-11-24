@@ -144,7 +144,7 @@ export function createGeoImagePainter() {
     target.putImageData(image, 0, 0);
     const previousAlpha = ctx.globalAlpha;
     const previousSmoothing = ctx.imageSmoothingEnabled;
-    ctx.globalAlpha = Math.max(0, Math.min(1, frame.opacity ?? 0.94));
+    ctx.globalAlpha = previousAlpha * Math.max(0, Math.min(1, frame.opacity ?? 0.94));
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(buffer, left, top, dw, dh);
     ctx.globalAlpha = previousAlpha;

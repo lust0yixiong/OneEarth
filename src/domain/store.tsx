@@ -1,3 +1,4 @@
+import { datasetLayerFromView, decodeGlobeLayers, encodeGlobeLayers, focusedDatasetLayer, globeDatasetLayer, setDatasetLayer, type FieldLayerSelection, type GlobeDatasetLayer } from "./globe-dataset-layers";
 import {workspaceEffectActivity} from "./workspace-effect";
 import {availableChatOperations, chatCandidateBatch, chatCandidateItems, chatCandidateKey, saveChatResearchList} from "./chat-workspace-operations";
 import {validWorkspaceOperationKind, workspaceCandidateOperationAllowed} from "./workspace-operations";
@@ -123,7 +124,10 @@ export interface State {
   overview: "catalog" | "simulation";
   origin: ReturnPoint | null;
   publicLayer: PublicLayerSelection | null;
-  fieldLayer: {id:RegionalId;frame:number;year?:number;city?:string;date?:string} | null;
+  fieldLayer: FieldLayerSelection | null;
+  globeLayers: GlobeDatasetLayer[];
+  globeLayerFocus: string | null;
+  globeLayerFit: string | null;
   visualization: VisualizationState | null;
   view: View;
   caseId: string | null;
@@ -162,7 +166,7 @@ const workspaceFields = [
   "inspector", "mapResult", "search", "overview", "origin", "visualization", "fieldLayer", "publicLayer", "dataView",
   "comparisonYear", "listLibraryOpen", "citation", "evidence", "previewKind", "readerPosition",
   "chatOpen", "saved", "clarificationReply",
-  "researchRegion",
+  "researchRegion", "globeLayers", "globeLayerFocus",
 ] as const satisfies readonly (keyof State)[];
 export type WorkspaceSnapshot = Pick<State, (typeof workspaceFields)[number]> & { resultId?: string | null };
 function captureWorkspace(state: State) {
@@ -189,6 +193,7 @@ type ReturnPoint = Pick<
   | "visualization"
   | "fieldLayer"
   | "publicLayer"
+  | "globeLayerFocus"
   | "search"
   | "citation"
   | "mapResult"
@@ -207,7 +212,7 @@ function remember(s: State): ReturnPoint {
     layer,
     mesh,
     dataView,
-    visualization,fieldLayer,publicLayer,
+    visualization,fieldLayer,publicLayer,globeLayerFocus,
     search,
     citation,
     overview,
@@ -226,7 +231,7 @@ function remember(s: State): ReturnPoint {
     layer,
     mesh,
     dataView,
-    visualization,fieldLayer,publicLayer,
+    visualization,fieldLayer,publicLayer,globeLayerFocus,
     search,
     citation,
     overview,
@@ -378,8 +383,14 @@ function initial(sessionId: string, url = new URL(location.href), saved: Record<
     filters.type = "";
     filters.source = "";
   }
-  return {
+  const linkedLayers=decodeGlobeLayers(url.searchParams.get("globeLayers"));
+  const legacyLayer=datasetLayerFromView({publicLayer,fieldLayer,visualization,dataView,caseId,filters,selection:null});
+  const focused=linkedLayers?.focus ?? (linkedLayers ? null : legacyLayer);
+  const state:State = {
     sessionId,
+    globeLayers:linkedLayers?.layers ?? (legacyLayer ? [legacyLayer] : []),
+    globeLayerFocus:focused?.id ?? null,
+    globeLayerFit:linkedLayers ? null : legacyLayer?.id ?? null,
     flight:null,mapFocus:null,researchRegion:null,
     resumeLinkedWorkspace: false,
     sessionError: null,
@@ -463,6 +474,32 @@ function initial(sessionId: string, url = new URL(location.href), saved: Record<
     previewKind: null,
     dataView,
   };
+  if(linkedLayers){
+    Object.assign(state,focusProjection(focused));
+    if(linkedLayers.camera)state.camera=linkedLayers.camera;
+    state.mesh=false;
+  }
+  return state;
+}
+function focusProjection(layer:GlobeDatasetLayer|null) {
+  return {
+    ...focusedDatasetLayer(layer),
+    caseId:layer?.kind==="data" ? layer.caseId : layer?.kind==="wind" ? "wind" : null,
+    filters:layer?.kind==="data" ? layer.filters : emptyFilters(),
+    selection:layer?.kind==="data" ? layer.gridSelection : null,
+  };
+}
+function restoreGlobeState(state:State, workspace:Partial<WorkspaceSnapshot>) {
+  if(workspace.globeLayers && Object.hasOwn(workspace,"globeLayerFocus")){
+    state.globeLayerFit=null;
+    return;
+  }
+  const layer=datasetLayerFromView(state);
+  if(layer){
+    state.globeLayers=[layer];
+    state.globeLayerFocus=layer.id;
+    state.globeLayerFit=null;
+  }
 }
 const sessionFailure = "浏览器未能保存会话。请检查本地存储空间或权限，保留此标签页以便重试。";
 async function loadInitialSession(): Promise<State> {
@@ -498,6 +535,7 @@ async function loadInitialSession(): Promise<State> {
       const { resultId, ...workspace } = record.workspace;
       if (!url.searchParams.has("result") || (remembered && resultId === url.searchParams.get("result"))) {
         Object.assign(state, workspace);
+        restoreGlobeState(state,workspace);
         if (remembered) state.readerPosition = restoreReaderCheckpoint(state.sessionId, state.evidence, state.readerPosition);
         state.resumeLinkedWorkspace = !!resultId && state.linkStatus === "loading";
       }
@@ -560,7 +598,26 @@ function normalizeInspector(state: State): State {
 }
 
 function reducer(s: State, a: Action): State {
-  if (a.type === "patch") return normalizeInspector({ ...s, ...a.value });
+  if (a.type === "patch") {
+    const next={...s,...a.value};
+    const explicit=Object.hasOwn(a.value,"globeLayers")||Object.hasOwn(a.value,"globeLayerFocus");
+    const selectionChanged=(["publicLayer","fieldLayer","visualization","dataView"] as const).some(key=>next[key]!==s[key]);
+    const scoped=next.dataView && (next.filters!==s.filters || next.selection!==s.selection);
+    if(!explicit && (selectionChanged || scoped)){
+      const layer=datasetLayerFromView(next);
+      if(layer && next.view==="earth"){
+        const old=s.globeLayers.find(item=>item.id===layer.id);
+        next.globeLayers=setDatasetLayer(s.globeLayers,old?.visible===false ? {...layer,visible:false} : layer);
+        next.globeLayerFocus=old?.visible===false ? null : layer.id;
+        if(s.globeLayerFocus!==layer.id && !Object.hasOwn(a.value,"globeLayerFit"))
+          next.globeLayerFit=old?.visible===false ? null : layer.id;
+      }else{
+        next.globeLayerFocus=null;
+        next.globeLayerFit=null;
+      }
+    }
+    return normalizeInspector(next);
+  }
   if (s.sessionId !== a.sessionId) return s;
   const messages = mergeMessages(s.messages, a.messages);
   return messages === s.messages ? s : { ...s, messages };
@@ -590,7 +647,7 @@ function useWorkspaceValue(initialState: State) {
     const scopeChange=["caseId","view","mapResult","filters","selection","gridSystem"].some(key=>Object.hasOwn(value,key));
     if(scopeChange && !Object.hasOwn(value,"flight"))value={...value,flight:null};
     if(["caseId","mapResult","filters"].some(key=>Object.hasOwn(value,key)) && !Object.hasOwn(value,"mapFocus"))value={...value,mapFocus:null};
-    const controlChange = (["fieldLayer", "visualization", "dataView", "inspector", "evidence", "readerPosition", "mapFocus"] as const)
+    const controlChange = (["fieldLayer", "visualization", "dataView", "globeLayers", "globeLayerFocus", "inspector", "evidence", "readerPosition", "mapFocus"] as const)
       .some(key => Object.hasOwn(value, key) && value[key] !== latest.current[key]);
     if (scopeChange || controlChange) serial.current++;
     if (Object.hasOwn(value, "caseId") && !Object.hasOwn(value, "dataView"))
@@ -703,9 +760,35 @@ function useWorkspaceValue(initialState: State) {
     void poll();
     return ()=>{active=false;controller.abort();clearTimeout(timer);};
   },[patch]);
+  const selectGlobeLayer = useCallback((layer:GlobeDatasetLayer|null, globeLayers:GlobeDatasetLayer[]) => {
+    const current=latest.current;
+    const focus=layer?.id ?? null;
+    if(focus===current.globeLayerFocus){
+      patch({globeLayers});
+      return;
+    }
+    patch({...focusProjection(layer),globeLayers,globeLayerFocus:focus,globeLayerFit:null,
+      origin:current.origin, overview:"catalog",mesh:false,flight:null,mapResult:null,inspector:null,evidence:null});
+  },[patch]);
+  const focusGlobeLayer = useCallback((id:string) => {
+    const current=latest.current;
+    const layer=current.globeLayers.find(item=>item.id===id&&item.visible);
+    if(layer&&current.globeLayerFocus!==id)selectGlobeLayer(layer,current.globeLayers);
+  },[selectGlobeLayer]);
+  const setGlobeLayerVisible = useCallback((id:string,visible:boolean) => {
+    const current=latest.current;
+    const old=current.globeLayers.find(item=>item.id===id);
+    if(!old||old.visible===visible)return;
+    const layers=setDatasetLayer(current.globeLayers,{...old,visible});
+    const focus=layers.find(item=>item.visible&&item.id===current.globeLayerFocus)
+      ?? (visible ? layers.find(item=>item.id===id) : layers.find(item=>item.visible));
+    selectGlobeLayer(focus??null,layers);
+  },[selectGlobeLayer]);
   const noteManualNavigation = useCallback(() => {
     serial.current++;
-    if (latest.current.flight?.kind === "layer-control") patch({flight:null});
+    const current=latest.current;
+    if(current.flight?.kind==="layer-control" || current.globeLayerFit)
+      patch({globeLayerFit:null,...(current.flight?.kind==="layer-control" ? {flight:null} : {})});
   }, [patch]);
   const paperCatalogLoaded=useRef(false);
   useEffect(() => {
@@ -851,6 +934,7 @@ function useWorkspaceValue(initialState: State) {
       if (record) {
         const { resultId: _resultId, ...workspace } = record.workspace;
         Object.assign(next, workspace, { messages: record.messages });
+        restoreGlobeState(next,workspace);
       }
       next.chatOpen = true;
       next.pushFeed = latest.current.pushFeed;
@@ -925,8 +1009,11 @@ function useWorkspaceValue(initialState: State) {
       url.searchParams.delete("hainaView");
       url.searchParams.delete("hainaMonth");
     }
+    if(state.globeLayers.length>1 || state.globeLayers.some(item=>!item.visible) || (state.globeLayers.length && !state.globeLayerFocus))
+      url.searchParams.set("globeLayers",encodeGlobeLayers(state.globeLayers,state.globeLayerFocus,state.camera));
+    else url.searchParams.delete("globeLayers");
     history.replaceState({ ...history.state, oneearthSession: state.sessionId, oneearthPath: url.pathname + url.search }, "", url);
-  }, [state.linkStatus, state.sessionId, state.caseId, state.view, state.search.source,state.search.section,state.search.page,state.search.query,state.search.type,state.search.capability,state.search.savedOnly, state.filters.source, state.mapResult, state.dataView, state.visualization,state.fieldLayer?.id,state.fieldLayer?.year,state.fieldLayer?.frame,state.fieldLayer?.city,state.fieldLayer?.date,state.publicLayer?.id,state.publicLayer?.view,state.publicLayer?.month]);
+  }, [state.globeLayers,state.globeLayerFocus,state.globeLayers.length>1 ? state.camera : null,state.linkStatus, state.sessionId, state.caseId, state.view, state.search.source,state.search.section,state.search.page,state.search.query,state.search.type,state.search.capability,state.search.savedOnly, state.filters.source, state.mapResult, state.dataView, state.visualization,state.fieldLayer?.id,state.fieldLayer?.year,state.fieldLayer?.frame,state.fieldLayer?.city,state.fieldLayer?.date,state.publicLayer?.id,state.publicLayer?.view,state.publicLayer?.month]);
   useEffect(() => () => {
     for (const entry of requests.current.values()) entry.controller.abort();
     requests.current.clear();
@@ -976,20 +1063,16 @@ function useWorkspaceValue(initialState: State) {
     [patch],
   );
   const leaveDetail = useCallback(() => {
-    const s = latest.current;
-    patch(
-      s.origin
-        ? {
-            ...s.origin,
-            evidence: null,
-            error: null,
-          }
-        : {
-            visualization: null,
-            dataView: null,
-            selection: null,
-          },
-    );
+    const s=latest.current,origin=s.origin;
+    if(!origin){
+      patch({...focusedDatasetLayer(null),globeLayerFocus:null,globeLayerFit:null,selection:null});
+      return;
+    }
+    const oldFocus=origin.globeLayerFocus ?? datasetLayerFromView(origin)?.id;
+    const focused=s.globeLayers.find(item=>item.visible&&item.id===oldFocus);
+    patch({...origin,...(oldFocus ? focusProjection(focused??null) : {}),
+      globeLayerFocus:focused?.id??null,globeLayerFit:null,evidence:null,error:null});
+
   }, [patch]);
   const mapCandidates = (ids: string[]) => {
     const s = latest.current;
@@ -1267,27 +1350,16 @@ function useWorkspaceValue(initialState: State) {
           : (s.view === "discover"
               ? s.search.result?.selection
               : s.selection) || null;
-      const dataView = scopedDataView(
-        caseId,
-        index,
-        filters,
-        selected,
-        s.dataView,
-      );
+      const existing=s.globeLayers.find(layer=>layer.kind==="data"&&layer.caseId===caseId&&layer.needIndex===index);
+      const dataView = scopedDataView(caseId,index,filters,selected,existing?.kind==="data" ? existing.selection : s.dataView);
       if (!dataView) {
         patch({ error: "当前条件下尚无可视化的数据内容，可先查看已核材料。" });
         return;
       }
-      patch({
-        origin: s.inspector ? remember(s) : s.origin || remember(s),
-        caseId,
-        filters,
-        dataView,
-        view: "earth",
-        evidence: null,
-        selection: selected,
-        layer: "all",
-        camera: dataCamera(dataView),
+      const layer=globeDatasetLayer({kind:"data",selection:dataView,caseId,needIndex:index,filters,gridSelection:selected});
+      patch({...focusProjection(layer),view:"earth",globeLayers:setDatasetLayer(s.globeLayers,layer),
+        globeLayerFocus:layer.id,globeLayerFit:null,origin:s.inspector ? remember(s) : s.origin || remember(s),
+        mesh:false,inspector:null,evidence:null,layer:"all",camera:dataCamera(dataView),
       });
     },
     [patch],
@@ -1962,62 +2034,55 @@ function useWorkspaceValue(initialState: State) {
   }, [state.sessionId, executeDiscovery, patch]);
   const openPublicLayer = useCallback((id:PublicLayerId) => {
     const current=latest.current;
-    if(current.view==="earth" && current.publicLayer?.id===id){
+    const existing=current.globeLayers.find(layer=>layer.kind==="public"&&layer.selection.id===id);
+    if(current.view==="earth" && current.globeLayerFocus===existing?.id){
       patch({inspector:null,evidence:null});
       return;
     }
-    patch({publicLayer:{id},view:"earth",caseId:null,fieldLayer:null,visualization:null,dataView:null,
-      filters:emptyFilters(),overview:"catalog",mapResult:null,selection:null,mesh:false,layer:"all",
+    const layer=globeDatasetLayer({kind:"public",selection:existing?.kind==="public" ? existing.selection : {id}});
+    patch({...focusProjection(layer),view:"earth",globeLayers:setDatasetLayer(current.globeLayers,layer),globeLayerFocus:layer.id,
+      globeLayerFit:id===1835833&&current.globeLayers.some(item=>item.visible) ? null : layer.id,
+      overview:"catalog",mapResult:null,mesh:false,layer:"all",
       origin:current.inspector ? remember(current) : current.origin || remember(current),
       inspector:null,evidence:null,error:null});
   },[patch]);
   const openVisualization = useCallback(
     (id: "gfs-wind" | RegionalId | "catalog", selection?: Selection | null) => {
       const current=latest.current;
-      if(current.view==="earth" && current.fieldLayer?.id===id){patch({inspector:null,evidence:null});return;}
-      if(id!=="gfs-wind"){
-        const fieldLayer=id==="catalog"?null:{id,frame:globeCases[id].month};
-        const camera=fieldLayer?{center:globeCases[fieldLayer.id].center,zoom:globeCases[fieldLayer.id].zoom,reason:globeCases[fieldLayer.id].title}:defaultCamera;
-        const layerAssetId=id==="forest"?"haina:1846764":id==="c40"?"haina:1846639":undefined;
-        const layerAsset=layerAssetId?assetById.get(layerAssetId):undefined;
-        patch({view:"earth",caseId:null,fieldLayer,visualization:null,dataView:null,overview:"catalog",filters:emptyFilters(),
-          selection:null,layer:"all",mesh:!fieldLayer,origin:current.origin || remember(current),camera,inspector:null,evidence:null,error:null,
-          ...(layerAsset?{draftScope:mergeScope(current.draftScope || [],[datasetScope(layerAsset)])}:{})});
+      if(id==="catalog"){
+        const globeLayers=current.globeLayers.map(layer=>layer.visible ? {...layer,visible:false} : layer);
+        patch({...focusProjection(null),view:"earth",globeLayers,globeLayerFocus:null,globeLayerFit:null,overview:"catalog",
+          mesh:true,layer:"all",origin:current.origin || remember(current),camera:defaultCamera,inspector:null,evidence:null,error:null});
         return;
       }
-      if (
-        latest.current.visualization?.id === id &&
-        latest.current.view === "earth"
-      )
+      const existing=current.globeLayers.find(layer=>layer.kind==="field" ? layer.selection.id===id : layer.kind==="wind" && id==="gfs-wind");
+      if(current.view==="earth" && current.globeLayerFocus===existing?.id){
+        patch({inspector:null,evidence:null,...(selection && id==="gfs-wind" ? {selection,camera:{...current.camera,center:selection.point}} : {})});
         return;
-      const recipe = visualizationCatalog.find((v) => v.id === id);
-      if (!recipe) return;
-      const s = latest.current;
-      const selected =
-        selection !== undefined
-          ? selection
-          : (s.view === "discover"
-              ? s.search.result?.selection
-              : s.selection) || null;
-      const visualization = defaultWindState();
-      if (matchMedia("(prefers-reduced-motion: reduce)").matches)
-        visualization.playing = false;
-      patch({
-        origin: s.inspector ? remember(s) : s.origin || remember(s),
-        caseId: recipe.caseId,
-        visualization,
-        dataView: null,
-        filters: emptyFilters(),
-        selection: selected,
-        evidence: null,
-        citation: null,
-        view: "earth",
-        mesh: false,
-        layer: "all",
-        error: null,
-        camera: selected
-          ? { ...s.camera, center: selected.point }
-          : { center: [105, 20], zoom: 1, reason: "全球 GFS 风场" },
+      }
+      if(id!=="gfs-wind"){
+        const info=globeCases[id];
+        const fieldLayer=existing?.kind==="field" ? existing.selection : {id,frame:info.month};
+        const layer=globeDatasetLayer({kind:"field",selection:fieldLayer});
+        const layerAsset=assetById.get(layer.id);
+        patch({...focusProjection(layer),view:"earth",globeLayers:setDatasetLayer(current.globeLayers,layer),
+          globeLayerFocus:layer.id,globeLayerFit:layer.id,overview:"catalog",layer:"all",mesh:false,
+          origin:current.inspector ? remember(current) : current.origin || remember(current),
+          camera:{center:info.center,zoom:info.zoom,reason:info.title},
+          inspector:null,evidence:null,error:null,
+          ...((id==="forest"||id==="c40")&&layerAsset?{draftScope:mergeScope(current.draftScope || [],[datasetScope(layerAsset)])}:{})});
+        return;
+      }
+      if(!visualizationCatalog.some(recipe=>recipe.id===id))return;
+      const selected=selection!==undefined ? selection : (current.view==="discover"
+        ? current.search.result?.selection : current.selection) || null;
+      const visualization=existing?.kind==="wind" ? existing.selection : defaultWindState();
+      const layer=globeDatasetLayer({kind:"wind",selection:matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? {...visualization,playing:false} : visualization});
+      patch({...focusProjection(layer),view:"earth",globeLayers:setDatasetLayer(current.globeLayers,layer),
+        globeLayerFocus:layer.id,globeLayerFit:null,origin:current.inspector ? remember(current) : current.origin || remember(current),
+        selection:selected,evidence:null,citation:null,mesh:false,layer:"all",error:null,
+        camera:selected ? {...current.camera,center:selected.point} : {center:[105,20],zoom:1,reason:"全球 GFS 风场"},
       });
     },
     [patch],
@@ -2137,7 +2202,7 @@ function useWorkspaceValue(initialState: State) {
     inspectAsset,
     openData,
     openVisualization,
-    openPublicLayer,
+    openPublicLayer,focusGlobeLayer,setGlobeLayerVisible,
     mapCandidates,
     activateAnswer,flyToGrid,flyToEvidence,focusAnswerEvidence,flyToResearchRegion,
     showCandidates,

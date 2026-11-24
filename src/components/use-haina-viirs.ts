@@ -1,4 +1,4 @@
-import {useEffect,useMemo,useRef,useState} from "react";
+import {useCallback,useEffect,useMemo,useRef,useState} from "react";
 import {fetchViirsSample,viirsTilePath,type ViirsPublication,type ViirsSample} from "../domain/haina-published-raster";
 import type {Coordinate} from "../domain/types";
 import {tileKey,viirsViewportPlan,type HainaViewport} from "../globe/haina-viewport";
@@ -67,7 +67,9 @@ export function useHainaViirsTiles(publication:ViirsPublication|undefined,viewpo
     });
     return tiles.length?{level:plan.level,revision:revision!,tiles}:undefined;
   },[plan,revision,cacheVersion]);
-  return {raster,ready,failed,empty:!!plan&&!plan.target.length,retry:()=>retry(value=>value+1)};
+  const empty=!!plan&&!plan.target.length;
+  const retryTiles=useCallback(()=>retry(value=>value+1),[]);
+  return useMemo(()=>({raster,ready,failed,empty,retry:retryTiles}),[raster,ready,failed,empty,retryTiles]);
 }
 
 export function useHainaViirsSample(publication:ViirsPublication|undefined,point:Coordinate|undefined) {

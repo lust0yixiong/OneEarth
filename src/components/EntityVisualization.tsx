@@ -9,7 +9,7 @@ import {useWorkspace} from "../domain/store";
 
 export function EntityVisualization({asset,hidePublicButton=false}:{asset:Asset;hidePublicButton?:boolean}) {
   const {openVisualization,openPublicLayer}=useWorkspace();
-  const pilot=publicLayerForDataset(asset.id);
+  const pilot=publicLayerForDataset(asset.datasetId) ?? publicLayerForDataset(asset.id);
   const publication=usePublicLayerManifest(hidePublicButton?undefined:pilot);
   const layer=asset.datasetId?regionalForDataset(asset.datasetId):undefined;
   const entities=visualizationEntities(asset);

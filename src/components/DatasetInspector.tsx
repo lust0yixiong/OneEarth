@@ -390,8 +390,8 @@ function DataGlobeButton({asset,scope,published=false}:{
   published?:boolean;
   scope?:{filters:Filters;selection:Selection|null};
 }) {
-  const {state:s,patch,openData,openVisualization,openPublicLayer}=useWorkspace();
-  const pilot=publicLayerForDataset(asset?.id);
+  const {state:s,openData,openVisualization,openPublicLayer}=useWorkspace();
+  const pilot=publicLayerForDataset(asset?.datasetId) ?? publicLayerForDataset(asset?.id);
   const publication=usePublicLayerManifest(published?undefined:pilot);
   const readyPilot=published||!!publication.manifest;
   const layer=asset ? regionalForDataset(asset.datasetId) : undefined;
@@ -420,10 +420,7 @@ function DataGlobeButton({asset,scope,published=false}:{
     } else if (layer && readyLayer) {
       openVisualization(layer,null);
     } else if (wind && scope) {
-      if (s.visualization?.id==="gfs-wind")
-        patch({fieldLayer:null,dataView:null,inspector:null,evidence:null,selection:scope.selection,
-          ...(scope.selection ? {camera:{...s.camera,center:scope.selection.point}} : {})});
-      else openVisualization("gfs-wind",scope.selection);
+      openVisualization("gfs-wind",scope.selection);
     } else if (native && asset && scope) {
       openData(asset.caseId,asset.needIndex,scope.filters,scope.selection);
     }
@@ -487,7 +484,8 @@ export function DatasetInspector({haina}:{haina:HainaPublicLayer}) {
   const parent = "parent" in item ? item.parent : undefined;
   const collection = batch || parent;
   const comparison = "comparison" in item ? item.comparison : null;
-  const activeHaina=s.view==="earth" && s.publicLayer && publicLayerForDataset(asset?.id)===s.publicLayer.id ? s.publicLayer : null;
+  const pilot=publicLayerForDataset(asset?.datasetId) ?? publicLayerForDataset(asset?.id);
+  const activeHaina=s.view==="earth" && s.publicLayer?.id===pilot ? s.publicLayer : null;
   return (
     <SourcePreviewSurface><section
       aria-label="数据速览" onClick={previewWeb}

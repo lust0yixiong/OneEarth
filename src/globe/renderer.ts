@@ -57,12 +57,22 @@ import type {
   VisualizationState,
   Camera,
   Filters,
+  GridSpec,
   GridSystem,
   MapLayer,
   Selection,
   Coordinate,
 } from "../domain/types";
+type PublicOverlay=Pick<Scene,"publicPoints"|"publicImage"|"publicRaster"|"publicSample"|"publicPick"|"publicPatches"|"publicViirs">;
+export type GlobeLayerRender=
+  | (PublicOverlay & {id:string;kind:"public";selection:PublicLayerSelection})
+  | {id:string;kind:"field";selection:{id:string;frame:number};image?:GeoImageFrame|null;texture?:Uint8ClampedArray|null;rain?:RainTiles|null}
+  | {id:string;kind:"wind";selection:VisualizationState}
+  | {id:string;kind:"data";selection:DataView;filters:Filters;gridSelection:Selection|null};
+
 export interface Scene {
+  datasetLayers?:GlobeLayerRender[];
+  datasetFocus?:string|null;
   flight?:{kind?:"research-region"|"place"|"grid"|"layer-control"}|null;
   researchRegion?:import("../domain/research-region").ResearchRegionLayer|null;
   observationGlobe?:boolean;
@@ -254,9 +264,14 @@ export function createRenderer(
   }
   const drawViirs=createViirsPainter();
   let publicViewport:HainaViewport|undefined;
+  const imagePainters=new Map<string,ReturnType<typeof createGeoImagePainter>>();
   let patchTargets:{patch:HainaPatch;x:number;y:number;coarse:boolean}[]=[];
   function mapViewport(scene:Scene,width:number,height:number):HainaViewport|undefined {
-    const datasetId=scene.publicLayer?.id;
+    const publicLayers=scene.datasetLayers?.filter(layer=>layer.kind==="public");
+    const datasetId=publicLayers
+      ? publicLayers.find(layer=>layer.selection.id===1835833)?.selection.id
+        ?? publicLayers.find(layer=>layer.selection.id===1846104)?.selection.id
+      : scene.publicLayer?.id;
     if(datasetId!==1835833&&datasetId!==1846104)return undefined;
     const center=scene.camera.center,radius=projection.scale();
     if(publicViewport?.datasetId===datasetId && publicViewport.width===width && publicViewport.height===height
@@ -264,9 +279,9 @@ export function createRenderer(
     return {datasetId,center,radius,width,height};
   }
 
-  function drawPatchDirectory(scene:Scene,viewport:HainaViewport) {
-    const selected=scene.publicLayer?.view?.replace("-","_");
-    for(const patch of scene.publicPatches??[]){
+  function drawPatchDirectory(selection:PublicLayerSelection,patches:HainaPatch[],viewport:HainaViewport,interactive:boolean) {
+    const selected=selection.view?.replace("-","_");
+    for(const patch of patches){
       if(!hainaBoundsOnScreen(patch.bounds,viewport)||geoDistance(viewport.center,patch.center)>=Math.PI/2)continue;
       const [x,y]=projection(patch.center)!;
       const [west,south,east,north]=patch.bounds;
@@ -281,7 +296,7 @@ export function createRenderer(
         paint({type:"Polygon",coordinates:[patch.footprint]},
           null,color,0.92,patch.id===selected?1.8:1.2);
       }
-      patchTargets.push({patch,x,y,coarse});
+      if(interactive)patchTargets.push({patch,x,y,coarse});
     }
   }
 
@@ -313,12 +328,124 @@ export function createRenderer(
     ctx!.stroke();
     ctx!.restore();
   }
+  function drawStack(scene:Scene,stack:GlobeLayerRender[],focusWidth:number,g:GridSpec,showMesh:boolean,
+    publicMarkers:NonNullable<FrameInfo["publicMarkers"]>) {
+    const {center,zoom}=scene.camera;
+    const wind=stack.find(layer=>layer.kind==="wind");
+    const windData=wind&&getWindData();
+    const dedicatedWind=stack.length===1&&wind&&!scene.basemap;
+    const dark=dedicatedWind&&scene.windTheme!=="light";
+    paint({type:"Sphere"},dark?"#092637":"#dcebf2",dark?"#749fad":"#9bb6c3");
+    paint(land,dark?"#a4b8a709":"#f5f8f4",dark?"#b9d3cb88":"#b4c6bf");
+    if(scene.basemap)drawGeoImage(ctx!,projection,scene.basemap,width,height,interacting);
+    if(zoom<15)paint(graticule,null,dark?"#b5d7d22b":"#bad0d7",0.65);
+
+    const rasterCount=stack.filter(layer=>layer.kind==="public"?layer.publicImage||layer.publicViirs:
+      layer.kind==="field"?layer.image||layer.texture||layer.rain:
+      layer.kind==="wind"&&layer.selection.color&&windData).length;
+    const opacity=rasterCount>1?.66:1;
+    const drawn:string[]=[];
+    let visibleCells=0;
+    ctx!.save();
+    ctx!.beginPath();ctx!.rect(0,0,focusWidth,height);ctx!.clip();
+    ctx!.beginPath();ctx!.arc(...projection.translate(),projection.scale(),0,Math.PI*2);ctx!.clip();
+    for(const layer of stack){
+      let rendered=false;
+      const frameImage=layer.kind==="public"?layer.publicImage:layer.kind==="field"?layer.image:undefined;
+      ctx!.save();ctx!.globalAlpha=opacity;
+      if(frameImage){
+        let painter=imagePainters.get(layer.id);
+        if(!painter){painter=createGeoImagePainter();imagePainters.set(layer.id,painter);}
+        painter(ctx!,projection,frameImage,focusWidth,height,interacting);
+        rendered=true;
+      }
+      if(layer.kind==="public"){
+        if(layer.publicViirs){
+          drawViirs(ctx!,projection,layer.publicViirs,focusWidth,height,interacting);
+          canvas.dataset.publicTileLevel=String(layer.publicViirs.level);
+          rendered=true;
+        }
+        if(rendered&&layer.id===scene.datasetFocus)
+          canvas.dataset.publicRaster=layer.publicRaster??(layer.publicViirs?"global":"");
+      }else if(layer.kind==="field"){
+        if(layer.rain){
+          rainPainter??=createRainPainter(schedule);
+          const level=rainPainter.draw(ctx!,projection,layer.rain,layer.selection.frame,focusWidth,height,focusWidth,interacting);
+          canvas.dataset.rainStep=String(rainFactors[level]*rainGrid.step);
+          canvas.dataset.rainLoading=String(layer.rain.loading);
+          rendered=true;
+        }else if(layer.texture){
+          drawField(ctx!,projection,layer.texture,focusWidth,height,interacting);
+          rendered=true;
+        }
+      }else if(layer.kind==="wind"&&windData){
+        if(layer.selection.color)drawWindSurface(ctx!,projection,windData,windFrame(layer.selection),focusWidth,height,scene.windTheme);
+        rendered=true;
+      }
+      ctx!.restore();
+      if(rendered)drawn.push(layer.id);
+    }
+    if(stack.some(layer=>layer.kind==="data"||layer.kind==="field")){
+      ctx!.save();ctx!.globalAlpha=stack.some(layer=>layer.kind==="field"&&layer.selection.id==="rain")?.4:1;
+      drawPolitical?.(ctx!,projection,interacting?1:zoom);ctx!.restore();
+    }
+    // Point symbols, exact coverage edges and observation lines stay legible above the rasters.
+    for(const layer of stack){
+      const focused=layer.id===scene.datasetFocus;
+      if(layer.kind==="data"){
+        const count=drawDataLayer(ctx!,projection,center,layer.selection,layer.filters,g,false,
+          focusWidth,height,zoom,focused?layer.gridSelection:null);
+        if(focused)visibleCells=count;
+        drawn.push(layer.id);
+      }
+      if(layer.kind!=="public")continue;
+      if(layer.publicPatches&&publicViewport){
+        drawPatchDirectory(layer.selection,layer.publicPatches,publicViewport,focused);
+        if(!drawn.includes(layer.id))drawn.push(layer.id);
+      }
+      if(layer.publicPoints){
+        for(const point of layer.publicPoints){
+          if(geoDistance(center,point.coordinate)>=Math.PI/2)continue;
+          const p=projection(point.coordinate);
+          if(!p||p[0]<8||p[0]>focusWidth-8||p[1]<8||p[1]>height-8)continue;
+          if(focused)publicMarkers.push({id:point.id,label:point.label,x:p[0],y:p[1]});
+          else{
+            ctx!.beginPath();ctx!.arc(p[0],p[1],4,0,Math.PI*2);
+            ctx!.fillStyle="#94521a";ctx!.fill();ctx!.strokeStyle="#fff7e5";ctx!.lineWidth=1;ctx!.stroke();
+          }
+        }
+        if(!drawn.includes(layer.id))drawn.push(layer.id);
+      }
+      if(focused&&layer.publicSample&&geoDistance(center,layer.publicSample)<Math.PI/2){
+        const p=projection(layer.publicSample);
+        if(p&&p[0]>=0&&p[0]<=focusWidth&&p[1]>=0&&p[1]<=height){
+          drawPointSelection(p);
+          canvas.dataset.publicSample=layer.publicSample.join(",");
+        }
+      }
+    }
+    const focus=stack.find(entry=>entry.id===scene.datasetFocus);
+    if(showMesh)drawGrid(ctx!,projection,center,g,focusWidth,height,zoom);
+    if(scene.selection&&focus&&(focus.kind==="wind"||focus.kind==="field")){
+      if(focus.kind==="field"&&focus.selection.id==="rain"){
+        const {west,north}=rainCell(scene.selection.point),{step}=rainGrid;
+        paint({type:"Polygon",coordinates:[[[west,north],[west+step,north],[west+step,north-step],[west,north-step],[west,north]]]},null,"#864c18",1,1.8);
+      }else paint(cellShape(scene.selection.id,scene.selection.grid).geometry,null,"#975411",1,1.5);
+    }
+    ctx!.restore();
+    for(const id of imagePainters.keys())if(!stack.some(layer=>layer.id===id))imagePainters.delete(id);
+    canvas.dataset.globeLayers=JSON.stringify(drawn);
+    if(focus?.kind==="wind")visibleCells=windData?windManifest.width*windManifest.height:0;
+    return {visibleCells,loading:focus?.kind==="wind"&&!windData?"正在载入真实 GFS 风场…":""};
+  }
+
   function draw() {
     frame = 0;
     if (disposed) return;
     const scene = {...getScene(),camera:motion.camera()};
     if(!scene.pending)pendingNavigation=false;
-    const catalog = !scene.dataView && !scene.caseId && !scene.fieldLayer && !scene.publicLayer && !scene.visualization && scene.overview !== "simulation";
+    const stack=scene.datasetLayers;
+    const catalog = !stack?.length && !scene.dataView && !scene.caseId && !scene.fieldLayer && !scene.publicLayer && !scene.visualization && scene.overview !== "simulation";
     // The catalogue's grid is its common foundation, including while the
     // distribution is loading or the user is rotating a smoothed view.
     const showMesh = scene.mesh;
@@ -327,7 +454,7 @@ export function createRenderer(
     width = canvas.clientWidth;
     height = canvas.clientHeight;
     if (!width || !height) return;
-    const baseOnly = firstFrame && !scene.caseId && !scene.dataView && !scene.fieldLayer && !scene.publicLayer && !scene.visualization;
+    const baseOnly = firstFrame && !stack?.length && !scene.caseId && !scene.dataView && !scene.fieldLayer && !scene.publicLayer && !scene.visualization;
     firstFrame = false;
     // Pointer coordinates and evidence stay in CSS pixels. Avoid four times the
     // raster work on Retina displays during motion; restore sharpness at rest.
@@ -374,7 +501,10 @@ export function createRenderer(
     canvas.dataset.publicRaster="";
     delete canvas.dataset.publicSample;
     delete canvas.dataset.publicTileLevel;
-    if(scene.publicLayer){
+    delete canvas.dataset.globeLayers;
+    if(stack?.length){
+      ({visibleCells,loading}=drawStack(scene,stack,focusWidth,g,showMesh,publicMarkers));
+    } else if(scene.publicLayer){
       paint({type:"Sphere"},"#dcebf2","#9bb6c3");
       paint(land,"#f5f8f4","#b4c6bf");
       if(scene.basemap)drawGeoImage(ctx!,projection,scene.basemap,width,height,interacting);
@@ -388,7 +518,7 @@ export function createRenderer(
         drawGeoImage(ctx!,projection,scene.publicImage,width,height,interacting);
         canvas.dataset.publicRaster=scene.publicRaster??"";
       }
-      if(scene.publicPatches&&publicViewport)drawPatchDirectory(scene,publicViewport);
+      if(scene.publicPatches&&publicViewport)drawPatchDirectory(scene.publicLayer,scene.publicPatches,publicViewport,true);
       if(scene.publicSample && geoDistance(center,scene.publicSample)<Math.PI/2){
         const point=projection(scene.publicSample);
         if(point && point[0]>=0 && point[0]<=width-(scene.rightInset??0) && point[1]>=0 && point[1]<=height){
@@ -782,10 +912,11 @@ export function createRenderer(
       }
       ctx!.restore();
     }
+    const visibleWind=stack ? stack.find(layer=>layer.kind==="wind")?.selection : scene.visualization;
     particles?.update(
-      scene.visualization
+      visibleWind
         ? {
-            view: scene.visualization,
+            view: visibleWind,
             theme: scene.windTheme,
             projection,
             camera: center,
@@ -871,7 +1002,8 @@ export function createRenderer(
       if (p[0] >= 0 && p[0] <= width && p[1] >= 0 && p[1] <= height)
         anchor = { x: p[0], y: p[1] };
     }
-    onFrame({ publicPoints:scene.publicPoints, publicMarkers, publicViewport, answerPins,clusterKeys, coloredProducts, coloredSelection, coverageSelection, productCell, gridLabel: g.label, level: band, visibleCells, loading, anchor });
+    const focusedPublic=stack?.find(layer=>layer.id===scene.datasetFocus&&layer.kind==="public");
+    onFrame({ publicPoints:focusedPublic?.kind==="public" ? focusedPublic.publicPoints : scene.publicPoints, publicMarkers, publicViewport, answerPins,clusterKeys, coloredProducts, coloredSelection, coverageSelection, productCell, gridLabel: g.label, level: band, visibleCells, loading, anchor });
     canvas.dataset.painted = "true";
     canvas.dataset.focusWidth = String(width - (scene.rightInset || 0));
   }
@@ -884,11 +1016,15 @@ export function createRenderer(
     motion.settle();
     const point = projection.invert!([x, y]);
     if(!point||!point.every(Number.isFinite))return;
-    if(scene.publicLayer){
+    const focused=scene.datasetLayers?.find(layer=>layer.id===scene.datasetFocus);
+    if(focused?.kind==="public"||!scene.datasetLayers&&scene.publicLayer){
       if(x<0||x>width-(scene.rightInset||0)||y<0||y>height)return;
-      scene.publicPick?.(point,scene.publicPatches?patchAt(point,x,y,scene.publicLayer.view?.replace("-","_")):undefined);
+      const selection=focused?.kind==="public"?focused.selection:scene.publicLayer!;
+      const source=focused?.kind==="public"?focused:scene;
+      source.publicPick?.(point,source.publicPatches?patchAt(point,x,y,selection.view?.replace("-","_")):undefined);
       return;
     }
+    if(scene.datasetLayers?.length && !focused)return;
     const g = gridSpec(scene.gridSystem, resolution(scene.camera.zoom));
     const id = cellAt(point, g);
     const version = ++selectVersion;
@@ -952,7 +1088,7 @@ export function createRenderer(
   });
   const hoverEnabled=()=>{
     const s=getScene();
-    return !!onHover && !s.observationGlobe && !s.caseId && !s.dataView && !s.fieldLayer && !s.publicLayer && !s.visualization &&
+    return !!onHover && !s.observationGlobe && !s.datasetLayers?.length && !s.caseId && !s.dataView && !s.fieldLayer && !s.publicLayer && !s.visualization &&
       s.overview!=="simulation" && s.mapResult?.metric!=="scenes" && !interacting && canvas.dataset.flying!=="true";
   };
   function onGlobe(x:number,y:number) {

@@ -1,6 +1,8 @@
 import { createPortal } from "react-dom";
 import {HainaPublicLayerLegend} from "./HainaPublicLayerLegend";
 import type {HainaPublicLayer} from "./use-haina-public-layer";
+import {GlobeLayerMenu} from "./GlobeLayerMenu";
+import {GlobeLayerResources,useGlobeLayerResources} from "./GlobeLayerResources";
 import {useHainaViirsSample,useHainaViirsTiles} from "./use-haina-viirs";
 import {coverageCamera,hainaPatchView,type HainaPatch} from "../domain/haina-published-raster";
 import {ResearchRegionLayer} from "./ResearchRegionLayer";
@@ -78,7 +80,7 @@ import {
   Layers,
   Info,
 } from "lucide-react";
-import { createRenderer, type FrameInfo, type Scene } from "../globe/renderer";
+import { createRenderer, type FrameInfo, type GlobeLayerRender, type Scene } from "../globe/renderer";
 import { useWorkspace } from "../domain/store";
 import { caseById } from "../domain/catalog";
 import {
@@ -101,24 +103,36 @@ function layerControl(id: string, label: string, options: WorkspaceViewChoice[],
   return current ? [{id, label, options, current, ordered}] : [];
 }
 
-function c40CameraKey(city:C40City) {
-  return [city.id, ...city.center, city.zoom].join("/");
-}
-
 function c40Flight(city:C40City) {
   return {id:"c40-"+city.id+"-"+Date.now(), kind:"layer-control" as const,
     camera:{center:city.center,zoom:city.zoom,reason:"C40 · "+city.name}};
 }
 
-export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPublicLayer; rightInset?: number; toolsHost?: HTMLElement | null }) {
+export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost}:{
+  haina:HainaPublicLayer;onLayerHaina?:(haina:HainaPublicLayer|null)=>void;rightInset?:number;toolsHost?:HTMLElement|null;
+}) {
   const {
     state: s,
     patch,
     setFilters,
     attachScope,
     openVisualization,inspectAsset,inspectCandidates,flyToGrid,focusAnswerEvidence,flyToEvidence,flyToResearchRegion,
-    leaveDetail, registerWorkspaceSurface, noteManualNavigation,
+    leaveDetail, registerWorkspaceSurface, noteManualNavigation, focusGlobeLayer, setGlobeLayerVisible,
   } = useWorkspace();
+  const stackMode=s.globeLayers.length>0;
+  const visibleLayers=useMemo(()=>s.globeLayers.filter(layer=>layer.visible),[s.globeLayers]);
+  const focusedLayer=visibleLayers.find(layer=>layer.id===s.globeLayerFocus);
+  const {resources,report}=useGlobeLayerResources();
+  const resource=focusedLayer&&resources.get(focusedLayer.id)?.resource;
+  const focusedResource=resource?.selection===focusedLayer?.selection?resource:undefined;
+  const layerHaina=focusedResource?.kind==="public"?focusedResource.haina:null;
+  const haina=layerHaina??legacyHaina;
+  useLayoutEffect(()=>{onLayerHaina?.(layerHaina);},[onLayerHaina,layerHaina]);
+  useEffect(()=>{
+    if(focusedLayer?.kind==="field"&&focusedLayer.selection.id!=="c40"&&s.globeLayerFit===focusedLayer.id)
+      patch({globeLayerFit:null});
+  },[focusedLayer,s.globeLayerFit,patch]);
+  const visibleWind=stackMode?visibleLayers.some(layer=>layer.kind==="wind"):!!s.visualization;
   const orientation=useGeoOrientation(s.camera.center,s.camera.zoom);
   const locationBar=useRef<HTMLDivElement>(null);
   const [locationBottom,setLocationBottom]=useState(100);
@@ -155,15 +169,16 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
   const viirsPublication=hainaManifest?.mode==="viirs"?hainaManifest:undefined;
   const hainaCoverage=hainaManifest?.mode==="coverage"?hainaManifest:undefined;
   const [frame,setFrame]=useState<FrameInfo>({gridLabel:"H3 R2",level:2,visibleCells:0,loading:"",anchor:null});
-  const viirs=useHainaViirsTiles(viirsPublication,frame.publicViewport);
+  const legacyViirs=useHainaViirsTiles(!stackMode?viirsPublication:undefined,frame.publicViewport);
+  const viirs=focusedResource?.kind==="public"?focusedResource.viirs:legacyViirs;
   const [hainaSample,setHainaSample]=useState<{view:typeof hainaView;point:Coordinate}|null>(null);
   const publicSample=hainaSample?.view===hainaView ? hainaSample?.point : undefined;
   const viirsSample=useHainaViirsSample(viirsPublication,publicSample);
-  const positioned=useRef("");
   const chooseHainaPatch=(id:string)=>{
     if(!publicLayer || !hainaCoverage?.patches.some(patch=>patch.id===id))return;
     setHainaSample(null);
-    patch({publicLayer:{id:publicLayer.id,view:hainaPatchView(id),month:haina.month}});
+    if(haina.patch?.id===id)return;
+    patch({publicLayer:{id:publicLayer.id,view:hainaPatchView(id),month:haina.month},globeLayerFit:"haina:"+publicLayer.id});
   };
   const chooseHainaMonth=(month:string)=>{
     if(!publicLayer||!hainaCoverage?.months.includes(month))return;
@@ -175,30 +190,26 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
     patch({camera:{center:hainaView.center,zoom:hainaView.zoom,reason:hainaManifest.title+" · "+hainaView.label},flight:null});
   };
   useEffect(()=>{
-    if(!publicLayer || !hainaView || !hainaManifest){
-      positioned.current="";
-      return;
-    }
-    const key=[publicLayer.id,hainaView.id,...hainaView.center,hainaView.zoom].join("/");
-    const move=positioned.current!==key;
-    positioned.current=key;
+    if(!publicLayer||!hainaView||!hainaManifest)return;
+    const fit=s.globeLayerFit==="haina:"+publicLayer.id;
     const normalizedMonth=hainaView.kind==="patch"?hainaView.month:undefined;
     const canonical=publicLayer.view!==hainaView.id||normalizedMonth!==publicLayer.month;
-    if(!move&&!canonical)return;
+    if(!fit&&!canonical)return;
     patch({
-      ...(move?{camera:{center:hainaView.center,zoom:hainaView.zoom,reason:hainaManifest.title+" · "+hainaView.label},flight:null}:{}),
+      ...(fit?{globeLayerFit:null,camera:{center:hainaView.center,zoom:hainaView.zoom,reason:hainaManifest.title+" · "+hainaView.label},flight:null}:{}),
       ...(canonical?{publicLayer:{...publicLayer,view:hainaView.id,month:normalizedMonth}}:{})});
-
-  },[publicLayer,hainaView,hainaManifest,patch]);
+  },[publicLayer,hainaView,hainaManifest,patch,s.globeLayerFit]);
   const selectedLayer=s.fieldLayer;
-  const publication=useRainCatalog(selectedLayer?.id==="rain");
+  const focusedField=focusedResource?.kind==="field"?focusedResource:undefined;
+  const legacyPublication=useRainCatalog(!stackMode&&selectedLayer?.id==="rain");
+  const publication=focusedField?.publication??legacyPublication;
   const rainCatalog=publication.status==="ready"?publication.catalog:undefined;
   const rainPeriod=selectedLayer?.id==="rain" && rainCatalog
     ? publishedRainPeriod(rainCatalog,selectedLayer.year,selectedLayer.frame)
     : null;
   const needsRainPeriod=rainPeriod && selectedLayer
     && (selectedLayer.year!==rainPeriod.year || selectedLayer.frame!==rainPeriod.frame);
-  const layer=needsRainPeriod && selectedLayer ? {...selectedLayer,...rainPeriod} : selectedLayer;
+  const layer=focusedField?.layer ?? (needsRainPeriod && selectedLayer ? {...selectedLayer,...rainPeriod} : selectedLayer);
   useEffect(()=>{
     if(needsRainPeriod && layer)patch({fieldLayer:layer});
   },[needsRainPeriod,layer,patch]);
@@ -206,7 +217,8 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
   const distributionContext:DistributionContext=s.mapResult?.selection?"fixed-cell":s.mapResult?.metric==="scenes"?"scenes":"catalog";
   const distributionStyle=resolveDistributionMode(preferredStyle,distributionContext);
   const smoothedMode=distributionModes[distributionStyle].smoothed && !publicLayer && !layer && !s.caseId && !s.dataView && !s.visualization && s.overview==="catalog";
-  const fieldData=useFieldData(layer,rainCatalog);
+  const legacyFieldData=useFieldData(!stackMode?layer:null,!stackMode?rainCatalog:undefined);
+  const fieldData=focusedField?.fieldData??legacyFieldData;
   const [animate,setAnimate]=useState(false);
   useEffect(()=>setAnimate(false),[layer?.id,layer?.year]);
   useEffect(()=>{
@@ -215,7 +227,8 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
     return ()=>clearTimeout(timer);
   },[animate,layer,fieldData.field,fieldData.revision,patch]);
   const forestLayer=layer?.id==="forest" ? layer : null;
-  const forest=useForestLayer(forestLayer,animate);
+  const legacyForest=useForestLayer(!stackMode?forestLayer:null,animate);
+  const forest=focusedField?.forest??legacyForest;
   const forestMode=!!forestLayer;
   useEffect(()=>{
     if(!forestLayer || !animate || !forest.image || forest.index<0) return;
@@ -225,23 +238,19 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
     return ()=>clearTimeout(timer);
   },[forestLayer,animate,forest.image,forest.index,forest.manifest,patch]);
   const c40Layer=layer?.id==="c40" ? layer : null;
-  const c40=useC40Layer(c40Layer);
+  const legacyC40=useC40Layer(!stackMode?c40Layer:null);
+  const c40=focusedField?.c40??legacyC40;
   const c40Mode=!!c40Layer;
-  const cameraCity = useRef<string|null>(null);
   useEffect(()=>{
-    if (!c40Layer) {cameraCity.current=null;return;}
     const city=c40.city;
-    if (!city) return;
-    const key=c40CameraKey(city);
-    const fly=key!==cameraCity.current;
-    const normalize=(c40Layer.city!==undefined && c40Layer.city!==city.id) ||
-      (c40Layer.city===undefined && c40Layer.frame!==0);
-    cameraCity.current=key;
-    if (fly || normalize) patch({
-      ...(fly?{flight:c40Flight(city)}:{}),
-      ...(normalize?{fieldLayer:{...c40Layer,city:city.id}}:{}),
-    });
-  },[c40Layer,c40.city,patch]);
+    if(!c40Layer||!city)return;
+    const fit=!!focusedLayer && s.globeLayerFit===focusedLayer.id;
+    const normalize=(c40Layer.city!==undefined&&c40Layer.city!==city.id)
+      || (c40Layer.city===undefined&&c40Layer.frame!==0);
+    if(fit||normalize)patch({
+      ...(fit?{globeLayerFit:null,flight:c40Flight(city)}:{}),
+      ...(normalize?{fieldLayer:{...c40Layer,city:city.id}}:{})});
+  },[c40Layer,c40.city,focusedLayer,s.globeLayerFit,patch]);
   const fieldImage=forest.image ?? c40.image;
   const probe=layer && fieldData.field && (fieldData.field.rain || fieldData.field.data) && s.selection ? sampleField(layer.id,layer.frame,fieldData.field,s.selection.point,s.camera.zoom):null;
   const [basemapId,setBasemapId]=useState<BasemapId|null>(()=>{
@@ -249,6 +258,11 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
   });
   const [basemapFrame,setBasemapFrame]=useState<GeoImageFrame|null>(null);
   const [basemapOpen,setBasemapOpen]=useState(false);
+  const layerMenuButton=useRef<HTMLButtonElement>(null);
+  function closeLayerMenu(){
+    setBasemapOpen(false);
+    layerMenuButton.current?.focus({preventScroll:true});
+  }
   const [basemapError,setBasemapError]=useState("");
   const [basemapLoading,setBasemapLoading]=useState(false);
   const [viewportRevision,setViewportRevision]=useState(0);
@@ -286,7 +300,26 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
     if(target && hainaCoverage && target.id!==haina.patch?.id)chooseHainaPatch(target.id);
     else if(hainaView?.kind!=="points")setHainaSample({view:hainaView,point});
   };
-  const scene={...s,researchRegion:publicLayer?null:s.researchRegion,publicPoints,publicImage,publicRaster,publicSample,publicPick,
+  const drawLayers=stackMode?visibleLayers.map((entry):GlobeLayerRender=>{
+    if(entry.kind==="public"){
+      const loaded=resources.get(entry.id)?.resource;
+      const ready=loaded?.kind==="public"&&loaded.selection===entry.selection?loaded:undefined;
+      const focused=entry.id===s.globeLayerFocus;
+      const manifest=ready?.haina.catalogue.manifest;
+      return {id:entry.id,kind:entry.kind,selection:entry.selection,
+        publicImage:ready?.haina.data?.image,publicPoints:ready?.haina.data?.points,
+        publicPatches:manifest?.mode==="coverage"?manifest.patches:undefined,publicViirs:ready?.viirs.raster,
+        publicRaster:ready?.haina.view?.id,publicSample:focused?publicSample:undefined,publicPick:focused?publicPick:undefined};
+    }
+    if(entry.kind==="field"){
+      const loaded=resources.get(entry.id)?.resource;
+      const ready=loaded?.kind==="field"&&loaded.selection===entry.selection?loaded:undefined;
+      return {id:entry.id,kind:entry.kind,selection:ready?.layer??entry.selection,
+        image:ready?.forest.image??ready?.c40.image,texture:ready?.fieldData.texture,rain:ready?.fieldData.field?.rain};
+    }
+    return entry;
+  }):undefined;
+  const scene={...s,datasetLayers:drawLayers,datasetFocus:s.globeLayerFocus,researchRegion:publicLayer?null:s.researchRegion,publicPoints,publicImage,publicRaster,publicSample,publicPick,
     publicPatches:hainaCoverage?.patches,publicViirs:viirs.raster,catalogStyle:distributionStyle,rightInset,windTheme,answerReferences,
     fieldTexture:fieldData.texture,fieldImage,fieldRain:fieldData.field?.rain,basemap:basemapFrame,basemapId:basemapId??undefined};
   const latest=useRef(scene);
@@ -387,7 +420,7 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
     };
   },[s.flight?.id,s.camera.center[0],s.camera.center[1],s.camera.zoom]);
   useEffect(() => {
-    if (!s.visualization) return;
+    if (!visibleWind) return;
     let cancelled = false;
     setWindLoad({ ready: !!getWindData(), error: "" });
     void loadWindData()
@@ -408,7 +441,7 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
     return () => {
       cancelled = true;
     };
-  }, [s.visualization?.id, windRetry]);
+  }, [visibleWind, windRetry]);
   useEffect(
     () => {renderer.current?.clearHover();renderer.current?.render();},
     [
@@ -426,7 +459,7 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
       s.pushFeed,
       s.paperFeed,
       s.dataView,
-      s.visualization,layer,publicLayer,publicPoints,publicImage,publicSample,viirs.raster,hainaCoverage,fieldData.texture,fieldImage,fieldData.revision,fieldData.field,
+      visibleLayers,resources,s.globeLayerFocus,s.visualization,layer,publicLayer,publicPoints,publicImage,publicSample,viirs.raster,hainaCoverage,fieldData.texture,fieldImage,fieldData.revision,fieldData.field,
       distributionStyle,
       rightInset,
       windTheme,
@@ -600,7 +633,6 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
     const city = c40.cities.get(id);
     if (!c40Layer || !city) return false;
     if (c40.city?.id === id) return true;
-    cameraCity.current=c40CameraKey(city);
     patch({fieldLayer:{...c40Layer,frame:0,city:id},flight:c40Flight(city)});
     return true;
   };
@@ -816,7 +848,7 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
         <div className="map-controls-row">
         {publicLayer ? <HainaPublicLayerLegend selection={publicLayer} layer={haina}
           sample={publicSample??null}
-          chooseView={view=>{setHainaSample(null);patch({publicLayer:{id:publicLayer.id,view}});}}
+          chooseView={view=>{setHainaSample(null);patch({publicLayer:{id:publicLayer.id,view},globeLayerFit:"haina:"+publicLayer.id});}}
           choosePatch={chooseHainaPatch} chooseMonth={chooseHainaMonth} viirs={viirs} viirsSample={viirsSample}
           overview={()=>{if(hainaCoverage)patch({camera:coverageCamera(hainaCoverage),flight:null});}} choosePoint={point=>selectHainaPoint(point.id)}
           locate={locateHaina} inspect={inspectHaina}/>
@@ -970,10 +1002,12 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
   </div>;
   return (
     <section
-      className={"earth-view" + (publicLayer ? (toolsHost ? " haina-public-mode haina-docked" : " haina-public-mode") : "") + (s.visualization ? " wind-mode" : "")+((catalogMode||forestMode||c40Mode||publicLayer)?" catalog-distribution":"")}
+      className={"earth-view" + (toolsHost?" globe-docked":"") + (publicLayer ? (toolsHost ? " haina-public-mode haina-docked" : " haina-public-mode") : "") + (s.visualization ? " wind-mode" : "")+((catalogMode||forestMode||c40Mode||publicLayer)?" catalog-distribution":"")}
       data-wind-theme={s.visualization ? windTheme : undefined}
       aria-label="数据地球"
     >
+      <GlobeLayerResources layers={visibleLayers} focus={s.globeLayerFocus} playing={animate}
+        viewport={frame.publicViewport} report={report}/>
       <div className="earth-canvas-wrap">
         <canvas
           ref={canvas}
@@ -1287,7 +1321,7 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
         </div>
       )}
       <div className="earth-side-controls" ref={controls}>
-        <button data-basemap aria-label="切换底图" title="切换底图" aria-expanded={basemapOpen} aria-haspopup="dialog" onClick={()=>setBasemapOpen(open=>!open)}>
+        <button ref={layerMenuButton} data-basemap aria-label="切换底图" title="图层" aria-expanded={basemapOpen} aria-haspopup="dialog" onClick={()=>setBasemapOpen(open=>!open)}>
           <Layers size={18} />
         </button>
         <span />
@@ -1302,30 +1336,9 @@ export function GlobeView({ haina, rightInset = 0, toolsHost }: { haina:HainaPub
           <Minus size={19} />
         </button>
       </div>
-      {basemapOpen && (
-        <>
-          <div className="basemap-backdrop" onClick={()=>setBasemapOpen(false)} />
-          <div className="basemap-menu" role="dialog" aria-label="选择底图">
-            <header><strong>底图</strong><button aria-label="关闭底图菜单" onClick={()=>setBasemapOpen(false)}><X size={13} /></button></header>
-            <div className="basemap-list">
-              <button aria-pressed={!basemapId} className={!basemapId?"active":""} onClick={()=>{setBasemapId(null);setBasemapOpen(false);}}>
-                <i className="basemap-swatch vector" aria-hidden="true" />
-                <span><strong>矢量底图</strong><small>项目默认样式，最轻</small></span>
-              </button>
-              {BASEMAPS.map(style=>(
-                <button key={style.id} aria-pressed={basemapId===style.id} className={basemapId===style.id?"active":""}
-                  onClick={()=>{setBasemapId(style.id);setBasemapOpen(false);}}>
-                  <i className={"basemap-swatch "+style.id} aria-hidden="true" />
-                  <span><strong>{style.name}</strong><small>{style.hint}</small></span>
-                </button>
-              ))}
-            </div>
-            {s.visualization && <p className="basemap-note">风场可视化使用专用背景，返回普通地球后显示底图。</p>}
-            {basemapError && <p role="status">{basemapError}</p>}
-            <small className="basemap-credit">底图 © Esri ArcGIS Online{basemapStyle(basemapId)?" · "+basemapStyle(basemapId)!.attribution:""}</small>
-          </div>
-        </>
-      )}
+      {basemapOpen && <GlobeLayerMenu basemapId={basemapId} basemapError={basemapError}
+        layers={s.globeLayers} focus={s.globeLayerFocus} chooseFocus={focusGlobeLayer} setVisibility={setGlobeLayerVisible}
+        chooseBasemap={id=>{setBasemapId(id);closeLayerMenu();}} close={closeLayerMenu}/>}
       {basemapId && basemapLoading && <div className="basemap-status">正在载入底图…</div>}
       {basemapId && !basemapLoading && basemapError && <div className="basemap-status error">{basemapError}</div>}
       {basemapId && basemapFrame && (

@@ -1,4 +1,4 @@
-import {useEffect,useMemo,useState} from "react";
+import {useCallback,useEffect,useMemo,useState} from "react";
 import {readPublicLayerGrid,readPublicLayerPoints,type PublicBounds,type PublicLayerGrid,type PublicLayerId,
   type PublicLayerPoint,type PublicLayerSelection,type PublicLayerView} from "../domain/haina-public-layer";
 import {coverageFramePath,fetchHainaPublication,hainaPatchView,patchForHainaView,viirsCamera,
@@ -17,8 +17,10 @@ export function usePublicLayerManifest(id:PublicLayerId|undefined) {
       .catch(()=>{if(!request.signal.aborted)setResult({id});});
     return ()=>request.abort();
   },[attempt,id]);
-  return {manifest:result?.id===id?result?.manifest:undefined,
-    error:!!result&&result.id===id&&!result.manifest,retry:()=>setAttempt(value=>value+1)};
+  const manifest=result?.id===id?result?.manifest:undefined;
+  const error=!!result&&result.id===id&&!result.manifest;
+  const retry=useCallback(()=>setAttempt(value=>value+1),[]);
+  return useMemo(()=>({manifest,error,retry}),[manifest,error,retry]);
 }
 
 async function requireResponse(path:string,signal:AbortSignal) {
@@ -80,7 +82,11 @@ export function useHainaPublicLayer(selection:PublicLayerSelection|null) {
       .catch(()=>{if(!request.signal.aborted)setGrid({view});});
     return ()=>request.abort();
   },[attempt,view]);
-  return {catalogue,view,patch,month,data:data?.view===view?data:null,grid:grid?.view===view?grid:null,retry:()=>retry(value=>value+1)};
+  const currentData=data?.view===view?data:null;
+  const currentGrid=grid?.view===view?grid:null;
+  const retryFrame=useCallback(()=>retry(value=>value+1),[]);
+  return useMemo(()=>({catalogue,view,patch,month,data:currentData,grid:currentGrid,retry:retryFrame}),
+    [catalogue,view,patch,month,currentData,currentGrid,retryFrame]);
 }
 
 export type HainaPublicLayer=ReturnType<typeof useHainaPublicLayer>;
