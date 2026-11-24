@@ -12,7 +12,7 @@ import {webGrantInput,type RuntimeWebToolContext} from "./runtime-web-tool-autho
 import {modelSafeText,modelSafeValue,assertModelContextSafe} from "./model-context-safety";
 import type {ProviderReasoningSink} from "./provider-reasoning";
 
-type ReadDependencies={stage:(text:string,searches?:SearchRun[])=>void;report:(call:ToolCall)=>void;callPrefix?:string;
+type ReadDependencies={stage:(text:string,searches?:SearchRun[])=>void;report:(call:ToolCall)=>void;callPrefix?:string;executionSignal?:AbortSignal;
   options?:DiscoveryA2AOptions;onFailure?:(message:string)=>void;onResult?:(result:SourceReadResult)=>Promise<void>};
 
 export function discoveryProtocol():"a2a"|"v1"{
@@ -41,7 +41,8 @@ export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|un
       assertModelContextSafe(safe);if(schema)assertModelContextSafe(JSON.stringify(schema));
       return modelSafeText(await runExecutor(config,safe,modelSignal,{...options,outputSchema:schema,providerReasoning}));
     },
-    discover:async(id:string,input:Omit<DiscoveryBusinessInput,"deepseekTools">|DiscoveryClarificationInput,emit:(event:DiscoveryEvent)=>void,options:DiscoveryA2AOptions&{webToolQuestion?:string}={})=>{
+    discover:async(id:string,input:Omit<DiscoveryBusinessInput,"deepseekTools">|DiscoveryClarificationInput,emit:(event:DiscoveryEvent)=>void,options:DiscoveryA2AOptions&{webToolQuestion?:string;executionSignal?:AbortSignal}={})=>{
+      const operationSignal=options.executionSignal?AbortSignal.any([signal,options.executionSignal]):signal;operationSignal.throwIfAborted();
       if(protocol==="v1"&&("clarificationReply" in input||options.target))throw Error("该研究记录需要原发现服务的 A2A 续行接口。");
       const question="clarificationReply" in input?options.webToolQuestion:input.query;
       const grant=question?await reserve(id,{kind:"discovery",question}):undefined;
@@ -49,19 +50,20 @@ export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|un
       const boundOptions:DiscoveryA2AOptions={...options,onAccepted:async binding=>{await options.onAccepted?.(binding);await bind(binding.discoveryId);}};
       try{
       if("clarificationReply" in input){
-        return await discoverThroughA2A(id,{...input,runtimeWebToolGrant:grant},signal,emit,boundOptions,a2aCancellation);
+        return await discoverThroughA2A(id,{...input,runtimeWebToolGrant:grant},operationSignal,emit,boundOptions,a2aCancellation);
       }
       const safeInput={...input,history:modelSafeValue(input.history),references:modelSafeValue(input.references),conversationEvidence:modelSafeValue(input.conversationEvidence),
         conversationContext:input.conversationContext?modelSafeText(input.conversationContext):input.conversationContext,
         scope:input.scope?{...input.scope,citation:modelSafeValue(input.scope.citation)}:input.scope};
-      return protocol==="a2a"?await discoverThroughA2A(id,{...safeInput,deepseekTools,runtimeWebToolGrant:grant},signal,emit,boundOptions,a2aCancellation):
-        await discoverThroughService(id,{...safeInput,config,deepseekTools,runtimeWebToolGrant:grant},signal,emit,cancellation,bind);
+      return protocol==="a2a"?await discoverThroughA2A(id,{...safeInput,deepseekTools,runtimeWebToolGrant:grant},operationSignal,emit,boundOptions,a2aCancellation):
+        await discoverThroughService(id,{...safeInput,config,deepseekTools,runtimeWebToolGrant:grant},operationSignal,emit,cancellation,bind);
       }finally{await revoke(grant);}
     },
     read:async(plan:TurnPlan,question:string,deps:ReadDependencies):Promise<SearchRun[]>=>{
+      const operationSignal=deps.executionSignal?AbortSignal.any([signal,deps.executionSignal]):signal;operationSignal.throwIfAborted();
       if(plan.action!=="read")return [];
       const targets=[...new Map(plan.targets.flatMap<SourceReadInput["targets"][number]>(t=>t.kind==="asset"&&t.id&&paperId(t.id)?[{kind:"paper",id:t.id}]:t.url?
-        [{kind:"web",url:t.url,title:t.title,...(t.discoveredBy?{discoveredBy:t.discoveredBy}:{})}]:[])
+        [{kind:"web",url:t.url,title:t.title,...(t.discoveredBy?{discoveredBy:t.discoveredBy}:{}),...(t.locators?.length?{locators:t.locators}:{})}]:[])
         .map(t=>[t.kind==="web"?t.url:t.id,t])).values()].slice(0,3);
       if(!targets.length)return [];
       const messageId=randomUUID(),call={id:(deps.callPrefix||"read-source-")+messageId,kind:"tool" as const,name:"委托发现服务读取指定来源",
@@ -69,7 +71,7 @@ export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|un
       deps.stage("正在委托发现服务读取指定来源");deps.report({...call,status:"running"});
       const grant=await reserve(messageId,{kind:"source-read",question,urls:targets.flatMap(t=>t.kind==="web"?[t.url]:[])});
       try{
-        const result=await readSourcesThroughA2A(messageId,{question,targets,deepseekFetch:deepseekTools?.fetch===true,runtimeWebToolGrant:grant},signal,
+        const result=await readSourcesThroughA2A(messageId,{question,targets,deepseekFetch:deepseekTools?.fetch===true,runtimeWebToolGrant:grant},operationSignal,
           update=>{if(update.stage)deps.stage(update.stage,update.searches);if(update.call)deps.report({...update.call,id:call.id+":"+update.call.id});},
           {...deps.options,onAccepted:async binding=>{await deps.options?.onAccepted?.(binding);if(grant)await webTools!.authority.bind(grant,binding.discoveryId);},onEvent:async event=>{
             await deps.options?.onEvent?.(event);

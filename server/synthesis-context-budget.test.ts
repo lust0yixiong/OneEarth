@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {packSynthesisContext,utf8Prefix,answerTimeBudget,synthesisPromptByteLimit} from "./synthesis-context-budget";
 import {retainedSourceAnswer,synthesizeAnswer} from "./scientific-answer";
-import type {AnswerReference,WebHit} from "../src/domain/types";
+import {mergeWebEvidence} from "./merge-web-evidence";
+import type {AnswerReference,SearchRun,WebHit} from "../src/domain/types";
 
 const query="北部流域的树高在2020—2023年有哪些可查依据？";
 const options={question:query,areaTerms:["北部流域","Northern Basin"],matchHints:["Northern Basin"],time:"2020—2023年"};
@@ -11,6 +12,32 @@ const read={ref:"S52",title:"Northern Basin canopy height",url:"https://example.
 const snippet={ref:"S51",title:read.title,url:"https://example.org/concept",doi:"10.1234/concept",snippet:original,relatedIdentifiers:[{relationType:"HasVersion",relatedIdentifierType:"DOI",relatedIdentifier:"10.1234/version"}]};
 const noisy=Array.from({length:50},(_,i)=>({ref:"S"+(i+1),id:"other-"+i,title:"Southern Basin canopy height",metadata:["南部资料".repeat(600)],excerpts:[{quote:"Southern Basin height 2021. ".repeat(100),source:{paperId:"p"+i,start:0,end:2800}}]}));
 const input=()=>({question:query,researchIntent:{task:query,region:"北部流域",time:options.time},catalogue:noisy,webResults:[snippet,read]});
+
+test("exact in-document evidence survives another read and is kept whole in bounded synthesis",()=>{
+ const url="https://example.org/pump-test",title="Pump test readings";
+ const table=["[table B · Pump measurements]",'{"kind":"header","cells":["Pump","Flow (m³/s)"]}',
+   ...Array.from({length:44},(_,i)=>JSON.stringify({kind:"row",cells:["P-"+i,"6.50"]}))].join("\n");
+ const section="[section Methods · Methods]\nThe pressure was read against a calibrated water column.";
+ const run=(data:Partial<WebHit>):SearchRun=>({engine:"原站读取",query:url,status:"done",hits:[{url,title,snippet:"",...data}]});
+ const [source]=mergeWebEvidence([
+   run({stage:"page-excerpt",pageExcerpt:table,locatorResults:[{kind:"table",value:"B",status:"found",href:url+"#table-b"}]}),
+   run({stage:"page-excerpt",pageExcerpt:section,locatorResults:[{kind:"section",value:"Methods",status:"found"}]}),
+   run({stage:"search-snippet",snippet:"General search clue"}),
+ ]);
+ assert.equal(source.pageExcerpt,table+"\n\n"+section);
+ assert.equal(source.stage,"page-excerpt");
+ assert.equal(source.locatorResults?.length,2);
+ const hit={...source,ref:"S90"};
+ const packet=packSynthesisContext("rules",{catalogue:noisy,webResults:[hit]},
+   {question:"Pump flow test",maxBytes:48000,pinnedRefs:[hit.ref]});
+ assert.equal(packet.blocked,false);
+ assert.equal(packet.payload.webResults[0].pageExcerpt,source.pageExcerpt);
+ assert.ok(packet.prompt.includes("P-43"));
+ const smaller=packSynthesisContext("rules",{webResults:[hit]},{question:"Pump flow test",maxBytes:850,pinnedRefs:[hit.ref]});
+ assert.equal(smaller.blocked,false);
+ assert.equal(smaller.payload.webResults[0].pageExcerpt,undefined);
+ assert.equal(smaller.payload.webResults[0].locatedExcerptOmitted,true);
+});
 
 test("whole UTF-8 packet retains a late relevant actual window and stable source number",()=>{
  const payload=input(),before=JSON.stringify(payload),packet=packSynthesisContext("科学证据规则".repeat(100),payload,{...options,maxBytes:48*1024});

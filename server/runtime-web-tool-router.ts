@@ -4,7 +4,7 @@ import {runWebTool,webToolFailure} from "./runtime-web-tool-adapter";
 import {WebToolAccessError,type RuntimeWebToolStore,type WebToolClaim} from "./runtime-web-tool-store";
 import type {ChatModel} from "../src/domain/chat-model";
 
-type Run=(operation:WebToolOperation,signal:AbortSignal,options:{nativeModel?:ChatModel})=>Promise<WebToolValue>;
+type Run=(operation:WebToolOperation,signal:AbortSignal,options:{nativeModel?:ChatModel;sourceSnapshotScope?:string})=>Promise<WebToolValue>;
 /** This scheduler lives in the runtime API process, independently of a parent
  * research worker awaiting A2A. POST only submits or reads a durable receipt. */
 export async function runtimeWebToolChannel(store:RuntimeWebToolStore,options:{run?:Run;capacity?:number;pollMs?:number}={}){
@@ -20,7 +20,7 @@ export async function runtimeWebToolChannel(store:RuntimeWebToolStore,options:{r
       const done=(async()=>{
         try{
           if(!await store.active(call))throw new DOMException("Grant ended","AbortError");
-          const value=await run(call.operation,AbortSignal.any([controller.signal,AbortSignal.timeout(35_000)]),{nativeModel:call.nativeModel});
+          const value=await run(call.operation,AbortSignal.any([controller.signal,AbortSignal.timeout(35_000)]),{nativeModel:call.nativeModel,sourceSnapshotScope:call.sourceSnapshotScope});
           await store.finish(call,{state:"complete",value});
         }catch(error){await store.finish(call,{state:"failed",error:webToolFailure(error)});}
       })().catch(()=>console.error("OneEarth web tool receipt could not be saved"))

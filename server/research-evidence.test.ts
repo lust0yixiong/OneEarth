@@ -15,6 +15,7 @@ const start:DataSearchResult={
   plan:{questionMode:"preserve",dataQuestion:question,dataNeed:null,hainaQueries:[],paper:{name:"",facets:[],region:[]},web:[]},
   issues:[],sourceStatus:[],papers:[],haina:[],searches:[],
 };
+const lastDecision=(trace:ToolCall[])=>[...trace].reverse().find(call=>call.id.startsWith("research-decision-"));
 const answer=JSON.stringify({action:"answer",reason:"materials sufficient",gap:null,targets:[],clarification:null});
 
 test("sufficient evidence completes without calling either acquisition tool",async()=>{
@@ -23,7 +24,7 @@ test("sufficient evidence completes without calling either acquisition tool",asy
     model:async()=>answer,read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:call=>trace.push(call),
   });
   assert.equal(result.retrieval,start);
-  assert.equal(JSON.parse(trace.at(-1)!.output!).action,"answer");
+  assert.equal(JSON.parse(lastDecision(trace)!.output!).action,"answer");
 });
 
 test("a completed confirmation cannot be requested again by the evidence reviewer",async()=>{
@@ -42,7 +43,7 @@ test("a completed confirmation cannot be requested again by the evidence reviewe
   },{choice:"proposed",originalQuestion:confirmedPlan.goal,dataQuestion:question,checkMessageId:"ca419cd3-a9a1-4947-9a6b-1ac3dbd984c6"});
   assert.equal(result.retrieval?.plan,start.plan);
   assert.equal(result.assessment,"unresolved");assert.equal(result.clarification,undefined);
-  assert.equal(JSON.parse(trace.at(-1)!.output!).assessment,"unresolved");
+  assert.equal(JSON.parse(lastDecision(trace)!.output!).assessment,"unresolved");
 });
 
 test("the next decision sees materials actually returned by the selected source",async()=>{
@@ -100,7 +101,7 @@ test("a model cannot invent a read target or convert a pinned source into discov
     model:async()=>JSON.stringify({action:"read",reason:"guess",gap:"units",targets:["W2"],clarification:null}),
     read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:call=>trace.push(call),
   });
-  assert.equal(trace.at(-1)?.status,"failed");
+  assert.equal(lastDecision(trace)?.status,"failed");
 });
 
 for(const fallback of [false,true])test("a Haina search cannot read a prior web citation before web is authorized, fallback="+fallback,async()=>{
@@ -126,8 +127,8 @@ for(const fallback of [false,true])test("a Haina search cannot read a prior web 
   });
   assert.deepEqual(result.reads,[]);
   assert.equal(result.retrieval?.plan,retrieval.plan);assert.equal(result.assessment,"unresolved");
-  assert.equal(trace.at(-1)?.status,"failed");
-  assert.equal(JSON.parse(trace.at(-1)!.output!).assessment,"unresolved");
+  assert.equal(lastDecision(trace)?.status,"failed");
+  assert.equal(JSON.parse(lastDecision(trace)!.output!).assessment,"unresolved");
 });
 
 for(const marker of ["W1","[w1]"," w1 "])test("only an existing W marker can normalize to an exact read: "+marker,async()=>{
@@ -142,7 +143,7 @@ for(const marker of ["1","S1",address,"W99"])test("invalid reference syntax does
  await continueResearch(question,plan,{retrieval:{...start,searches:[{engine:"DeepSeek Search",query:question,status:"done",hits:[{url:address,title:"Known",snippet:"units"}]}]},reads:[]},new AbortController().signal,{
   model:async()=>{modelCalls++;return JSON.stringify({action:"read",reason:"units",gap:"units",targets:[marker],clarification:null});},
   read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:call=>trace.push(call),
- });assert.equal(modelCalls,2);assert.equal(trace.at(-1)?.status,"failed");
+ });assert.equal(modelCalls,8);assert.equal(lastDecision(trace)?.status,"failed");
 });
 
 test("a conflicting extra action field is rejected without guessing the original failed output",async()=>{
@@ -150,7 +151,7 @@ test("a conflicting extra action field is rejected without guessing the original
  await continueResearch(question,plan,{retrieval:start,reads:[]},new AbortController().signal,{
   model:async()=>JSON.stringify({action:"answer",reason:"enough",gap:null,targets:[],clarification:null,read:"W1"}),
   read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:call=>trace.push(call),
- });assert.equal(trace.at(-1)?.status,"failed");
+ });assert.equal(lastDecision(trace)?.status,"failed");
 });
 
 const choice=(action:string,targets:string[]=[],gap:string|null=null)=>JSON.stringify({action,reason:"bounded next step",targets,gap,clarification:null});
@@ -164,7 +165,7 @@ test("an invalid W label gets one real-error reassessment and no read before cor
    const input=JSON.parse(prompt.slice(prompt.lastIndexOf("\n{")+1));
    if(++calls===1)return choice("read",["W99"],"unit field");
    assert.equal(reads,0);assert.equal(input.previousFailure.kind,"decision");assert.equal(input.previousFailure.toolAttempted,false);
-   assert.equal(input.previousFailure.diagnostic.code,"target-not-allowed");assert.deepEqual(input.previousFailure.diagnostic.invalidTargets,["W99"]);assert.equal(input.remainingCorrections,0);return answer;
+   assert.equal(input.previousFailure.diagnostic.code,"target-not-allowed");assert.deepEqual(input.previousFailure.diagnostic.invalidTargets,["W99"]);assert.equal(input.resources.remainingModelCalls,6);return answer;
   },read:async()=>{reads++;return [];},discover:async()=>assert.fail(),stage:()=>{},report:row=>trace.push(row),
  });assert.equal(calls,2);assert.equal(reads,0);assert.equal(result.assessment,"answer");assert.equal(trace[0].status,"running");assert.ok(trace.some(r=>r.status==="failed"));
 });
@@ -173,7 +174,7 @@ test("a failed model receives a fixed diagnostic, not its raw invalid JSON or an
  let calls=0;const trace:ToolCall[]=[];
  const result=await continueResearch(question,plan,{retrieval:start,reads:[]},new AbortController().signal,{
   model:async prompt=>{if(++calls===2)assert.match(prompt,/证据决策不是有效JSON/);return "PRIVATE_INVALID_PAYLOAD";},read:async()=>assert.fail(),discover:async()=>assert.fail(),stage:()=>{},report:row=>trace.push(row),
- });assert.equal(calls,2);assert.equal(result.assessment,"unresolved");assert.ok(result.issues?.length);assert.ok(!JSON.stringify(trace).includes("PRIVATE_INVALID_PAYLOAD"));assert.ok(!JSON.stringify(trace).includes("answer-with-available"));
+ });assert.equal(calls,8);assert.equal(result.assessment,"unresolved");assert.ok(result.issues?.length);assert.ok(!JSON.stringify(trace).includes("PRIVATE_INVALID_PAYLOAD"));assert.ok(!JSON.stringify(trace).includes("answer-with-available"));
 });
 
 test("authorized read-first research creates its first discovery without a fictitious previous result",async()=>{

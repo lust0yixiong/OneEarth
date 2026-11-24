@@ -1,3 +1,4 @@
+import {parseSourceReadLocators} from "../src/domain/source-read-locator";
 import type {PaperRecord} from "../src/domain/paper-record";
 import {paperId} from "../src/domain/paper-record";
 import {paperResultKind, sourceReadKind, type PaperQueryOutput, type SourceReadInput,
@@ -63,12 +64,15 @@ export function prepareSourceRead(input: Record<string,unknown>, fetchAllowed: b
       if (!targets.some(t => t.kind === "paper" && t.id === target.id)) targets.push({kind:"paper",id:target.id});
       continue;
     }
-    if (target.kind !== "web" || !only(target,["kind","url","title","discoveredBy"]) ||
+    if (target.kind !== "web" || !only(target,["kind","url","title","discoveredBy","locators"]) ||
       !text(target.url,2000) || !publicPage(target.url) || !text(target.title,360) ||
       (target.discoveredBy !== undefined && target.discoveredBy !== "user" && target.discoveredBy !== "assistant")) return invalid;
+    const locators=parseSourceReadLocators(target.locators);
+    if(target.locators!==undefined&&!locators)return invalid;
+    const previous=targets.find(t=>t.kind==="web"&&t.url===target.url);
+    if(previous?.kind==="web"&&JSON.stringify(previous.locators)!==JSON.stringify(locators))return invalid;
     // Keep the requested identity in the receipt. The transport independently validates and resolves it.
-    if (!targets.some(t => t.kind === "web" && t.url === target.url))
-      targets.push({kind:"web",url:target.url,title:target.title,discoveredBy:target.discoveredBy});
+    if(!previous)targets.push({kind:"web",url:target.url,title:target.title,discoveredBy:target.discoveredBy,...(locators?{locators}:{})});
   }
   return {body:{kind:sourceReadKind,input:{question:input.question,targets,deepseekFetch:input.deepseekFetch === true && fetchAllowed,
     ...(grant !== undefined ? {runtimeWebToolGrant:grant} : {})}}};
@@ -122,6 +126,8 @@ export async function runSourceRead(job: SourceReadJob, signal: AbortSignal, emi
   ]);
   for (const run of searches) {
     if (run.status === "failed") issues.push(run.query + "：" + (run.error || "指定来源不可用。"));
+    else for(const hit of run.hits)if(hit.locatorResults?.some(result=>result.status!=="found"))
+      issues.push(run.query + "：" + (run.warning || "未完整取得指定位置的材料。"));
   }
   signal.throwIfAborted();
   const sourceReadResult:SourceReadResult = {searches,papers,issues,...(paperEvidence.length ? {paperEvidence} : {})};

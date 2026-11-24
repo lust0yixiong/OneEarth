@@ -2,6 +2,7 @@ import type {SearchRun,WebHit} from "../src/domain/types";
 
 type Origin={engine:SearchRun["engine"];query:string};
 type Snippet={quote:string;origins:Origin[];sourceLength:number;partial:boolean};
+type LocatedExcerpt=Pick<WebHit,"stage"|"readAt"> & {text:string};
 export type MergedWebHit=WebHit & {
   snippetSources:Array<{start:number;end:number;origins:Origin[];sourceLength:number;partial:boolean}>;
   snippetNotice:string;omittedSnippets:number;omittedOrigins:number;identityConflicts:number;
@@ -11,12 +12,12 @@ const identity=(doi:string|undefined)=>(doi||"").replace(/^https?:\/\/(?:dx\.)?d
 
 /** Merge only exact URLs; preserve complementary literal snippets and their search provenance. */
 export function mergeWebEvidence(runs:SearchRun[],budget=24000):MergedWebHit[]{
-  const groups=new Map<string,{hit:WebHit;snippets:Snippet[];omitted:number;omittedOrigins:number;conflicts:number}>();
+  const groups=new Map<string,{hit:WebHit;located:LocatedExcerpt[];snippets:Snippet[];omitted:number;omittedOrigins:number;conflicts:number}>();
   for(const run of runs){
     if(run.status!=="done")continue;
     for(const hit of run.hits){
       let g=groups.get(hit.url);
-      if(!g){g={hit:{...hit},snippets:[],omitted:0,omittedOrigins:0,conflicts:0};groups.set(hit.url,g);}
+      if(!g){g={hit:{...hit},located:[],snippets:[],omitted:0,omittedOrigins:0,conflicts:0};groups.set(hit.url,g);}
       else {
         // The same landing page is not sufficient to reconcile two different DOI versions/entities.
         const doiConflict=identity(g.hit.doi)&&identity(hit.doi)&&identity(g.hit.doi)!==identity(hit.doi);
@@ -25,7 +26,22 @@ export function mergeWebEvidence(runs:SearchRun[],budget=24000):MergedWebHit[]{
         const prior=g.hit;
         g.hit={...prior,...hit,title:hit.title||prior.title,doi:hit.doi||prior.doi,
           pageExcerpt:hit.pageExcerpt||prior.pageExcerpt};
+        if(hit.locatorResults&&prior.locatorResults){
+          const results=new Map(hit.locatorResults.map(result=>[result.kind+"\0"+result.value,result]));
+          for(const result of prior.locatorResults){
+            const key=result.kind+"\0"+result.value,current=results.get(key);
+            if(!current||result.status==="found"&&current.status!=="found"||
+              result.status==="partial"&&current.status!=="found"&&current.status!=="partial")results.set(key,result);
+          }
+          g.hit.locatorResults=[...results.values()];
+        }
+        if(hit.availableLocators&&prior.availableLocators)g.hit.availableLocators=[...new Map(
+          [...prior.availableLocators,...hit.availableLocators].map(location=>[location.kind+"\0"+location.value,location])
+        ).values()];
       }
+      const excerpt=hit.pageExcerpt;
+      if(excerpt&&hit.locatorResults?.some(result=>result.status==="found"||result.status==="partial")&&
+         !g.located.some(part=>part.text===excerpt))g.located.push({text:excerpt,stage:hit.stage,readAt:hit.readAt});
       const text=hit.snippet?.trim();if(!text)continue;
       const quote=text.slice(0,800),origin={engine:run.engine,query:run.query.slice(0,240)};
       const old=g.snippets.find(s=>s.quote===quote&&s.sourceLength===text.length);
@@ -48,7 +64,9 @@ export function mergeWebEvidence(runs:SearchRun[],budget=24000):MergedWebHit[]{
       if(cost>remaining){omitted++;continue;}
       snippet+=separator+s.quote;snippetSources.push(source);remaining-=cost;
     }
-    return {...g.hit,snippet,snippetSources,snippetNotice:notice,omittedSnippets:omitted,
+    const latest=g.located.at(-1);
+    return {...g.hit,...(latest?{pageExcerpt:g.located.map(part=>part.text).join("\n\n"),stage:latest.stage,readAt:latest.readAt}:{}),
+      snippet,snippetSources,snippetNotice:notice,omittedSnippets:omitted,
       omittedOrigins:g.omittedOrigins,identityConflicts:g.conflicts};
   });
 }

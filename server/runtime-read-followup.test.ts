@@ -15,7 +15,7 @@ const source="https://example.org/fictional-report.pdf",independent="https://exa
 const natural="这张图的归一化用了什么输入？缺少的不确定度依据会怎样影响比较？";
 const decision=(action:string,gap:string|null=null,targets:string[]=[])=>({action,reason:"use actual material within original scope",gap,targets,clarification:null});
 const readRun=(round=0):SearchRun=>({engine:"PDF 原文",query:source,requestUrl:source,status:"done",hits:[{url:source,title:"Fictional sensor report",snippet:"actual bounded read",pageExcerpt:round?"The fictional appendix defines uncertainty as an instrument bound; no recomputation was done.":"The fictional chart normalizes two instrument inputs. This sampled window does not state their uncertainty.",stage:"pdf-excerpt",readBy:"platform",readAt:"2026-01-01T00:00:0"+round+"Z"}]});
-async function fixture(t:TestContext,{lostDiscovery=false,readFails=false,emptyRead=false,initialAction="read"}:{lostDiscovery?:boolean;readFails?:boolean;emptyRead?:boolean;initialAction?:"read"|"search"}={}){
+async function fixture(t:TestContext,{lostDiscovery=false,readFails=false,emptyRead=false,initialAction="read",locatorMode=false}:{locatorMode?:boolean;lostDiscovery?:boolean;readFails?:boolean;emptyRead?:boolean;initialAction?:"read"|"search"}={}){
  const dir=mkdtempSync(path.join(tmpdir(),"oneearth-read-followup-")),responses=path.join(dir,"responses.json"),callsFile=path.join(dir,"calls.jsonl");
  const saved={PATH:process.env.PATH,ONEEARTH_DISCOVERY_URL:process.env.ONEEARTH_DISCOVERY_URL,ONEEARTH_DISCOVERY_PROTOCOL:process.env.ONEEARTH_DISCOVERY_PROTOCOL};const originalFetch=globalThis.fetch;
  writeFileSync(path.join(dir,"codex"),`#!${process.execPath}\nimport fs from 'node:fs';let prompt='';for await(const chunk of process.stdin)prompt+=chunk;fs.appendFileSync(${JSON.stringify(callsFile)},JSON.stringify({prompt})+'\\n');let settings=JSON.parse(fs.readFileSync(${JSON.stringify(responses)},'utf8'));let value;if(prompt.startsWith('仅做本轮'))value=settings.initialAction==='search'?{decide:{kind:'search',goal:'Study the original chart question',targets:[]}}:{decide:{kind:'read',targets:['web:${source}']}};else if(prompt.includes('你负责决定同一轮研究任务的下一步')){value=settings.steps.shift();fs.writeFileSync(${JSON.stringify(responses)},JSON.stringify(settings));}else {const at=prompt.lastIndexOf('\\n{'),input=JSON.parse(prompt.slice(at+1));value={message:'仅据虚构原报告与实际交回的资料说明限制。'+input.webResults.map(r=>'['+r.ref+']').join(''),sections:[],limitation:'没有测量或重新计算。',followUp:'',researchNotes:[],calculationRequests:[]};}process.stdout.write(JSON.stringify(value));\n`,{mode:0o700});
@@ -27,10 +27,16 @@ async function fixture(t:TestContext,{lostDiscovery=false,readFails=false,emptyR
   if(!task){
    const id=randomUUID(),contextId=randomUUID();let event:any;
    if(data.kind==="oneearth.source.read.v1"){
-    assert.deepEqual(data.input.targets.map((target:any)=>target.url),[source]);
+    assert.equal(data.input.targets.length,1);assert.ok([source,...(locatorMode?[independent]:[])].includes(data.input.targets[0].url));
     if(readFails){res.status(503).type("application/a2a+json").json({error:{code:503,message:"controlled precise-read service failure"}});return;}
     const round=reads++;
-    event={seq:1,sourceReadResult:{searches:emptyRead?[]:[readRun(round)],papers:[],issues:[]}};
+    const target=data.input.targets[0],run=readRun(round);
+    if(locatorMode){
+     run.query=target.url;run.requestUrl=target.url;
+     run.hits=run.hits.map(hit=>({...hit,url:target.url,availableLocators:[{kind:"table" as const,value:"rates",label:"Measured rates"},{kind:"section" as const,value:"sampling",label:"Sampling procedure"},{kind:"figure" as const,value:"profile",label:"Observed profile"},{kind:"equation" as const,value:"normalization",label:"Normalization relation"}],
+      ...(target.locators?.length?{pageExcerpt:"CONTROLLED_LOCATED_FACT: measured rate = 0.4; normalization uses actual input X.",locatorResults:target.locators.map((locator:any)=>({...locator,status:"found",excerpt:"CONTROLLED_LOCATED_FACT: measured rate = 0.4; normalization uses actual input X."}))}:{})}));
+    }
+    event={seq:1,sourceReadResult:{searches:emptyRead?[]:[run],papers:[],issues:[]}};
    }else{
     assert.equal(data.kind,"oneearth.discovery.request.v1");finds++;
     event={seq:1,result:{plan:{questionMode:"preserve",dataQuestion:data.input.query,dataNeed:null,researchIntent:{purpose:data.input.query,task:data.input.researchGoal,region:null,time:null,months:[]},paper:{name:"",facets:[],region:[]},hainaQueries:[],web:[]},papers:[],haina:[],searches:[{engine:"DeepSeek Search",query:"fictional instrument uncertainty",status:"done",hits:[{url:independent,title:"Fictional independent validation",snippet:"An independent candidate; no body was read."}]}],issues:[],sourceStatus:[{source:"网络检索",status:"done",count:1,detail:"controlled reply"}]}};
@@ -107,4 +113,28 @@ test("an initial search outside a report-only scope is rejected before any disco
  assert.equal(input.previousFailure.kind,"decision");assert.equal(input.previousFailure.toolAttempted,false);
  assert.ok(!input.actions.includes("discover"));assert.deepEqual(input.materials.exactReadTargets.map((target:any)=>target.url),[source]);
  assert.ok(r.result.answerNotes.searches.some((run:SearchRun)=>run.hits.some(hit=>hit.url===source)));
+});
+
+
+test("two invalid evidence fields followed by a third valid four-position decision reach the real exact-source A2A route",async t=>{
+ const f=await fixture(t,{locatorMode:true});
+ const positions=[{kind:"table",value:"rates"},{kind:"section",value:"sampling"},{kind:"figure",value:"profile"},{kind:"equation",value:"normalization"}];
+ const r=await f.run(natural+"仅依据本报告，不另查。",[
+  {...decision("read","missing exact field",["W999"]),locators:positions},
+  {...decision("read","missing exact field",["W1"]),locators:[{kind:"wrong",value:"rates"}]},
+  {action:"read",gap:"the exact measured method fields",targets:["W1"],locators:positions,clarification:null},decision("answer")]);
+ assert.deepEqual(f.counts(),{reads:2,finds:0});assert.deepEqual(f.requests[1].input.targets,[{kind:"web",url:source,title:"Fictional sensor report",locators:positions}]);
+ assert.notEqual(f.requests[0].messageId,f.requests[1].messageId);assert.ok(f.tasks.events(r.id,0).filter(event=>event.sourceReadBinding).length>=2);
+ const reviewers=f.calls().filter((call:any)=>call.prompt.includes("你负责决定同一轮研究任务的下一步"));assert.equal(reviewers.length,4);
+ const third=JSON.parse(reviewers[2].prompt.slice(reviewers[2].prompt.lastIndexOf("\n{")+1));assert.equal(third.previousFailure.diagnostic.field,"locators[0].kind");assert.equal(third.resources.remainingLocatorReads,4);assert.equal(third.resources.remainingAcquisitions,2);assert.ok(third.materials.web[0].availableLocators.some((locator:any)=>locator.kind==="table"));
+ const saved=f.tasks.terminal(r.id) as any;assert.ok(saved.result.answerNotes.searches.some((run:SearchRun)=>run.hits.some(hit=>hit.locatorResults?.length===4)));assert.ok(saved.result.answerNotes.searches.some((run:SearchRun)=>run.hits.some(hit=>hit.pageExcerpt?.includes("sampled window"))));
+ assert.ok(f.tasks.materialEvents(r.id).some((event:any)=>event.researchMaterials.searches.some((run:SearchRun)=>run.hits.some(hit=>hit.locatorResults?.length===4))));
+});
+
+test("after two external acquisitions the same accepted research can still locate within its original obtained source",async t=>{
+ const f=await fixture(t,{locatorMode:true}),positions=[{kind:"table",value:"rates"}],r=await f.run(natural,[decision("discover","independent uncertainty basis"),decision("read","read the new independent source",["W2"]),{action:"read",gap:"the original measured rate",targets:["W1"],locators:positions,clarification:null},decision("answer")]);
+ assert.deepEqual(f.counts(),{reads:3,finds:1});const requests=f.requests.filter(request=>request.kind==="oneearth.source.read.v1");assert.deepEqual(requests.map(request=>request.input.targets[0].url),[source,independent,source]);assert.deepEqual(requests[2].input.targets[0].locators,positions);
+ const reviewers=f.calls().filter((call:any)=>call.prompt.includes("你负责决定同一轮研究任务的下一步"));const third=JSON.parse(reviewers[2].prompt.slice(reviewers[2].prompt.lastIndexOf("\n{")+1));assert.equal(third.resources.remainingAcquisitions,0);assert.equal(third.resources.remainingLocatorReads,4);assert.ok(third.actions.includes("read"));assert.ok(!third.actions.includes("discover"));
+ const budget=JSON.parse(r.result.runTrace.calls.find((call:any)=>call.id==="research-budget").output);assert.deepEqual({external:budget.acquisitions,locator:budget.locatorReads,tools:budget.toolAttempts},{external:2,locator:1,tools:3});assert.ok(r.result.resultBatch.itemIds.some((id:string)=>id.includes("fictional-validation")));
+ const saved=f.tasks.terminal(r.id) as any;assert.ok(saved.result.answerNotes.searches.some((run:SearchRun)=>run.hits.some(hit=>hit.locatorResults?.length===1)));assert.ok(f.tasks.events(r.id,0).some(event=>event.discoveryBinding));
 });

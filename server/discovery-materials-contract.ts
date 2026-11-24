@@ -1,3 +1,5 @@
+import type {SourceReadLocator} from "../src/domain/source-read-locator";
+export type {SourceReadLocator,SourceReadLocatorResult} from "../src/domain/source-read-locator";
 import type { PaperDatasetEvidence, PaperRecord } from "../src/domain/paper-record";
 import type { HainaCatalog, HainaRecord } from "../src/domain/haina-record";
 import type { SearchRun } from "../src/domain/types";
@@ -63,7 +65,7 @@ export type PaperQuery =
   | { operation: "search"; query: string };
 
 export type SourceReadTarget =
-  | { kind: "web"; url: string; title: string; discoveredBy?: "user" | "assistant" }
+  | { kind: "web"; url: string; title: string; discoveredBy?: "user" | "assistant"; locators?:SourceReadLocator[] }
   | { kind: "paper"; id: string };
 
 export interface SourceReadInput {

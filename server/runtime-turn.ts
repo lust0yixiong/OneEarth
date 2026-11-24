@@ -294,7 +294,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     }
     let initialDiscoveryId:string|undefined,initialBinding:DiscoveryBinding|undefined,lastBinding:DiscoveryBinding|undefined,actualDiscoveryQuery:string|undefined;
     let lastDiscoveryResult:import("./data-search").DataSearchResult|undefined;
-    async function find(turn:TurnPlan,continuation?:DiscoveryInput["continuation"],evidenceGap?:string){
+    async function find(turn:TurnPlan,continuation?:DiscoveryInput["continuation"],evidenceGap?:string,executionSignal?:AbortSignal){
       if(!discoveryAuthority(turn,!!continuation).allowDiscovery)
         throw Error("原任务没有允许独立补查的范围，本轮未启动新的发现。");
       if(continuation)continuation={...continuation,focus:modelSafeText(continuation.focus)};
@@ -348,7 +348,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
             runTrace.findings=findings;
             event({finding,traceStarted:runTrace.started});
           }
-        },{onAccepted:saveBinding,onCheckpoint:saveBinding,webToolQuestion:clarification?.delegation.query,onEvent:async update=>{
+        },{onAccepted:saveBinding,onCheckpoint:saveBinding,webToolQuestion:clarification?.delegation.query,executionSignal,onEvent:async update=>{
           if(update.result)await retainDiscoveryMaterials(update.result);
         },...(!continuation?confirmation?.options:{})});
         if(!a2a)await retainDiscoveryMaterials(result);
@@ -468,7 +468,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     let retrieved=prepared.retrieval;
     let readRuns:SearchRun[]=[];
     let readIssues:string[]=[];
-    const readTargets=async(plan:TurnPlan,question:string,callPrefix?:string)=>{
+    const readTargets=async(plan:TurnPlan,question:string,callPrefix?:string,executionSignal?:AbortSignal)=>{
       readIssues=[];
       const policy=evidenceAuthority.sourcePolicy;
       const sources=policy?.mode==="restricted"?(policy.fallback?scopedDiscoverySources(lastDiscoveryResult??retrieved)||policy.sources.slice(0,1):policy.sources):undefined;
@@ -478,7 +478,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         report({id:(callPrefix||"initial-")+"read-scope",kind:"tool",name:"核对原读取范围",input:JSON.stringify({allowed:allowed.map(t=>t.key)}),status:"partial",error:message});
       }
       const progress:SearchRun[]=[];
-      const searches=await executor.read({...plan,targets:allowed},question,{stage,report,callPrefix,onFailure:message=>{readIssues.push(message);},
+      const searches=await executor.read({...plan,targets:allowed},question,{stage,report,callPrefix,executionSignal,onFailure:message=>{readIssues.push(message);},
       options:{onAccepted:async binding=>{await tasks.append(taskId,{sourceReadBinding:binding});},
         onCheckpoint:async binding=>{await tasks.append(taskId,{sourceReadBinding:binding});}},onResult:async material=>{readIssues.push(...material.issues);await retainMaterials(material);progress.push(...material.searches);}});
       return [...new Map([...progress,...searches].map(run=>[JSON.stringify(run),run])).values()];
@@ -515,9 +515,9 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       if(turn.action==="read"||blockedDiscovery||retrieved||readRuns.length||currentAssertionReadings.length||readIssues.length){
         const outcome=await continueResearch(targetQuery,evidencePlan,{retrieval:retrieved,reads:readRuns,assertionReadings:currentAssertionReadings,issues:readIssues,
           blockedDiscovery:blockedReason,attemptedReadTargets:turn.action==="read"?turn.targets.flatMap(target=>target.url?[target.url]:[]):[]},signal,{
-          model:prompt=>executor.model(prompt,{outputSchema:evidenceDecisionSchema}),
-          read:async(targets,focus,step)=>{const searches=await readTargets({...evidencePlan,action:"read",targets},targetQuery+"\n"+focus,"research-read-"+step+"-");return {searches,issues:readIssues};},
-          discover:focus=>initialDiscoveryId?find(turn,{previousId:initialDiscoveryId,focus}):find(turn,undefined,focus),stage,report,
+          model:(prompt,operationSignal)=>executor.model(prompt,{outputSchema:evidenceDecisionSchema},operationSignal),
+          read:async(targets,focus,step,operationSignal)=>{const searches=await readTargets({...evidencePlan,action:"read",targets},targetQuery+"\n"+focus,"research-read-"+step+"-",operationSignal);return {searches,issues:readIssues};},
+          discover:(focus,_step,operationSignal)=>initialDiscoveryId?find(turn,{previousId:initialDiscoveryId,focus},undefined,operationSignal):find(turn,undefined,focus,operationSignal),stage,report,
         },decision,evidenceAuthority);
         if(outcome.clarification){
           const material=outcome.retrieval??lastDiscoveryResult;

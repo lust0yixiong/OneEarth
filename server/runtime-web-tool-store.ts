@@ -10,7 +10,7 @@ export type WebGrantInput={researchTaskId:string;messageId:string;kind:"discover
 export type RuntimeWebToolAuthority={reserve(input:WebGrantInput):Promise<string>;bind(token:string,taskId:string):Promise<void>;revoke(token:string):Promise<void>};
 type Policy=Omit<WebGrantInput,"researchTaskId"|"messageId"|"kind">;
 type Grant={digest:string;research_id:string;message_id:string;discovery_id:string|null;kind:WebGrantInput["kind"];expires:string;revoked:boolean;policy:Policy};
-export type WebToolClaim={callId:string;lease:string;operation:WebToolOperation;nativeModel?:ChatModel};
+export type WebToolClaim={callId:string;lease:string;operation:WebToolOperation;nativeModel?:ChatModel;sourceSnapshotScope?:string};
 export class WebToolAccessError extends Error{constructor(readonly status:number,message:string){super(message);}}
 const uuid=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const hash=(v:string)=>createHash("sha256").update(v).digest("hex");
@@ -27,9 +27,12 @@ function authorize(grant:Grant,call:WebToolCall){
     if(!p.allowSearch||grant.kind==="source-read"||p.nativeModel?.executor!=="codex"||p.nativeModel.provider&&p.nativeModel.provider!=="native")throw new WebToolAccessError(403,"本轮没有已授权的原生搜索执行器。");
   }else{
     if(!p.allowFetch||op.provider==="DeepSeek Fetch"&&!p.deepseekFetch)throw new WebToolAccessError(403,"本轮没有该 Fetch 供应的执行许可。");
+    if(op.locators&&grant.kind!=="source-read")throw new WebToolAccessError(403,"明确位置仅用于已授权 URL 的定向补读。");
     if(grant.kind==="source-read"){
       if(op.provider==="Zenodo 索引")throw new WebToolAccessError(403,"定向 URL 补读未授权归档索引或附件发现。");
-      const urls=p.urls||[];if(!urls.includes(normalizedUrl(op.url))||!urls.includes(normalizedUrl(op.hit.url)))throw new WebToolAccessError(403,"定向补读只能读取本轮明确指定的 URL。");
+      const urls=p.urls||[],url=normalizedUrl(op.url),identity=normalizedUrl(op.hit.url);
+      if(!urls.includes(url)||!urls.includes(identity)||op.locators&&url!==identity)
+        throw new WebToolAccessError(403,"定向补读只能读取本轮明确指定的 URL。");
       // The exact-URL authority does not authorize discovery-supplied DOI or
       // landing-page metadata to trigger a different source fallback.
       return {...op,hit:{title:op.hit.title,url:op.hit.url,snippet:op.hit.snippet,discoveredBy:op.hit.discoveredBy}} satisfies WebToolOperation;
@@ -119,12 +122,13 @@ export async function runtimeWebToolStore(options:{pool?:Pool;now?:()=>number;tt
     },
     async claim():Promise<WebToolClaim|undefined>{
       available();return transaction(async db=>{await db.query("SELECT pg_advisory_xact_lock($1::bigint)",[admissionLock]);await discardEnded(db);
-        const row=(await db.query<{call_id:string;input:WebToolCall;policy:Policy}>(`SELECT c.call_id,c.input,g.policy FROM runtime_web_tool_calls c
+        const row=(await db.query<{call_id:string;input:WebToolCall;policy:Policy;kind:WebGrantInput["kind"];research_id:string}>(`SELECT c.call_id,c.input,g.policy,g.kind,g.research_id FROM runtime_web_tool_calls c
         JOIN runtime_web_tool_grants g ON g.digest=c.grant_digest JOIN runtime_tasks t ON t.id=g.research_id
         WHERE c.state='queued' AND NOT g.revoked AND g.discovery_id IS NOT NULL AND g.expires>$1 AND t.status='running'
         ORDER BY c.created,c.call_id LIMIT 1 FOR UPDATE OF c SKIP LOCKED`,[now()])).rows[0];if(!row)return;
         const lease=randomUUID();await db.query("UPDATE runtime_web_tool_calls SET state='running',lease=$2 WHERE call_id=$1",[row.call_id,lease]);
-        return {callId:row.call_id,lease,operation:row.input.operation,nativeModel:row.policy.nativeModel};});
+        return {callId:row.call_id,lease,operation:row.input.operation,nativeModel:row.policy.nativeModel,
+          ...(row.kind==="source-read"?{sourceSnapshotScope:row.research_id}:{})};});
     },
     async active(call:WebToolClaim){
       available();return !!(await pool.query(`SELECT 1 FROM runtime_web_tool_calls c JOIN runtime_web_tool_grants g ON g.digest=c.grant_digest JOIN runtime_tasks t ON t.id=g.research_id

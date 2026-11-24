@@ -34,7 +34,8 @@ function compact(value:any,key:string,quota:number,queries:string[],depth=0):any
   if(value===null||value===undefined||typeof value==="number"||typeof value==="boolean")return value;
   if(typeof value==="string")return literalKeys.has(key)?value:utf8Prefix(value,excerptKeys.has(key)?quota:key==="title"||key==="paper"?480:400);
   if(Array.isArray(value)){
-    const cap=key==="excerpts"||key==="historicalExcerpts"?3:key==="currentAssertionReadings"?3:key==="metadata"?8:key==="researchPaths"?1:4;
+    const cap=key==="excerpts"||key==="historicalExcerpts"?3:key==="currentAssertionReadings"?3:
+      key==="locatorResults"?24:key==="metadata"?8:key==="researchPaths"?1:4;
     const entries=key==="excerpts"||key==="historicalExcerpts"?rankEvidence(value,queries,e=>e.label||"",e=>e.quote||"").map(entry=>entry.item):value;
     return entries.slice(0,cap).map(item=>compact(item,key,quota,queries,depth+1));
   }
@@ -50,9 +51,19 @@ function compact(value:any,key:string,quota:number,queries:string[],depth=0):any
     if(result.source&&Number.isFinite(value.source?.start))result.source={...result.source,end:value.source.start+result.quote.length};
   }
   if(typeof value.pageExcerpt==="string"){
-    const selected=window(value.pageExcerpt,queries,quota);result.pageExcerpt=selected.text;
-    if(selected.partial){result.excerptTruncated=true;result.sourceExcerptLength=value.sourceExcerptLength??value.pageExcerpt.length;
-      result.excerptWindow={start:selected.start,end:selected.end,sourceChars:value.pageExcerpt.length,partial:true};}
+    const located=Array.isArray(value.locatorResults)&&value.locatorResults.some((item:any)=>item.status==="found"||item.status==="partial");
+    if(located){
+      if(quota>=900||byteLength(value.pageExcerpt)<=quota)result.pageExcerpt=value.pageExcerpt;
+      else {
+        delete result.pageExcerpt;
+        result.excerptTruncated=true;
+        result.locatedExcerptOmitted=true;
+      }
+    }else{
+      const selected=window(value.pageExcerpt,queries,quota);result.pageExcerpt=selected.text;
+      if(selected.partial){result.excerptTruncated=true;result.sourceExcerptLength=value.sourceExcerptLength??value.pageExcerpt.length;
+        result.excerptWindow={start:selected.start,end:selected.end,sourceChars:value.pageExcerpt.length,partial:true};}
+    }
   }
   if(Array.isArray(value.steps)&&result.steps?.length<value.steps.length||Array.isArray(value.members)&&result.members?.length<value.members.length)result.complete=false;
   return result;
@@ -141,7 +152,8 @@ export function packSynthesisContext(instructions:string,input:Record<string,any
   const selectedRefs=new Set(chosen.map(row=>row.ref)),base=core(payload);
   let packed:Record<string,any>=base,prompt="";
   for(const quota of [2600,1600,900,450,180,0]){
-    const views=chosen.map(row=>({...identity(row),...(quota?compact(row,"",!row.id&&row.pageExcerpt&&row.stage!=="search-snippet"&&retained.find(entry=>entry.ref===row.ref)?.relevant?Math.max(1800,quota):quota,queries):{}),
+    const views=chosen.map(row=>({...identity(row),...(quota?compact(row,"",!row.id&&row.pageExcerpt&&row.stage!=="search-snippet"&&retained.find(entry=>entry.ref===row.ref)?.relevant&&
+      !row.locatorResults?.length?Math.max(1800,quota):quota,queries):row.locatorResults?.length?{locatedExcerptOmitted:true}:{}),
       contextBudget:{partial:true,notice:"仅为原材料的有界窗口；未装入不等于不存在，目录身份不证明目标覆盖或原文件已读。"}}));
     packed={...base,catalogue:views.filter(row=>payload.catalogue?.some((item:Row)=>item.ref===row.ref)),
       webResults:views.filter(row=>payload.webResults?.some((item:Row)=>item.ref===row.ref)),

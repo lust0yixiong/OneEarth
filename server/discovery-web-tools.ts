@@ -1,3 +1,4 @@
+import {validSourceReadLocatorResult,type SourceReadLocator} from "../src/domain/source-read-locator";
 import {randomUUID} from "node:crypto";
 import {setTimeout as delay} from "node:timers/promises";
 import type {WebHit} from "../src/domain/types";
@@ -12,8 +13,8 @@ export type DiscoveryWebTools = {
   search(engine:KeywordSearchProvider,query:string,signal:AbortSignal):Promise<WebToolValue>;
   nativeSearch?:(queries:string[],signal:AbortSignal)=>Promise<{hits:WebHit[];queries:string[]}>;
   archiveRead(hit:WebHit,signal:AbortSignal,question:string):Promise<WebToolValue>;
-  originRead(hit:WebHit,url:string,signal:AbortSignal):Promise<PageReadValue>;
-  pdfRead(hit:WebHit,url:string,signal:AbortSignal,focus?:string,question?:string):Promise<PageReadValue>;
+  originRead(hit:WebHit,url:string,signal:AbortSignal,locators?:SourceReadLocator[]):Promise<PageReadValue>;
+  pdfRead(hit:WebHit,url:string,signal:AbortSignal,focus?:string,question?:string,locators?:SourceReadLocator[]):Promise<PageReadValue>;
   fetchPage(hit:WebHit,url:string,signal:AbortSignal,fresh?:boolean):Promise<WebToolValue>;
 };
 
@@ -76,12 +77,16 @@ export function discoveryWebTools(runtimeUrl:string|undefined, delegation:Delega
   }
 
   const page = (provider:WebFetchProvider,hit:WebHit,url:string,signal:AbortSignal,fields?:{
-    focus?:string;question?:string;fresh?:boolean;
+    focus?:string;question?:string;fresh?:boolean;locators?:SourceReadLocator[];
   }) => call({kind:"fetch",provider,url,hit:webToolHit(hit),...fields},signal);
-  async function excerpt(provider:"原站读取"|"PDF 原文",hit:WebHit,url:string,signal:AbortSignal,fields?:{focus?:string;question?:string}) {
+  async function excerpt(provider:"原站读取"|"PDF 原文",hit:WebHit,url:string,signal:AbortSignal,fields?:{focus?:string;question?:string;locators?:SourceReadLocator[]}) {
     const value=await page(provider,hit,url,signal,fields);
-    if (typeof value.requestUrl !== "string" || typeof value.warning !== "string" ||
-      typeof value.hits[0]?.pageExcerpt !== "string" || !value.hits[0].pageExcerpt.trim()) throw Error(invalidReceipt);
+    if (typeof value.requestUrl !== "string" || typeof value.warning !== "string") throw Error(invalidReceipt);
+    if(fields?.locators){
+      const results=value.hits[0]?.locatorResults;
+      if(value.hits.length!==1||value.hits[0].url!==hit.url||results?.length!==fields.locators.length||
+        !fields.locators.every((locator,index)=>validSourceReadLocatorResult(results[index],locator,url)))throw Error(invalidReceipt);
+    }else if(!value.hits[0]?.pageExcerpt?.trim()&&!value.hits[0]?.sourceAlternates?.length)throw Error(invalidReceipt);
     return {...value,requestUrl:value.requestUrl,warning:value.warning};
   }
   return {
@@ -92,8 +97,8 @@ export function discoveryWebTools(runtimeUrl:string|undefined, delegation:Delega
       return {hits:value.hits,queries:value.queries};
     }} : {}),
     archiveRead:(hit,signal,question) => page("Zenodo 索引",hit,hit.url,signal,{question}),
-    originRead:(hit,url,signal) => excerpt("原站读取",hit,url,signal),
-    pdfRead:(hit,url,signal,focus,question) => excerpt("PDF 原文",hit,url,signal,{focus,question}),
+    originRead:(hit,url,signal,locators) => excerpt("原站读取",hit,url,signal,{locators}),
+    pdfRead:(hit,url,signal,focus,question,locators) => excerpt("PDF 原文",hit,url,signal,{focus,question,locators}),
     async fetchPage(hit,url,signal,fresh) {
       const value=await page("DeepSeek Fetch",hit,url,signal,{fresh});
       if (typeof value.hits[0]?.pageExcerpt!=="string" || !value.hits[0].pageExcerpt.trim()) throw Error(invalidReceipt);

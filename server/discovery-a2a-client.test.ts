@@ -4,7 +4,7 @@ import {once} from "node:events";
 import {setTimeout as delay} from "node:timers/promises";
 import test,{type TestContext} from "node:test";
 import express from "express";
-import {discoverThroughA2A,discoveryA2ACancellation,type DiscoveryBusinessInput,type DiscoveryBinding,type DiscoveryA2AOptions} from "./discovery-a2a-client";
+import {discoverThroughA2A,readSourcesThroughA2A,discoveryA2ACancellation,type DiscoveryBusinessInput,type DiscoveryBinding,type DiscoveryA2AOptions} from "./discovery-a2a-client";
 import {researchExecutor} from "./research-executor";
 import {TaskCancelled} from "./task-cancellation";
 import type {DataSearchResult} from "./data-search";
@@ -309,4 +309,26 @@ test("an artifact from another task is rejected without contaminating the acquir
   const artifact={artifactId:"bad",parts:[{data:{kind:"oneearth.discovery.event.v1",event:{seq:9,stage:"must not enter record"}}}]};
   for(const res of service.streams.get(remote.id)!)service.frame(res,{artifactUpdate:{taskId:"foreign",contextId:remote.contextId,artifact}});
   await pending;assert.ok(!events.some(e=>e.stage==="must not enter record"));
+});
+
+test("exact A2A keeps the same source and plural locators and rejects changed locator receipts",async t=>{
+  const url="https://example.org/field-study";
+  const locators=[{kind:"table" as const,value:"2"},{kind:"section" as const,value:"Methods"}];
+  let service:Awaited<ReturnType<typeof provider>>, reads=0;
+  service=await provider(t,{get:(req,_res,next)=>{
+    const remote=service.tasks.get(String(req.params.id))!;
+    const result={searches:[{engine:"原站读取",status:"done",query:url,hits:[{url,title:"Field study",snippet:"",
+      pageExcerpt:"Actual row: site A, 3.2 cm",locatorResults:[{...locators[0],status:"found",excerpt:"Actual row: site A, 3.2 cm",
+        href:++reads===1?url+"#table-2":"https://example.org/different-article#table-2"},
+      {...locators[1],status:"not_found"}],availableLocators:[{...locators[0],href:url+"#table-2"}]}]}],papers:[],issues:[]};
+    service.add(remote,{sourceReadResult:result} as unknown as DiscoveryEvent);
+    service.state(remote,"TASK_STATE_COMPLETED");
+    next();
+  }});
+  const send=()=>readSourcesThroughA2A(randomUUID(),{question:"Check the source evidence",
+    targets:[{kind:"web",url,title:"Field study",locators}]},new AbortController().signal,()=>{});
+  const received=await send();
+  assert.equal(received.searches[0].hits[0].locatorResults?.[0].excerpt,"Actual row: site A, 3.2 cm");
+  assert.deepEqual(service.requests[0].body.message.parts[0].data.input.targets[0].locators,locators);
+  await assert.rejects(send(),/越过已委托对象/);
 });

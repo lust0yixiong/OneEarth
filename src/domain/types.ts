@@ -230,6 +230,9 @@ export type EvidenceStage="search-snippet"|"abstract"|"page-excerpt"|"pdf-excerp
 /** A name index is not file content. Completeness refers only to the saved names. */
 export interface ManifestIndex {names:string[];sourceTotal:number;namesComplete:boolean;contentsRead:false}
 export interface WebHit {
+  locatorResults?:import("./source-read-locator").SourceReadLocatorResult[];
+  availableLocators?:import("./source-read-locator").AvailableSourceLocator[];
+  sourceAlternates?:Array<{url:string;mediaType:"application/pdf"|"application/xml";relation:"citation_pdf_url"|"alternate"}>;
   manifestIndex?:ManifestIndex;
   evidenceNotice?:string;
   previousExcerptTruncated?:boolean;

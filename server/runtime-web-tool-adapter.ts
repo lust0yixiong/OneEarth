@@ -1,3 +1,6 @@
+import {exactSourceSnapshot} from "./exact-source-snapshot";
+import {excerptLocatorIndex} from "./locator-labels.mjs";
+import {parseSourceReadLocator} from "../src/domain/source-read-locator";
 import type {ChatModel} from "../src/domain/chat-model";
 import {deepSeekFetch,deepSeekSearch,DeepSeekRequestError} from "./deepseek-web";
 import {searchBing,searchDuckDuckGo} from "./web-search-leaves";
@@ -12,7 +15,7 @@ import {publicPage} from "./fetch-pages";
 import type {WebToolFailure,WebToolOperation,WebToolValue} from "./web-tool-contract";
 
 const searchProviders = {Bing:searchBing,DuckDuckGo:searchDuckDuckGo,DataCite:searchDataCite,"DeepSeek Search":deepSeekSearch};
-type WebToolOptions={nativeModel?:ChatModel;fetchImpl?:typeof fetch;sourceRequest?:SourceRequest};
+type WebToolOptions={nativeModel?:ChatModel;fetchImpl?:typeof fetch;sourceRequest?:SourceRequest;sourceSnapshotScope?:string};
 
 function deadline(operation:WebToolOperation){
   if(operation.kind==="native-search")return 30_000;
@@ -35,14 +38,24 @@ export async function runWebTool(operation:WebToolOperation,parent:AbortSignal,o
       throw new SourceReadError("本轮运行时没有获准的原生搜索执行器。","WEB_NATIVE_NOT_AUTHORIZED");
     return nativeWebSearch(model,operation.queries,signal);
   }
-  const {hit,url,focus,question}=operation;
+  const {hit,url,focus,question,locators}=operation;
   switch(operation.provider){
-    case "DeepSeek Fetch":
-      return {...await deepSeekFetch(hit,url,signal,request,operation.fresh),requestUrl:url};
+    case "DeepSeek Fetch": {
+      const value=await deepSeekFetch(hit,url,signal,request,operation.fresh);
+      if(!operation.fresh)return {...value,requestUrl:url};
+      const hits=value.hits.map(hit=>{
+        const availableLocators=excerptLocatorIndex(hit.pageExcerpt).flatMap(({kind,value,label})=>{
+          const locator=parseSourceReadLocator({kind,value});
+          return locator?[{...locator,label}]:[];
+        });
+        return {...hit,...(availableLocators.length?{availableLocators}:{})};
+      });
+      return {...value,hits,requestUrl:url};
+    }
     case "原站读取":
-      return readOriginPage(hit,url,signal,options.sourceRequest);
+      return readOriginPage(hit,url,signal,options.sourceRequest,locators,exactSourceSnapshot(options.sourceSnapshotScope,url,"origin"));
     case "PDF 原文":
-      return readPdfPage(hit,url,signal,options.sourceRequest,focus,question);
+      return readPdfPage(hit,url,signal,options.sourceRequest,focus,question,locators,exactSourceSnapshot(options.sourceSnapshotScope,url,"pdf"));
     case "Zenodo 索引": {
       const id=zenodoRecordId(hit);
       if(!id||(publicPage(url)!==publicPage(hit.url)&&publicPage(url)!=="https://zenodo.org/api/records/"+id))

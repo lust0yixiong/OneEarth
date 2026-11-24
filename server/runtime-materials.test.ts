@@ -35,13 +35,13 @@ async function listen(t:TestContext,app:express.Express){
   t.after(async()=>{server.closeAllConnections();await new Promise<void>(done=>server.close(()=>done()));});
   return "http://127.0.0.1:"+address.port;
 }
-async function provider(t:TestContext,options:{malformed?:"task"|"operation"|"missing-context";lostReceipt?:boolean;lostDirect?:boolean;working?:boolean;progress?:boolean;foreign?:boolean;openResult?:boolean;error?:boolean;disconnect?:boolean;stream?:boolean}={}){
+async function provider(t:TestContext,options:{sourceMaterial?:SourceReadResult;malformed?:"task"|"operation"|"missing-context";lostReceipt?:boolean;lostDirect?:boolean;working?:boolean;progress?:boolean;foreign?:boolean;openResult?:boolean;error?:boolean;disconnect?:boolean;stream?:boolean}={}){
   const app=express();app.use(express.json({type:"application/a2a+json"}));const requests:any[]=[],tasks=new Map<string,any>(),accepted=new Map<string,any>();
   let jobs=0,gets=0,cancels=0,subscriptions=0;
   const snapshot=(task:any)=>structuredClone(task);
   const complete=(task:any)=>{
     task.status={state:"TASK_STATE_COMPLETED"};
-    const result=material();if(options.foreign)result.searches[0].query=otherUrl;
+    const result=options.sourceMaterial??material();if(options.foreign)result.searches[0].query=otherUrl;
     const event=options.openResult?{result:{plan:{},papers:[],haina:[],searches:[],sourceStatus:[],issues:[]}}:{sourceReadResult:result};
     task.artifacts=[{artifactId:"stable-material",parts:[{data:{kind:"oneearth.discovery.event.v1",event:{seq:10,...event}}}]}];
   };
@@ -256,4 +256,20 @@ for(const reason of ["user-cancel","worker-interrupted","persistence-failure"] a
   }
   assert.equal(service.counts().cancels,reason==="user-cancel"?1:0);assert.equal(service.counts().jobs,1);
   assert.equal(service.requests.length,1);assert.equal(tasks.get(id)?.status,reason==="user-cancel"?"cancelled":"failed");
+});
+
+test("exact-source locators preserve a complete bounded outline and reject unrelated or unrequested location receipts",async t=>{
+ for(const arm of ["valid","foreign-href","unrequested","invalid-input"] as const)await t.test(arm,async t=>{
+  const result=material(),input=sourceInput(),hit=result.searches[0].hits[0];
+  if(input.targets[0].kind!=="web")throw Error("fixture target");
+  input.targets[0].locators=[{kind:"table",value:arm==="invalid-input"?"bad<selector>":"rates"}];
+  hit.availableLocators=Array.from({length:20},(_,i)=>({kind:"section" as const,value:"section-"+(i+1),label:"Published section "+(i+1),href:url+"#section-"+(i+1)}));
+  hit.locatorResults=[{kind:"table",value:arm==="unrequested"?"unknown-position":"rates",status:"found",excerpt:"Actual measured rate 0.4",href:arm==="foreign-href"?otherUrl+"#rates":url+"#rates"}];
+  const service=await provider(t,{sourceMaterial:result});
+  if(arm==="valid"){
+   const value=await readSourcesThroughA2A(randomUUID(),input,new AbortController().signal,()=>{});assert.equal(value.searches[0].hits[0].availableLocators?.length,20);assert.deepEqual(value.searches[0].hits[0].locatorResults,hit.locatorResults);assert.deepEqual(service.requests[0].body.message.parts[0].data.input.targets[0].locators,[{kind:"table",value:"rates"}]);
+  }else{
+   await assert.rejects(readSourcesThroughA2A(randomUUID(),input,new AbortController().signal,()=>{}),DiscoveryA2AError);if(arm==="invalid-input")assert.equal(service.counts().jobs,0);
+  }
+ });
 });

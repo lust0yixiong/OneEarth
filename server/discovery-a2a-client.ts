@@ -1,3 +1,5 @@
+import {publicPage} from "./fetch-pages";
+import {parseSourceReadLocators,validAvailableSourceLocator,validSourceReadLocatorResult} from "../src/domain/source-read-locator";
 import {setTimeout as delay} from "node:timers/promises";
 import type {DataSearchResult} from "./data-search";
 import type {DiscoveryInput, DiscoveryEvent} from "./discovery-contract";
@@ -398,7 +400,10 @@ export async function readSourcesThroughA2A(messageId:string,input:SourceReadInp
       (target.discoveredBy===undefined||["user","assistant"].includes(target.discoveredBy))){
       try{const url=new URL(target.url);if(!["http:","https:"].includes(url.protocol)||url.username||url.password)throw Error();}
       catch{throw new DiscoveryA2AError("精确补读的来源地址无效。");}
-      return {kind:"web" as const,url:target.url,title:target.title,...(target.discoveredBy?{discoveredBy:target.discoveredBy}:{})};
+      const locators=parseSourceReadLocators(target.locators);
+      if(target.locators!==undefined&&!locators)throw new DiscoveryA2AError("精确补读的位置无效。");
+      return {kind:"web" as const,url:target.url,title:target.title,...(target.discoveredBy?{discoveredBy:target.discoveredBy}:{}),
+        ...(locators?{locators}:{})};
     }
     throw new DiscoveryA2AError("精确补读的来源身份无效。");
   });
@@ -409,13 +414,27 @@ export async function readSourcesThroughA2A(messageId:string,input:SourceReadInp
     ...(input.deepseekFetch!==undefined?{deepseekFetch:input.deepseekFetch}:{})}},event=>{
     if(event.result)throw new DiscoveryA2AError("精确补读不能使用开放发现结果冒充材料。");
     const urls=new Set(targets.flatMap(t=>t.kind==="web"?[t.url]:[])),ids=new Set(targets.flatMap(t=>t.kind==="paper"?[t.id]:[]));
+    function hitIsValid(hit:unknown,url:string){
+      if(!object(hit)||typeof hit.url!=="string"||typeof hit.title!=="string"||typeof hit.snippet!=="string")return false;
+      const web=targets.filter(target=>target.kind==="web"&&target.url===url);
+      const {locatorResults,availableLocators,sourceAlternates}=hit;
+      if(sourceAlternates!==undefined&&(!Array.isArray(sourceAlternates)||sourceAlternates.length>4||
+        !sourceAlternates.every(entry=>object(entry)&&typeof entry.url==="string"&&entry.url.length<=2200&&!!publicPage(entry.url)&&
+          (entry.mediaType==="application/pdf"||entry.mediaType==="application/xml")&&
+          (entry.relation==="citation_pdf_url"||entry.relation==="alternate"))))return false;
+      if(availableLocators!==undefined&&(!Array.isArray(availableLocators)||availableLocators.length>20||
+        !availableLocators.every(entry=>validAvailableSourceLocator(entry,url))))return false;
+      if(locatorResults===undefined)return web.some(target=>target.kind==="web"&&!target.locators);
+      if(hit.url!==url||!Array.isArray(locatorResults))return false;
+      return web.some(target=>target.kind==="web"&&target.locators?.length===locatorResults.length&&
+        target.locators.every((locator,index)=>validSourceReadLocatorResult(locatorResults[index],locator,url)));
+    }
     function validate(value:unknown,partial=false){
       if(!object(value)||(!partial&&!["searches","papers","issues"].every(key=>Array.isArray(value[key])))||
         (value.issues!==undefined&&(!Array.isArray(value.issues)||!value.issues.every((v:unknown)=>typeof v==="string")))||
         (value.papers!==undefined&&(!Array.isArray(value.papers)||!value.papers.every((p:any)=>validPaperRecord(p)&&!p.catalogSummary&&ids.has(p.id))))||
         (value.searches!==undefined&&(!Array.isArray(value.searches)||!value.searches.every((run:any)=>object(run)&&typeof run.engine==="string"&&
-          ["done","partial","failed"].includes(run.status)&&urls.has(run.query)&&Array.isArray(run.hits)&&run.hits.every((hit:any)=>object(hit)&&
-          typeof hit.url==="string"&&typeof hit.title==="string"&&typeof hit.snippet==="string"))))||
+          ["done","partial","failed"].includes(run.status)&&urls.has(run.query)&&Array.isArray(run.hits)&&run.hits.every((hit:unknown)=>hitIsValid(hit,run.query)))))||
         (value.paperEvidence!==undefined&&(!Array.isArray(value.paperEvidence)||!value.paperEvidence.every((item:any)=>object(item)&&ids.has(item.id)&&
           typeof item.readAt==="string"&&Number.isFinite(Date.parse(item.readAt))&&object(item.evidence)&&Array.isArray(item.evidence.papers)))))
         throw new DiscoveryA2AError("精确补读材料缺少有效来源或越过已委托对象。");

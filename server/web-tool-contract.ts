@@ -1,3 +1,4 @@
+import {parseSourceReadLocators,type SourceReadLocator} from "../src/domain/source-read-locator";
 import type {WebHit} from "../src/domain/types";
 import type {ArchiveReadResult} from "./archive-index";
 import {publicPage} from "./fetch-pages";
@@ -13,7 +14,7 @@ export type WebFetchProvider = typeof fetchProviders[number];
 export type WebToolOperation =
   | {kind:"search";provider:KeywordSearchProvider;query:string}
   | {kind:"native-search";queries:string[]}
-  | {kind:"fetch";provider:WebFetchProvider;url:string;hit:WebHit;focus?:string;question?:string;fresh?:boolean};
+  | {kind:"fetch";provider:WebFetchProvider;url:string;hit:WebHit;focus?:string;question?:string;fresh?:boolean;locators?:SourceReadLocator[]};
 export type WebToolCall = {taskId:string;messageId:string;callId:string;operation:WebToolOperation};
 export type WebToolValue = {hits:WebHit[];requestUrl?:string;warning?:string;cacheStoredAt?:string;queries?:string[];total?:number} &
   Pick<ArchiveReadResult,"identity"|"manifest"|"attachmentTargets">;
@@ -71,16 +72,19 @@ export function parseWebToolOperation(input:unknown):WebToolOperation|undefined 
       !input.queries.length||input.queries.length>3||!input.queries.every(term))return;
     return {kind:"native-search",queries:input.queries};
   }
-  if(input.kind!=="fetch"||!only(input,["kind","provider","url","hit","focus","question","fresh"])||!url(input.url))return;
+  if(input.kind!=="fetch"||!only(input,["kind","provider","url","hit","focus","question","fresh","locators"])||!url(input.url))return;
   const provider=fetchProviders.find(candidate=>candidate===input.provider);
   const hit=parseHit(input.hit);
+  const locators=parseSourceReadLocators(input.locators);
+  if(input.locators!==undefined&&(!locators||(provider!=="原站读取"&&provider!=="PDF 原文")))return;
   if(!provider||!hit||(input.focus!==undefined&&!text(input.focus,6000))||
     (input.question!==undefined&&!text(input.question,4000))||
     (input.fresh!==undefined&&(provider!=="DeepSeek Fetch"||typeof input.fresh!=="boolean")))return;
   return {kind:"fetch",provider,url:input.url,hit,
     ...(input.focus!==undefined?{focus:input.focus}:{}),
     ...(input.question!==undefined?{question:input.question}:{}),
-    ...(input.fresh!==undefined?{fresh:input.fresh}:{})};
+    ...(input.fresh!==undefined?{fresh:input.fresh}:{}),
+    ...(locators?{locators}:{})};
 }
 
 export function parseWebToolCall(input:unknown):WebToolCall|undefined {

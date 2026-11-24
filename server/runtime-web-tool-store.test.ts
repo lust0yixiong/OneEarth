@@ -65,6 +65,13 @@ test("isolated PG runtime web receipts, authority, lifecycle and production-work
     const base={kind:"fetch" as const,provider:"PDF 原文" as const,url:"https://example.org/original.pdf",hit:{url:"https://example.org/original.pdf",title:"Original",snippet:"Identity",doi:"10.1234/unapproved"}};
     const c={...call(f.g,f.taskId),operation:base};assert.deepEqual(await authority.request(f.token,c),{state:"pending"});
     const raw=(await sql.query("SELECT input FROM runtime_web_tool_calls WHERE call_id=$1",[c.callId])).rows[0].input;assert.equal(raw.operation.hit.doi,undefined);
+    const scoped={...c,callId:randomUUID(),operation:{...base,locators:[{kind:"table" as const,value:"2"}]}};
+    assert.deepEqual(await authority.request(f.token,scoped),{state:"pending"});
+    const saved=(await sql.query("SELECT input FROM runtime_web_tool_calls WHERE call_id=$1",[scoped.callId])).rows[0].input;
+    assert.deepEqual(saved.operation.locators,scoped.operation.locators);
+    const open=await authorized();
+    await assert.rejects(authority.request(open.token,{...call(open.g,open.taskId),operation:scoped.operation}),errorStatus(403));
+    await authority.revoke(open.token);
     await assert.rejects(authority.request(f.token,{...c,callId:randomUUID(),operation}),errorStatus(403));await assert.rejects(authority.request(f.token,{...c,callId:randomUUID(),operation:{...base,provider:"DeepSeek Fetch"}}),errorStatus(403));
     await assert.rejects(authority.request(f.token,{...c,callId:randomUUID(),operation:{...base,provider:"Zenodo 索引"}}),errorStatus(403));
     await assert.rejects(authority.request(f.token,{...c,callId:randomUUID(),operation:{...base,url:"https://example.org/other.pdf"}}),errorStatus(403));await authority.revoke(f.token);

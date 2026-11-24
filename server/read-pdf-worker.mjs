@@ -1,6 +1,7 @@
 // Parse untrusted PDF material outside the request thread. The parent owns all network I/O.
 import {parentPort,workerData} from 'node:worker_threads';
 import {getDocument, PDFDataRangeTransport} from 'pdfjs-dist/legacy/build/pdf.mjs';
+import {createPdfLocatorCollector} from './pdf-source-locators.mjs';
 
 class RemoteRanges extends PDFDataRangeTransport {
   requestDataRange(begin,end){parentPort.postMessage({range:[begin,end]});}
@@ -42,7 +43,7 @@ export function pdfTextWindows(text,focusTerms=[],terms=[],titleTerms=[]){
 
 if(parentPort) {
 try {
-  const {first,size,chunkSize,terms,focusTerms=terms,titleTerms=[],targetPages=[],outlineQuery=''}=workerData;
+  const {first,size,chunkSize,terms,focusTerms=terms,titleTerms=[],targetPages=[],outlineQuery='',locators}=workerData;
   const ranges=new RemoteRanges(size,first);
   parentPort.on('message',({begin,bytes})=>ranges.onDataRange(begin,bytes));
   const source=first.length===size?{data:first}:{range:ranges,length:size,rangeChunkSize:chunkSize};
@@ -86,27 +87,48 @@ try {
     }
   }catch{outlineStatus='outline-read-incomplete';}
   const bookmarkPages=bookmarkTargets.map(t=>t.pageNo);
-  const candidates=[],checkedPages=[];
-  function excerpt(){
-    return candidates.slice().sort((a,b)=>b.score-a.score||a.pageNo-b.pageNo)
-      .slice(0,3).sort((a,b)=>a.pageNo-b.pageNo)
-      .map(p=>p.windows.map((w,i)=>'[PDF 第 '+p.pageNo+' 页；文本字符 '+(w.start+1)+'–'+w.end+'；局部片段 '+(i+1)+'] '+w.text).join('\n')).join('\n\n')+'\n[检查范围] 实际提取过文本的物理页码 '+checkedPages.join(', ')+'；文档共 '+doc.numPages+' 页。只摘录最多3页的局部文本；未输出的页不表示无相关信息。\n[书签定位] '+JSON.stringify({status:outlineStatus,targets:bookmarkTargets})+'；书签仅定位，不代表目标正文已读；实际提取页见检查范围。无匹配书签不推测印刷页偏移。';
+  if(locators){
+    const collector=createPdfLocatorCollector(locators,doc.numPages);
+    const explicit=locators.filter(locator=>locator.kind==='page').map(locator=>Number(locator.value));
+    const scan=locators.some(locator=>locator.kind!=='page')?Array.from({length:Math.min(12,doc.numPages)},(_,i)=>i+1):[];
+    const pages=[...new Set([...explicit,...(scan.length?[...targetPages,...bookmarkPages,...scan]:[])])]
+      .filter(n=>n>=1&&n<=doc.numPages).slice(0,12);
+    for(const pageNo of pages){
+      const page=await doc.getPage(pageNo);
+      const content=await page.getTextContent();
+      collector.addPage(pageNo,content.items);
+      page.cleanup();
+      parentPort.postMessage({partialLocated:collector.result()});
+    }
+    parentPort.postMessage({located:collector.result()});
+    await doc.destroy();
+  } else {
+    const candidates=[],checkedPages=[],collector=createPdfLocatorCollector([],doc.numPages);
+    function result(){
+      return {excerpt:excerpt(),results:[],available:collector.result().available};
+    }
+    function excerpt(){
+      return candidates.slice().sort((a,b)=>b.score-a.score||a.pageNo-b.pageNo)
+        .slice(0,3).sort((a,b)=>a.pageNo-b.pageNo)
+        .map(p=>p.windows.map((w,i)=>'[PDF 第 '+p.pageNo+' 页；文本字符 '+(w.start+1)+'–'+w.end+'；局部片段 '+(i+1)+'] '+w.text).join('\n')).join('\n\n')+'\n[检查范围] 实际提取过文本的物理页码 '+checkedPages.join(', ')+'；文档共 '+doc.numPages+' 页。只摘录最多3页的局部文本；未输出的页不表示无相关信息。\n[书签定位] '+JSON.stringify({status:outlineStatus,targets:bookmarkTargets})+'；书签仅定位，不代表目标正文已读；实际提取页见检查范围。无匹配书签不推测印刷页偏移。';
+    }
+    const pages=[...new Set([...targetPages.filter(n=>n<=doc.numPages),...bookmarkPages,...Array.from({length:Math.min(4,doc.numPages)},(_,i)=>i+1)])].slice(0,8);
+    for(const pageNo of pages){
+      const page=await doc.getPage(pageNo);
+      const content=await page.getTextContent();
+      checkedPages.push(pageNo);
+      collector.addPage(pageNo,content.items);
+      const text=content.items.map(i=>i.str||'').join(' ').replace(/\s+/g,' ').trim();
+      page.cleanup();
+      if(text.length<60)continue;
+      const windows=pdfTextWindows(text,focusTerms,terms,titleTerms);
+      const score=(targetPages.includes(pageNo)||bookmarkPages.includes(pageNo)?100:0)+windows.reduce((sum,w)=>sum+w.score,0);
+      candidates.push({pageNo,windows,score});
+      parentPort.postMessage({partialLocated:result()});
+    }
+    if(!candidates.length)throw Error('已检查的 PDF 页未提取到可用文本。');
+    parentPort.postMessage({located:result()});
   }
-  const pages=[...new Set([...targetPages.filter(n=>n<=doc.numPages),...bookmarkPages,...Array.from({length:Math.min(4,doc.numPages)},(_,i)=>i+1)])].slice(0,8);
-  for(const pageNo of pages){
-    const page=await doc.getPage(pageNo);
-    const content=await page.getTextContent();
-    checkedPages.push(pageNo);
-    const text=content.items.map(i=>i.str||'').join(' ').replace(/\s+/g,' ').trim();
-    page.cleanup();
-    if(text.length<60)continue;
-    const windows=pdfTextWindows(text,focusTerms,terms,titleTerms);
-    const score=(targetPages.includes(pageNo)||bookmarkPages.includes(pageNo)?100:0)+windows.reduce((sum,w)=>sum+w.score,0);
-    candidates.push({pageNo,windows,score});
-    parentPort.postMessage({partial:excerpt()});
-  }
-  if(!candidates.length)throw Error('已检查的 PDF 页未提取到可用文本。');
-  parentPort.postMessage({excerpt:excerpt()});
 } catch(error){parentPort.postMessage({error:error.message});}
 
 }

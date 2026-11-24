@@ -63,7 +63,7 @@ fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({prompt,schema,output:va
     assert.equal(outcome.kind,"research");if(outcome.kind!=="research")throw Error("no research handoff");
     const handoff=readChatResearchHandoff(outcome.handoff),before=planners().length;
     const result=await resumePlannedTurn(services,id,handoff.body,handoff.plan,controller.signal,event=>tasks.append(id,event));
-    assert.equal(planners().length,before,"the worker must not plan a third time");assert.equal(result.error,undefined);tasks.finish(id,"complete",result);return result.result as DiscoveryResponse;
+    assert.equal(planners().length,before,"the worker must not repeat foreground planning");assert.equal(result.error,undefined);tasks.finish(id,"complete",result);return result.result as DiscoveryResponse;
    }};
   },
   async observation(){writeFileSync(settings,JSON.stringify({plans:[{...read([]),observationUse:"selected"}],used:0}));return runForegroundTurn(services,randomUUID(),body(),new AbortController().signal,()=>{},{observationAvailable:true,observationMaterials:[{artifactId:"controlled-weather",version:"A",title:"Authorized observation",variables:["wind"]}]});},
@@ -76,7 +76,7 @@ test("empty and excessive read lists are corrected once in the real Chat path, t
   assert.equal(r.outcome.kind,"research");assert.equal(f.planners().length,2);assert.equal(f.requests.length,0,"no execution before validated handoff");
   const second=f.planners()[1],data=payload(second.prompt);assert.equal(data.readCorrection.actualCount,count);assert.deepEqual(data.readCorrection.allowedTargets,Array.from({length:count||8},(_,i)=>key(i)));assert.equal(data.question,r.input.query);
   assert.deepEqual(second.schema.properties.decide.properties.kind.enum,["read"]);assert.equal(second.schema.properties.decide.properties.targets.minItems,1);assert.equal(second.schema.properties.decide.properties.targets.maxItems,3);
-  assert.match(second.prompt,/原用户目的、原范围/);assert.match(second.prompt,/不再开放history-read/);
+  assert.match(second.prompt,/原用户目的、原范围/);assert.match(second.prompt,/不开放history-read/);
   const result=await r.resume();assert.equal(f.requests.length,1);assert.deepEqual(f.requests[0].input.targets.map((target:any)=>"web:"+target.url),selected);assert.equal(f.requests[0].input.question,r.input.query);assert.equal(f.requests[0].input.config,undefined);
   const action=JSON.parse(result.runTrace!.calls.find(call=>call.id==="turn-action")!.output!);assert.equal(action.modelPlanning.attempts,2);assert.equal(action.modelPlanning.promptBytes,Buffer.byteLength(second.prompt));assert.deepEqual(action.modelPlanning.inputs.map((item:any)=>item.sha256),f.planners().map(call=>createHash("sha256").update(call.prompt).digest("hex")));
   const bound=f.tasks.events(r.id,0).filter(event=>event.sourceReadBinding).map(event=>event.sourceReadBinding as any);assert.ok(bound.some(binding=>binding.discoveryId===f.jobs.get(f.requests[0].messageId)));
@@ -96,15 +96,26 @@ test("malformed or already unauthorized initial decisions remain one-call failur
  for(const [i,wire] of cases.entries())await t.test("invalid shape or key "+i,async t=>{const f=await fixture(t),r=await f.foreground([wire,read([key(0)])]);assert.equal(r.outcome.kind,"reply");if(r.outcome.kind==="reply")assert.equal(r.outcome.payload.code,"TURN_PLAN_INVALID");assert.equal(f.planners().length,1);assert.equal(f.requests.length,0);});
 });
 
-test("the sole correction cannot repeat invalid counts, change intent, widen the source set or request history",async t=>{
- const cases=[read([]),read([key(0),key(1),key(2),key(3)]),read(["web:https://unknown.invalid/a"]),read([key(4)]),{decide:{kind:"search",goal:"new unrelated discovery",targets:[]}},{decide:{kind:"workspace",action:{kind:"navigate-map",place:"0N 0E"}}},{decide:{kind:"respond",reply:"already read",targets:[]}},{decide:{kind:"history-read",selections:[]}}];
+test("a quantity correction cannot change intent, widen the source set or request history",async t=>{
+ const cases=[read(["web:https://unknown.invalid/a"]),read([key(4)]),{decide:{kind:"search",goal:"new unrelated discovery",targets:[]}},{decide:{kind:"workspace",action:{kind:"navigate-map",place:"0N 0E"}}},{decide:{kind:"respond",reply:"already read",targets:[]}},{decide:{kind:"history-read",selections:[]}}];
  for(const [i,wire] of cases.entries())await t.test("rejected second decision "+i,async t=>{const f=await fixture(t),r=await f.foreground([read([key(0),key(1),key(2),key(3)]),wire,read([key(0)])]);assert.equal(r.outcome.kind,"reply");if(r.outcome.kind==="reply")assert.equal(r.outcome.payload.code,"TURN_PLAN_INVALID");assert.equal(f.planners().length,2);assert.equal(f.requests.length,0);const end=r.events.filter(event=>(event.call as any)?.id==="turn-action").at(-1);assert.equal(JSON.parse((end!.call as any).output).attempts,2);});
 });
 
-test("history read and cardinality repair share one follow-up planning allowance",async t=>{
+test("a fourth foreground decision can correct the same read scope and reach actual source execution",async t=>{
+ const f=await fixture(t),r=await f.foreground([read([key(0),key(1),key(2),key(3)]),read([]),read([key(0),key(1),key(2),key(3)]),read([key(0)])]);
+ assert.equal(r.outcome.kind,"research");assert.equal(f.planners().length,4);assert.equal(f.requests.length,0);const result=await r.resume();assert.equal(f.requests.length,1);assert.deepEqual(f.requests[0].input.targets.map((target:any)=>target.url),[urls[0]]);
+ const action=JSON.parse(result.runTrace!.calls.find(call=>call.id==="turn-action")!.output!);assert.equal(action.modelPlanning.attempts,4);assert.equal(action.modelPlanning.modelCalls,4);
+ for(const call of f.planners().slice(1))assert.deepEqual(payload(call.prompt).readCorrection.allowedTargets,urls.slice(0,4).map((_,i)=>key(i)));
+});
+
+test("unrepaired quantities stop at four model calls without using a tool",async t=>{
+ const f=await fixture(t),r=await f.foreground([read([]),read([]),read([]),read([]),read([key(0)])]);assert.equal(r.outcome.kind,"reply");if(r.outcome.kind==="reply")assert.equal(r.outcome.payload.code,"TURN_PLAN_INVALID");assert.equal(f.planners().length,4);assert.equal(f.requests.length,0);
+});
+
+test("history-read keeps its own single use while quantity correction uses the shared foreground budget",async t=>{
  const f=await fixture(t),row:ConversationHistoryTurn={taskId:randomUUID(),turnId:randomUUID(),submittedAt:Date.now()-1,question:"Original controlled question",taskState:"complete",assistantText:"Original controlled answer.",observationRestricted:false};
- const r=await f.foreground([{decide:{kind:"history-read",selections:[{taskId:row.taskId,turnId:row.turnId,blockIds:["a1"]}]}},read([]),read([key(0)])],{rows:[row]});
- assert.equal(r.outcome.kind,"reply");if(r.outcome.kind==="reply")assert.equal(r.outcome.payload.code,"TURN_PLAN_INVALID");assert.equal(f.planners().length,2);assert.equal(f.requests.length,0);assert.equal(payload(f.planners()[1].prompt).turnContext.conversation.readback.state,"loaded");assert.ok(!r.events.some(event=>(event.call as any)?.id==="foreground-read-repair"));
+ const r=await f.foreground([{decide:{kind:"history-read",selections:[{taskId:row.taskId,turnId:row.turnId,blockIds:["a1"]}]}},read([]),read([]),read([key(0)])],{rows:[row]});
+ assert.equal(r.outcome.kind,"research");assert.equal(f.planners().length,4);assert.equal(payload(f.planners()[1].prompt).turnContext.conversation.readback.state,"loaded");assert.equal(r.events.filter(event=>(event.call as any)?.id==="history-read").length,1);await r.resume();assert.equal(f.requests.length,1);
 });
 
 test("bad JSON with empty or nonempty trusted history is not mistaken for a history-read request",async t=>{

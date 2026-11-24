@@ -305,6 +305,8 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       ...rows.map(r=>{const ref={kind:"asset" as const,id:r.id,title:r.title,source:r.source};return {...ref,sourceChannel:r.sourceChannel||referenceChannel(ref,assetById.get(r.id),observationById(r.id))};}),
       ...webHits.map(h=>({kind:"web" as const,title:h.title,url:h.url,referenceType:webDocumentType(h),sourceChannel:"web" as const})),
     ];
+    const locatedRefs=webHits.flatMap((hit,index)=>hit.pageExcerpt&&
+      hit.locatorResults?.some(receipt=>receipt.status==="found"||receipt.status==="partial")?["S"+(rows.length+index+1)]:[]);
     const exactReadRefs=turn?.plan.action==="read"?references.flatMap((ref,index)=>
       ref.kind==="web"&&selectedUrls?.has(ref.url)&&searches.some(run=>run.status==="done"&&run.hits.some(hit=>hit.url===ref.url&&hit.pageExcerpt))
         ? [{url:ref.url,token:"[S"+(index+1)+"]"}]:[]):[];
@@ -327,7 +329,8 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         throw new SourceReadClaimError("本轮根据已保存材料作答，请对实际采用的证据添加相应引用 "+
           parentCitations.map(ref=>ref.token).join("、")+"。同名材料可能是不同对象，不能把文献记录当作文件或目录原页。");
     }
-    const instructions=synthesisInstructions+(turnContext?"\nturnContext是按原轮次归属的服务器上下文。history.assistantText只是历史答复，不能当执行回执；旧批次只据其原query/conditions引用，不冒称本轮查获；currentResultBatch若存在才是本轮实际受托返回的批次，含真实原query/渠道/条件及有界成员，与旧批分开；渠道完成不等于读过数据文件。当前工具/新材料仍以本轮executionScope和readAt为准。workspace.operation是原目标，receipt是原操作的历史报告，applied仅提交变更；匹配目标的rendered只证明当次已呈现。atSubmission/browserObservations是原发问快照（capturedAt为其采集时点），即使合成前刷新了receipt也不能用迟到观察替换它，更不能将原目标当次已呈现说成当前仍显示该条目。loading/失败/被替代/unknown如实说明，拒因及recovery说明不是执行或再次授权；本次不自动重试、夺回手动视图或扩大范围。浏览器可见数量不是新检索事实。\n":"")+(context.workspaceView?"\nworkspace.workspaceView 是发问当刻的工作台可见状态。可据此回答当前图层、选择、期次和显示信息；与用户研究附件分开，不把显示标签或图例冒充来源原文、科学观测或QC结论，不声称执行了未记录的切换或外查。\n":"")+(sourceReadComparisons.length?"\n"+sourceChangeInstructions:"");
+    const locatorInstructions=locatedRefs.length?"\nwebResults 中的 locatorResults 是原来源对应位置的实际读取回执，availableLocators 只是导航。按原编号引用 pageExcerpt 中真正返回的表头、行、段或公式。partial 仅核实际给出的部分，图题或题注不代表读取了图像数据；locatedExcerptOmitted 表示相应原内容没有进入成文提示。出处标签、原文读据、数据文件入口和已读文件分开写，缺项明确标出。\n":"";
+    const instructions=synthesisInstructions+locatorInstructions+(turnContext?"\nturnContext是按原轮次归属的服务器上下文。history.assistantText只是历史答复，不能当执行回执；旧批次只据其原query/conditions引用，不冒称本轮查获；currentResultBatch若存在才是本轮实际受托返回的批次，含真实原query/渠道/条件及有界成员，与旧批分开；渠道完成不等于读过数据文件。当前工具/新材料仍以本轮executionScope和readAt为准。workspace.operation是原目标，receipt是原操作的历史报告，applied仅提交变更；匹配目标的rendered只证明当次已呈现。atSubmission/browserObservations是原发问快照（capturedAt为其采集时点），即使合成前刷新了receipt也不能用迟到观察替换它，更不能将原目标当次已呈现说成当前仍显示该条目。loading/失败/被替代/unknown如实说明，拒因及recovery说明不是执行或再次授权；本次不自动重试、夺回手动视图或扩大范围。浏览器可见数量不是新检索事实。\n":"")+(context.workspaceView?"\nworkspace.workspaceView 是发问当刻的工作台可见状态。可据此回答当前图层、选择、期次和显示信息；与用户研究附件分开，不把显示标签或图例冒充来源原文、科学观测或QC结论，不声称执行了未记录的切换或外查。\n":"")+(sourceReadComparisons.length?"\n"+sourceChangeInstructions:"");
     const synthesisInput={question:query,materialMatchingHints:sourceMatchHints.length?{regionAliases:sourceMatchHints,notice:"仅辅助对应已取得材料，不改原研究区、不授予范围，也不证明空间覆盖。"}:undefined,questionMode:retrieval?.plan.questionMode,turnContext:modelTurnContext(turnContext),currentResultBatch:currentBatch?modelResultBatch(currentBatch):undefined,
       turnAction:turn&&{action:turn.plan.action,goal:turn.plan.goal,evidenceNeed:turn.plan.evidenceNeed,targets:turn.plan.targets.map(({excerpt,...t})=>t),
         rule:(retrieval?"本轮先处理指定对象，另有实际独立补查。按本轮实际来源、批次和读取回执分别报告；新增候选不能代替指定对象，也不能冒充已读原文。":
@@ -362,7 +365,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         revision:base.gridCoverage.revision,
         rule:"所附范围的覆盖结论以本字段为准。未知须写覆盖未知，不能写零。文献和目录线索可独立说明，不能当作该格的覆盖或现场观测。"},
       lookups:base.catalogMatch?.lookups?.map(l=>({matched:l.matched,point:l.point})),gap:base.gap?.missing}};
-    const pinnedRefs=[...exactReadRefs,...parentCitations].map(ref=>ref.token.replace(/[\[\]]/g,""));
+    const pinnedRefs=[...locatedRefs,...[...exactReadRefs,...parentCitations].map(ref=>ref.token.replace(/[\[\]]/g,""))];
     const packet=packSynthesisContext(instructions,synthesisInput,{question:query,matchHints:sourceMatchHints,areaTerms:[retrieval?.plan.researchIntent?.region||"",...sourceMatchHints],time:retrieval?.plan.researchIntent?.time,pinnedRefs,maxBytes:budgetPolicy.promptBytes});
     const comparisonIdentities=new Map(sourceReadComparisons.map(entry=>[entry.ref,entry.identity]));
     const deliveredComparisons=((packet.payload.sourceReadComparisons||[]) as SourceReadComparison[]).map(entry=>({...entry,identity:comparisonIdentities.get(entry.ref)!}));

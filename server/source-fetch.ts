@@ -21,7 +21,7 @@ export function sourceUrl(raw:string){
   return url;
 }
 export interface SourceResponse {url:string;status:number;headers:Record<string,string>;bytes:Buffer;truncated:boolean}
-export type SourceFetchOptions={range?:string;ifRange?:string;textOnly?:boolean;maxBytes?:number};
+export type SourceFetchOptions={range?:string;ifRange?:string;textOnly?:boolean;allowXml?:boolean;maxBytes?:number};
 export type SourceRequest=(url:URL,signal:AbortSignal,options?:SourceFetchOptions)=>Promise<SourceResponse>;
 // Reuse validated public connections between byte ranges on the same origin.
 const pool = {keepAlive:true, maxSockets:8, maxFreeSockets:4, maxTotalSockets:32};
@@ -46,8 +46,14 @@ export const requestSource:SourceRequest=async(url,signal,options={})=>{
       const result={url:url.href,status:res.statusCode||0,headers};
       if(result.status<200 || result.status>=300){res.destroy();resolve({...result,bytes:Buffer.alloc(0),truncated:false});return;}
       const type=headers['content-type']||'';
-      if(options.textOnly && !/^(?:text\/(?:html|plain)|application\/xhtml\+xml)(?:;|$)/i.test(type)){
-        res.destroy();reject(new SourceReadError('原站回退仅支持公开 HTML 或纯文本正文。','WEB_UNSUPPORTED_TEXT'));return;
+      const xmlType=options.allowXml&&(/^(?:application|text)\/xml(?:;|$)/i.test(type)||
+        (/\.xml$/i.test(url.pathname)&&/^(?:application|binary)\/octet-stream(?:;|$)/i.test(type)));
+      if(options.textOnly && !/^(?:text\/(?:html|plain)|application\/xhtml\+xml)(?:;|$)/i.test(type) && !xmlType){
+        res.destroy();
+        if(options.allowXml&&/^application\/pdf(?:;|$)/i.test(type))
+          reject(new SourceReadError('原站回退未取得 HTML 或纯文本正文。','WEB_SOURCE_IS_PDF'));
+        else reject(new SourceReadError('原站回退仅支持公开 HTML 或纯文本正文。','WEB_UNSUPPORTED_TEXT'));
+        return;
       }
       const limit=Math.min(/text\/|html|xml|json/i.test(type)?3_000_000:64_000_000,options.maxBytes??Infinity);
       if(Number(headers['content-length'])>limit && /pdf/i.test(type)){res.destroy();reject(new SourceReadError('PDF 超过本次读取的大小限制，可打开原文件查看。','WEB_FETCH_TOO_LARGE'));return;}
