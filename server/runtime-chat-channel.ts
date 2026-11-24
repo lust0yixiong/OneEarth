@@ -4,12 +4,29 @@ import {submissionFingerprint} from "./postgres-chat-messages";
 import {requestPerformance, type ExecutorTiming} from "./request-performance";
 import {TaskCancelled} from "./task-cancellation";
 import {TaskConflict, taskIdPattern, type Payload, type TaskStore} from "./task-store";
+import {validBrowserWorkspaceReceipt, type WorkspaceEffect} from "../src/domain/turn-context";
+import type {DiscoveryResponse} from "../src/domain/types";
 
 export type ChatPreparation = {error: string} | {kind: "research"; checkpoint?: Payload} |
   {kind: "foreground"; run(id: string, signal: AbortSignal, emit: (event: Payload) => void): Promise<
     {kind: "reply"; payload: Payload} | {kind: "research"; handoff: Payload; checkpoint?: Payload}>};
 
 const interrupted = {error: "服务中断了本轮消息。请重新发送以继续。", code: "chat_interrupted"};
+
+const workspaceFields = [
+  "workspaceAction", "workspaceOperation", "view", "catalogQuery", "inspectId", "camera",
+  "filters", "caseId", "dataView", "visualization", "mesh", "gridSystem", "layer",
+  "previewNeed", "previewCaseId", "visualizeNeed", "previewKind", "clearSelection", "selectCenter",
+] as const satisfies readonly (keyof DiscoveryResponse)[];
+
+function workspaceReply(id: string, payload: Payload): Payload {
+  const result = payload.result as DiscoveryResponse | undefined;
+  if (payload.error || !result || result.clarification || result.clarificationPrompt || result.questionCheck) return payload;
+  const fields = workspaceFields.filter(field => result[field] !== undefined);
+  if (!fields.length) return payload;
+  const workspaceEffect: WorkspaceEffect = {effectId: "workspace:" + id, state: "proposed", fields};
+  return {...payload, result: {...result, workspaceEffect}};
+}
 
 export async function runtimeChatChannel(app: Router, tasks: TaskStore & {chat: PostgresChatMessages},
   prepare: (id: string, input: unknown) => Promise<ChatPreparation>) {
@@ -35,7 +52,7 @@ export async function runtimeChatChannel(app: Router, tasks: TaskStore & {chat: 
         await pending;
         signal.throwIfAborted();
         if (outcome.kind === "research") await chat.promote(id, outcome.handoff, outcome.checkpoint);
-        else await chat.finish(id, outcome.payload.error ? "failed" : "complete", outcome.payload);
+        else await chat.finish(id, outcome.payload.error ? "failed" : "complete", workspaceReply(id, outcome.payload));
       } catch {
         await pending;
         if (controller.signal.reason instanceof TaskCancelled) return;
@@ -83,6 +100,25 @@ export async function runtimeChatChannel(app: Router, tasks: TaskStore & {chat: 
         else start(id, prepared.run);
       }
       accepted(admitted.task);
+    } catch (error) {
+      if (!(error instanceof TaskConflict)) throw error;
+      res.status(409).json({error: error.message});
+    }
+  });
+
+  app.post("/api/chat/messages/:id/workspace-receipt", async (req, res) => {
+    const id = String(req.params.id).toLowerCase();
+    if (!req.is("application/json") || !taskIdPattern.test(id) || !validBrowserWorkspaceReceipt(req.body)) {
+      res.status(400).json({error: "工作台回执格式无效。"});
+      return;
+    }
+    try {
+      const receipt = await chat.recordWorkspaceReceipt(id, req.body);
+      if (!receipt) {
+        res.status(404).json({error: "找不到此轮对应的工作台操作。"});
+        return;
+      }
+      res.set("Cache-Control", "no-store").json(receipt);
     } catch (error) {
       if (!(error instanceof TaskConflict)) throw error;
       res.status(409).json({error: error.message});

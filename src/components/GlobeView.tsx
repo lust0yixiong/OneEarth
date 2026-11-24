@@ -801,6 +801,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
     }
     return {
       surface: "earth", camera: renderer.current?.currentCamera(), activeLayer, applyControl, resolvePublishedChoice,
+      panels: {layerMenu:basemapOpen},candidateBatch:gridList??undefined,candidateListExpanded:!!gridList&&!s.evidence,
       display: [{label: "视野中心的界面标注", value: orientation.label},
         ...(!activeLayer && catalogMode ? [{label: "分布方式", value: distributionModes[distributionStyle].label}] : [])],
       ...(gridList && !s.evidence ? {focus:{kind:"batch",title:"网格候选"}, candidates:{count:gridList.ids.length,title:"网格候选"}} : {}),

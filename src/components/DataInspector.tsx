@@ -1,3 +1,4 @@
+import {useLayoutEffect} from "react";
 import { dataRecipeFor } from "../domain/data-preview";
 import { evidenceFor } from "../domain/evidence";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -218,11 +219,14 @@ export function DataInspector() {
     preview,
     leaveDetail,
     inspectAsset,
+    registerWorkspacePanel,
   } = useWorkspace();
   const [collapsed, setCollapsed] = useState(false);
   const view = s.dataView;
-  if (!view) return null;
   const compact = !!s.evidence || collapsed;
+  useLayoutEffect(()=>view?registerWorkspacePanel("inspector",{inspector:compact?"collapsed":"expanded"}):undefined,
+    [view,compact,registerWorkspacePanel]);
+  if (!view) return null;
   const setView = (next: DataView, focus = false) =>
     patch({
       dataView: next,

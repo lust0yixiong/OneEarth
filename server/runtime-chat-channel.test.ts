@@ -41,15 +41,17 @@ test("Chat receipt and research handoff retain identity while the existing worke
         await delay(5000, undefined, {signal});
       }
       if (query !== "show next city") return {kind: "research", handoff: {query}};
-      return {kind: "reply", payload: {result: {message: "next city"}}};
+      return {kind: "reply", payload: {result: {message: "next city", camera: {center: [116.4, 39.9], zoom: 165}}}};
     },
   }));
   taskRoutes(app, "/api/tasks", tasks, () => undefined, {researchRecords: true, onCancelled: id => chat.cancel(id)});
   const stop = await workTasks(tasks, async task => {
     resumed.push(task.id);
     assert.deepEqual(await tasks.chat.handoff(task.id), {query: "long research"});
+    await tasks.append(task.id, {discoveryBinding: {discoveryId: "controlled-discovery", messageId: task.id, state: "TASK_STATE_WORKING"}});
     entered.resolve();
     await release.promise;
+    await tasks.append(task.id, {discoveryBinding: {discoveryId: "controlled-discovery", messageId: task.id, state: "TASK_STATE_COMPLETED"}});
     return {result: {message: "original research"}};
   });
   const server = app.listen(0, "127.0.0.1");
@@ -87,6 +89,10 @@ test("Chat receipt and research handoff retain identity while the existing worke
   assert.equal((await submit(research, researchInput)).status, 202);
   await entered.promise;
   assert.equal((await tasks.get(research))?.status, "running");
+  assert.deepEqual(await tasks.researchExecution?.(research), {
+    status: "running",
+    bindings: [{taskId: "controlled-discovery", messageId: research, state: "TASK_STATE_WORKING", operation: "discover"}],
+  });
   const acknowledgements = await Promise.all([submit(city, cityInput), submit(city, cityInput)]);
   assert.deepEqual(acknowledgements.map(response => response.status), [202, 202]);
   await until(async () => (await tasks.get(city))?.status === "complete");
@@ -101,13 +107,36 @@ test("Chat receipt and research handoff retain identity while the existing worke
   assert.equal(cityRecord.conversationId, conversationId);
   assert.equal(cityRecord.turnId, cityInput.turnId);
   assert.equal(cityRecord.result.message, "next city");
+  assert.deepEqual(cityRecord.result.workspaceEffect, {effectId: "workspace:" + city, state: "proposed", fields: ["camera"]});
+  assert.equal(cityRecord.workspaceReceipt, undefined);
+  assert.equal(await tasks.researchExecution?.(city), undefined);
   assert.equal(await tasks.chat.latestCompleted(conversationId), city);
   const firstEvents = await tasks.events(city, 0);
   assert.equal(firstEvents[0].chatPhase, "foreground");
   const cursor = firstEvents[0].seq;
   const tail: Payload[] = (await (await fetch(task(city) + "/events?after=" + cursor)).text()).trim().split("\n").map(line => JSON.parse(line));
   assert.ok(tail.every(event => Number(event.seq) > Number(cursor)));
-  assert.deepEqual(tail.at(-1)?.result, {message: "next city"});
+  assert.deepEqual(tail.at(-1)?.result, cityRecord.result);
+
+  const effect = {effectId: "workspace:" + city, conversationId, turnId: cityInput.turnId, state: "applied"};
+  const acknowledge = (body: typeof effect, id = city) => fetch(base + "/api/chat/messages/" + id + "/workspace-receipt", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+  });
+  assert.equal((await acknowledge({...effect, conversationId: randomUUID()})).status, 404);
+  assert.equal((await acknowledge({...effect, turnId: randomUUID()})).status, 404);
+  assert.equal((await acknowledge({...effect, effectId: "workspace:" + randomUUID()})).status, 404);
+  assert.equal((await acknowledge({...effect, effectId: "workspace:" + research}, research)).status, 404);
+  const browserReports = await Promise.all([acknowledge(effect), acknowledge(effect)]);
+  assert.deepEqual(browserReports.map(response => response.status), [200, 200]);
+  const [receipt, duplicate] = await Promise.all(browserReports.map(response => response.json()));
+  assert.deepEqual(receipt, {...effect, taskId: city, reportedAt: receipt.reportedAt});
+  assert.ok(Number.isSafeInteger(receipt.reportedAt));
+  assert.deepEqual(duplicate, receipt);
+  assert.equal((await acknowledge({...effect, state: "stale"})).status, 409);
+  assert.deepEqual(await tasks.workspaceReceipt?.(city), receipt);
+  const recorded = await (await fetch(task(city) + "/record")).json();
+  assert.deepEqual(recorded, {...cityRecord, workspaceReceipt: receipt});
+  assert.deepEqual(await tasks.events(city, 0), firstEvents);
 
   assert.equal((await submit(cancelled, input("cancel before handoff"))).status, 202);
   await pending.promise;
@@ -117,6 +146,10 @@ test("Chat receipt and research handoff retain identity while the existing worke
   assert.equal((await audit.query("SELECT id FROM runtime_tasks WHERE id=$1", [cancelled])).rowCount, 0);
   release.resolve();
   await until(async () => (await tasks.get(research))?.status === "complete");
+  assert.deepEqual(await tasks.researchExecution?.(research), {
+    status: "complete",
+    bindings: [{taskId: "controlled-discovery", messageId: research, state: "TASK_STATE_COMPLETED", operation: "discover"}],
+  });
   assert.equal(await tasks.chat.latestCompleted(conversationId), city);
   assert.equal(seen.get(research), 1);
   const events = await tasks.events(research, 0);
@@ -147,6 +180,7 @@ test("Chat receipt and research handoff retain identity while the existing worke
     [{answer_id:acceptedReply}]);
   assert.equal((await audit.query("SELECT id FROM runtime_tasks WHERE id=ANY($1)",[researchReplies])).rowCount,1);
   assert.equal((await tasks.submit(acceptedReply, researchReply)).id,acceptedReply);
+  await tasks.finish(acceptedReply,"cancelled",{error:"controlled test completed"});
 
   await chat.close();
   await tasks.chat.admit(interrupted, input("interrupted"), 4);
@@ -155,4 +189,5 @@ test("Chat receipt and research handoff retain identity while the existing worke
   assert.equal((await tasks.get(interrupted))?.status, "failed");
   assert.equal((await tasks.terminal(interrupted))?.code, "chat_interrupted");
   assert.equal((await tasks.get(city))?.status, "complete");
+  assert.deepEqual(await tasks.workspaceReceipt?.(city), receipt);
 });

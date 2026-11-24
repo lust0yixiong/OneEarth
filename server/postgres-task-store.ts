@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import { productDatabase } from "./product-database";
-import { TaskConflict,type TaskStore,type Task,type Payload,type TaskStatus } from "./task-store";
+import { TaskConflict,type ResearchExecutionReceipt,type TaskStore,type Task,type Payload,type TaskStatus } from "./task-store";
 import {chatSchema, claimClarificationAnswer, lockRuntimeSubmission, postgresChatMessages, submissionFingerprint, type PostgresChatMessages} from "./postgres-chat-messages";
 
 export function postgresTaskStore(namespace:"runtime"):Promise<TaskStore & {chat:PostgresChatMessages}>;
@@ -151,9 +151,24 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   }
   let workerConnection:PoolClient|undefined;
   const store={
-    ...(chat?{chat,researchHandoff:chat.handoff}:{}),
+    ...(chat?{chat,researchHandoff:chat.handoff,workspaceReceipt:chat.workspaceReceipt}:{}),
     get,
-    ...(namespace==="runtime"?{async materialEvents(id:string){
+    ...(namespace==="runtime"?{async researchExecution(id:string):Promise<ResearchExecutionReceipt|undefined>{
+      const {rows: [task]}=await pool.query<{status: TaskStatus}>("SELECT status FROM runtime_tasks WHERE id=$1", [id]);
+      if(!task)return;
+      const {rows}=await pool.query<{taskId: string; messageId: string; state: string; operation: "discover" | "read"}>(`
+        SELECT binding->>'discoveryId' AS "taskId", binding->>'messageId' AS "messageId", binding->>'state' AS state, operation
+        FROM (
+          SELECT DISTINCT ON (binding->>'messageId') binding, operation, seq
+          FROM (
+            SELECT COALESCE(payload->'discoveryBinding',payload->'sourceReadBinding') AS binding, seq,
+              CASE WHEN payload ? 'discoveryBinding' THEN 'discover' ELSE 'read' END AS operation
+            FROM runtime_events WHERE id=$1 AND (payload ? 'discoveryBinding' OR payload ? 'sourceReadBinding')
+          ) receipts WHERE binding->>'discoveryId' IS NOT NULL AND binding->>'messageId' IS NOT NULL AND binding->>'state' IS NOT NULL
+          ORDER BY binding->>'messageId',seq DESC
+        ) latest ORDER BY seq DESC LIMIT 6`, [id]);
+      return {status:task.status,bindings:rows};
+    },async materialEvents(id:string){
       const result=await pool.query<{seq:string;at:string;payload:Payload}>(`SELECT seq,at,payload FROM runtime_events
         WHERE id=$1 AND jsonb_typeof(payload->'researchMaterials')='object' ORDER BY seq`,[id]);
       return result.rows.map(({seq,at,payload})=>({...payload,seq:Number(seq),at:Number(at),taskId:id}));

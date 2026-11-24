@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import { geoOrthographic, geoPath } from "d3-geo";
 import { feature } from "topojson-client";
@@ -46,7 +46,7 @@ function EarthquakePreview() {
   );
 }
 export function CasesView() {
-  const { openVisualization } = useWorkspace();
+  const { openVisualization, registerWorkspaceSurface } = useWorkspace();
   const [explorer,setExplorer]=useState(currentExplorer);
   const detail=new URL(location.href).searchParams.get("detail")==="1";
   const publication=useRainCatalog(!explorer);
@@ -56,6 +56,10 @@ export function CasesView() {
     return ()=>window.removeEventListener("popstate",read);
   },[]);
   useEffect(()=>{if(explorer && explorer!=="live-lightning" && explorer!=="earthquakes" && (!detail || explorer==="rain"))openVisualization(explorer,null);},[explorer,detail,openVisualization]);
+  useLayoutEffect(()=>registerWorkspaceSurface(()=>({surface:"cases",
+    ...(explorer && (detail || explorer==="earthquakes" || explorer==="live-lightning") ? {
+      case:{id:explorer,title:explorer==="earthquakes"?"全球地震":explorer==="live-lightning"?weatherCaseTitle:globeCases[explorer].title},
+    } : {})})),[explorer,detail,registerWorkspaceSurface]);
   function navigateLive(atlas:LiveAtlas|null){
     const url=new URL(location.href);
     if(atlas)url.searchParams.set("atlas",atlas);else url.searchParams.delete("atlas");

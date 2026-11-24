@@ -45,6 +45,9 @@ import { discover } from "../src/domain/discovery";
 import {authorizesWorkspaceViewAction,workspaceViewActionAllowed} from "../src/domain/workspace-view-context";
 import {resolveWorkspaceC40Publication} from "./workspace-c40-publication";
 import {resolveWorkspaceForestPublication} from "./workspace-forest-publication";
+import {runtimeTurnContext,boundTurnContext} from "./runtime-turn-context";
+import {discoveryResultBatch,gridCatalogueBatch} from "./runtime-result-batch";
+import {modelSafeValue,modelSafeText} from "./model-context-safety";
 import {runtimeTurnFingerprint,runtimeTurnHandoff,validRuntimeTurnHandoff,type RuntimeTurnInput,type RuntimeTurnHandoff,type RuntimeTurnOptions,type ForegroundTurnOutcome} from "./runtime-turn-handoff";
 import {createClarificationPrompt,clarificationAnswerText,type ClarificationPrompt} from "../src/domain/clarification";
 export {validRuntimeTurnHandoff} from "./runtime-turn-handoff";
@@ -67,6 +70,8 @@ export function researchClarificationPrompt(result:import("./data-search").DataS
 
 export async function runForegroundTurn(services:RuntimeServices,taskId:string,body:RuntimeTurnInput,signal:AbortSignal,
   emit:(payload:Record<string,unknown>)=>void,options:RuntimeTurnOptions={}):Promise<ForegroundTurnOutcome>{
+  if(options.turnContext&&(options.turnContext.current.taskId!==taskId||options.turnContext.current.turnId!==body.turnId||options.turnContext.current.conversationId!==body.conversationId))
+    return {kind:"reply",payload:{error:"本轮上下文与任务归属不一致，未执行。",code:"TURN_CONTEXT_INVALID"}};
   const pending=options.pending,answer=pending?.answer,prompt=pending?.clarificationPrompt;
   const boundAnswer=!!prompt&&answer?.parentTaskId===pending?.taskId&&body.previousTaskId===pending?.taskId&&
     body.clarificationAnswer?.parentTaskId===answer?.parentTaskId&&body.clarificationAnswer?.optionId===answer?.optionId&&
@@ -87,6 +92,8 @@ export async function resumePlannedTurn(services:RuntimeServices,taskId:string,b
   signal.throwIfAborted();
   if(!validRuntimeTurnHandoff(checkpoint)||runtimeTurnFingerprint(body)!==checkpoint.inputFingerprint)
     return {error:"后台交接与已核验的前台输入不一致，未执行研究。",code:"TURN_HANDOFF_INVALID"};
+  if(checkpoint.turnContext&&(checkpoint.turnContext.current.taskId!==taskId||checkpoint.turnContext.current.turnId!==body.turnId||checkpoint.turnContext.current.conversationId!==body.conversationId))
+    return {error:"后台上下文与原任务归属不一致，未执行研究。",code:"TURN_HANDOFF_INVALID"};
   const task=await services.tasks.get(taskId);
   if(task&&!["queued","running"].includes(task.status))return {error:"任务已结束，未继续执行研究。",code:"TURN_HANDOFF_TERMINAL"};
   if(checkpoint.plan.observationUse==="selected")return {error:"本次决定须由已授权的观测资料流程继续。",code:"OBSERVATION_HANDOFF_REQUIRED"};
@@ -98,10 +105,12 @@ export async function resumePlannedTurn(services:RuntimeServices,taskId:string,b
 export async function executeTurn(services:RuntimeServices,taskId:string,body:RuntimeTurnInput,signal:AbortSignal,
   publish:(payload:Record<string,unknown>)=>void,internal:RuntimeTurnOptions&{foreground?:boolean;semanticDecision?:boolean;handoff?:RuntimeTurnHandoff;approvedConfirmation?:boolean}={}):Promise<Record<string,unknown>>{
   const {tasks, push, coverage, researchRegionService, adminBoundaryDir, canonicalCache} = services;
+  const turnContext=internal.turnContext??internal.handoff?.turnContext??await runtimeTurnContext(tasks,taskId,body);
+  const batchOwner={batchId:randomUUID(),taskId,turnId:body.turnId,conversationId:body.conversationId};
   const cachedPapers=runtimeTurnPapers();
   const haina=runtimeTurnHaina();
   const currentAssertionReadings:CurrentAssertionReading[]=[];
-  let context=body.context;
+  let context=boundTurnContext(body.context,turnContext);
   const controller = {signal};
   let activeExecutor:ReturnType<typeof researchExecutor>|undefined;
   const runTrace:RunTrace = internal.handoff?structuredClone(internal.handoff.runTrace):{started:Date.now(),stages:[],calls:[],timings:requestPerformance.getStore()};
@@ -117,6 +126,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     event({stage:text,searches,traceStarted:runTrace.started});
   }
   function report(call:ToolCall) {
+    call=modelSafeValue(call);
     const i=runTrace.calls.findIndex(old=>old.id===call.id);
     if(i<0)runTrace.calls.push(call);else runTrace.calls[i]=call;
     event({call,traceStarted:runTrace.started});
@@ -258,7 +268,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
           previousResearchIntent:planningIntent,history,conversationContext,
         })})};
     }
-    let initialDiscoveryId:string|undefined,initialBinding:DiscoveryBinding|undefined,lastBinding:DiscoveryBinding|undefined;
+    let initialDiscoveryId:string|undefined,initialBinding:DiscoveryBinding|undefined,lastBinding:DiscoveryBinding|undefined,actualDiscoveryQuery:string|undefined;
     let lastDiscoveryResult:import("./data-search").DataSearchResult|undefined;
     async function find(turn:TurnPlan,continuation?:DiscoveryInput["continuation"]){
       const messageId=continuation?randomUUID():taskId;
@@ -292,6 +302,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
           references:rememberConversationReferences(history.filter(t=>t.role==="assistant").at(-1)?.conversationReferences||[],
             turn.targets.flatMap<AnswerReference>(t=>t.id?[{kind:"asset",id:t.id,title:t.title,source:assetById.get(t.id)?.source||"所引资料"}]:t.url?[{kind:"web",title:t.title,url:t.url}]:[])),
         };
+        actualDiscoveryQuery??="query" in request?request.query:clarification?.delegation.query;
         const result = await executor.discover(messageId, request, update => {
           if(update.planned&&!continuation){
             const plan = update.planned;
@@ -350,6 +361,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     const planningInput:TurnInput={
       question:decision?.dataQuestion||query,context,history,conversationContext,gridCoverage,workspacePublication:workspaceResolution?.proof,
       forestPublication:forestResolution?.proof,
+      turnContext,
       ...(internal.semanticDecision?{semanticDecision:true,pending:internal.pending??internal.handoff?.pending}:{}),...(internal.observationUnavailable?{observationUnavailable:true}:{}),
       ...(internal.observationAvailable?{observationAvailable:true,observationMaterials:internal.observationMaterials}:{}),
       previousResearchIntent:planningIntent,confirmedQuestion:decision?.dataQuestion,numbered:selected,
@@ -385,7 +397,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     if(restrictedConfirmation&&(["read","search"].includes(prepared.plan.action)||prepared.plan.observationUse==="selected"))
       return {result:{message:"本次答复未批准原提案，也未启动新的研究。若要改变研究目的，请另行明确提出。",clarification:true,runTrace}};
     if(internal.foreground&&(["read","search"].includes(prepared.plan.action)||prepared.plan.observationUse==="selected")){
-      signal.throwIfAborted();return {runtimeTurnHandoff:runtimeTurnHandoff(body,prepared.plan,runTrace,internal)};
+      signal.throwIfAborted();return {runtimeTurnHandoff:runtimeTurnHandoff(body,prepared.plan,runTrace,{...internal,turnContext})};
     }
     if(clarification||internal.handoff&&prepared.plan.action==="search")prepared.retrieval=scopeUnverified||
       prepared.plan.gridIntent==="count"||prepared.plan.gridIntent==="catalogue"||gridLimits?.currentCoverageOnly||gridLimits?.noDiscovery?undefined:await find(prepared.plan);
@@ -412,6 +424,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       const hainaRecords=haina.records().filter(r=>used.includes("haina:"+r.id)),hainaCatalog=haina.status();
       if(hainaRecords.length&&!hainaCatalog&&reply.answerNotes)reply.answerNotes.limitation+="\n已保留原档海纳对象，但未取得对应目录状态；不能据此声称当前海纳目录已核实。";
       return {result:literatureDisplay({...reply,runTrace,modelExecutor:executor.name,researchIntent:turn.researchIntent,
+        resultBatch:gridCatalogueBatch(batchOwner,query,used,gridCoverage.revision,!incomplete&&!reply.clarification&&gridCoverage.status==="ready"),
         conversationContext:turn.conversationContext,conversationEvidence,conversationAssertionEvidence,
         hainaRecords,...(hainaCatalog?{hainaCatalog}:{})})};
     }
@@ -437,7 +450,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       const message=zero
         ? "本轮仅查找了"+labels+"，未返回符合条件的资料。你希望我扩大到其他来源吗？"
         : "本轮范围限于"+labels+"，查询未完整完成，目前无法确认有无匹配资料。你希望重试该范围，还是查其他来源？";
-      return {result:literatureDisplay({message,runTrace,researchRegion,gridCoverage,
+      return {result:literatureDisplay({message,runTrace,researchRegion,gridCoverage,resultBatch:discoveryResultBatch(batchOwner,actualDiscoveryQuery||query,retrieved),
         researchIntent:retrieved.plan.researchIntent||turn.researchIntent,
         conversationContext:retrieved.plan.conversationContext||turn.conversationContext,
         ...(retrieved.hainaCatalog?{hainaCatalog:retrieved.hainaCatalog}:{})})};
@@ -462,6 +475,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
           runTrace.searches=[...(material?.searches||[]),...outcome.reads];
           return {result:literatureDisplay({
           message:outcome.clarification,clarification:true,runTrace,researchRegion,
+          ...(material?{resultBatch:discoveryResultBatch(batchOwner,actualDiscoveryQuery||query,material)}:{}),
           ...(researchClarificationPrompt(lastDiscoveryResult,lastBinding)?{clarificationPrompt:researchClarificationPrompt(lastDiscoveryResult,lastBinding)}:{}),
           ...(lastDiscoveryResult?.clarification&&lastBinding?.state==="TASK_STATE_INPUT_REQUIRED"?{discoveryClarification:true}:{}),
           ...(material?.papers.length?{paperRecords:material.papers}:{}),
@@ -720,7 +734,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       if(pinnedIds.length)report({id:"referenced-material",kind:"tool",name:"采用所引资料的已存内容",input:pinnedIds.join("、"),
         status:pinnedIds.every(id=>assetById.has(id))?"done":"partial",output:"已存资料身份 "+pinnedIds.filter(id=>assetById.has(id)).length+" 项；没有重新检索文献库或海纳。"});
       const reply=await modelReply(targetQuery,context,{message:summary,gridCoverage},history,executor,signal,
-        stage,pinnedPapers,"",undefined,undefined,report,{plan:turn,searches:readRuns,priorEvidence},currentAssertionReadings,{record:prior,searches:archived.searches});
+        stage,pinnedPapers,"",undefined,undefined,report,{plan:turn,searches:readRuns,priorEvidence},currentAssertionReadings,{record:prior,searches:archived.searches},turnContext);
       if(pinnedPapers.length)reply.paperRecords=literatureDisplay(pinnedPapers);
       reply.hainaRecords=pinnedIds.flatMap(id=>id.startsWith("haina:")?haina.records().filter(r=>String(r.id)===id.slice(6)):[]);
       if(reply.answerNotes)reply.answerNotes.elapsedMs=Date.now()-runTrace.started;
@@ -732,6 +746,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
           researchIntent:retrieved.plan.researchIntent,conversationContext:retrieved.plan.conversationContext,conversationEvidence,conversationAssertionEvidence}
         : {message:retrieved.clarification!,clarification:true,runTrace,researchIntent:retrieved.plan.researchIntent,conversationContext:retrieved.plan.conversationContext,conversationEvidence,conversationAssertionEvidence};
       reply.researchRegion=researchRegion;
+      reply.resultBatch=discoveryResultBatch(batchOwner,actualDiscoveryQuery||query,retrieved);
       if(!retrieved.questionCheck){const prompt=researchClarificationPrompt(retrieved,initialBinding);if(prompt)reply.clarificationPrompt=prompt;}
       if(gridCoverage)reply.gridCoverage=gridCoverage;
       if(retrieved.clarification&&initialBinding?.state==="TASK_STATE_INPUT_REQUIRED")Object.assign(reply,{discoveryClarification:true});
@@ -763,7 +778,8 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       const paperTrace=retrieved!.sourceStatus.map(s=>s.source+" "+(s.status==="done"?"完成":s.status==="partial"?"部分完成":s.status==="not_requested"?"未请求":"未完成")+" · "+s.count+" 项").join("；");
       const reply:DiscoveryResponse=await modelReply(decision?.dataQuestion||query,scopedContext,result,history,executor,signal,
         stage,retrieved!.papers,paperTrace,
-        !context.filters.source || context.filters.source==="constellation"?constellationFeed:undefined,retrieved,report,undefined,currentAssertionReadings,{record:prior,searches:archived.searches});
+        !context.filters.source || context.filters.source==="constellation"?constellationFeed:undefined,retrieved,report,undefined,currentAssertionReadings,{record:prior,searches:archived.searches},turnContext);
+      reply.resultBatch=discoveryResultBatch(batchOwner,actualDiscoveryQuery||query,retrieved!);
       if(retrieved!.papers.length)reply.paperRecords=literatureDisplay(retrieved!.papers);
       reply.hainaRecords=retrieved!.haina.flatMap(asset=>{
         const recordId=Number(asset.datasetId.slice(6));
@@ -782,7 +798,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     }
   } catch(err) {
     if(signal.aborted)throw err;
-    const error=err instanceof SyntaxError?"模型回复格式异常，请重试。":err instanceof Error?err.message:"数据发现请求未能完成。";
+    const error=modelSafeText(err instanceof SyntaxError?"模型回复格式异常，请重试。":err instanceof Error?err.message:"数据发现请求未能完成。");
     const code=err instanceof AnswerReferenceError||err instanceof ExecutorFailure||err instanceof TurnPlanningFailure?err.code:undefined;
     const executorDiagnostic=err instanceof ExecutorFailure?err.diagnostic:undefined;
     if(err instanceof AnswerReferenceError)runTrace.calls.push({id:"synthesis-validation",kind:"tool",name:"回答引用校验",input:"核对本轮来源编号与正文引用",status:"failed",error,output:JSON.stringify(synthesisFailureDiagnostic(err))});

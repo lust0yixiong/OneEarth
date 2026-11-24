@@ -6,16 +6,17 @@ import type {DeepSeekTools} from "../src/domain/deepseek-tools";
 import type {ClarificationReply} from "./clarification-guard";
 import type {TurnHistory,TurnPlan} from "./turn-planning";
 import type {ClarificationPrompt,ClarificationAnswer} from "../src/domain/clarification";
+import type {RuntimeTurnContext} from "./runtime-turn-context";
 
 export type RuntimeTurnInput={query:string;conversationId:string;turnId:string;previousTaskId?:string;context:DiscoveryContext;
   history:TurnHistory;config:ChatModel;questionDecision?:QuestionDecision;deepseekTools?:DeepSeekTools;clarificationReply?:ClarificationReply;clarificationAnswer?:ClarificationAnswer};
 export type ObservationTurnMaterial={artifactId:string;version:string;title:string;variables:string[]};
 export type RuntimeWorkspacePending={taskId:string;question:string;originalQuestion?:string;proposedAction?:import("../src/domain/workspace-view-context").WorkspaceViewAction;
   proposalOrigin?:{layerId:string;controlId:string;valueId:string};clarificationPrompt?:ClarificationPrompt;answer?:ClarificationAnswer};
-export type RuntimeTurnOptions={observationUnavailable?:boolean;observationAvailable?:boolean;priorResult?:DiscoveryResponse|null;observationMaterials?:ObservationTurnMaterial[];pending?:RuntimeWorkspacePending};
+export type RuntimeTurnOptions={observationUnavailable?:boolean;observationAvailable?:boolean;priorResult?:DiscoveryResponse|null;observationMaterials?:ObservationTurnMaterial[];pending?:RuntimeWorkspacePending;turnContext?:RuntimeTurnContext};
 /** Private server record, never a browser input or a replacement for source authorization. */
 export type RuntimeTurnHandoff={version:1;kind:"runtime-turn-plan";inputFingerprint:string;plannedAt:number;plan:TurnPlan;runTrace:RunTrace;
-  observationUnavailable?:true;observationAvailable?:true;observationMaterials?:ObservationTurnMaterial[];pending?:RuntimeWorkspacePending;priorOverride?:true};
+  observationUnavailable?:true;observationAvailable?:true;observationMaterials?:ObservationTurnMaterial[];pending?:RuntimeWorkspacePending;priorOverride?:true;turnContext?:RuntimeTurnContext};
 export type ForegroundTurnOutcome={kind:"reply";payload:Record<string,unknown>}|{kind:"research";checkpoint:RuntimeTurnHandoff};
 
 function canonical(value:any):any{
@@ -44,6 +45,6 @@ export function validRuntimeTurnHandoff(value:unknown):value is RuntimeTurnHando
 export function runtimeTurnHandoff(body:RuntimeTurnInput,plan:TurnPlan,runTrace:RunTrace,options:RuntimeTurnOptions):RuntimeTurnHandoff{
   return JSON.parse(JSON.stringify({version:1,kind:"runtime-turn-plan",inputFingerprint:runtimeTurnFingerprint(body),plannedAt:Date.now(),plan,runTrace,
     ...(options.observationUnavailable?{observationUnavailable:true}:{}),...(options.observationAvailable?{observationAvailable:true}:{}),
-    ...(options.observationMaterials?{observationMaterials:options.observationMaterials}:{}),...(options.pending?{pending:options.pending}:{}),
+    ...(options.observationMaterials?{observationMaterials:options.observationMaterials}:{}),...(options.pending?{pending:options.pending}:{}),...(options.turnContext?{turnContext:options.turnContext}:{}),
     ...(Object.hasOwn(options,"priorResult")?{priorOverride:true}:{})}));
 }

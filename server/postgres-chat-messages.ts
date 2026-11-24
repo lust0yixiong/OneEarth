@@ -2,6 +2,8 @@ import {createHash} from "node:crypto";
 import type {Pool, PoolClient} from "pg";
 import {TaskConflict, taskIdPattern, type Payload, type Task} from "./task-store";
 import {validClarificationAnswer} from "../src/domain/clarification";
+import type {BrowserWorkspaceReceipt, WorkspaceReceipt} from "../src/domain/turn-context";
+import type {DiscoveryResponse} from "../src/domain/types";
 
 type ChatStatus = "planning" | "handed_off" | "complete" | "failed" | "cancelled";
 type ChatRow = Omit<Task, "status"> & {status: ChatStatus};
@@ -25,6 +27,10 @@ export const chatSchema = `
   CREATE TABLE IF NOT EXISTS runtime_clarification_answers (
     parent_task_id uuid PRIMARY KEY,
     answer_id uuid NOT NULL UNIQUE
+  );
+  CREATE TABLE IF NOT EXISTS runtime_workspace_receipts (
+    task_id uuid PRIMARY KEY REFERENCES runtime_chat_messages(id),
+    receipt jsonb NOT NULL
   );
 `;
 
@@ -78,6 +84,30 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
     async get(id: string) { const row = await find(pool, id); return row && view(row); },
     async terminal(id: string) {
       return (await pool.query<{terminal: Payload | null}>("SELECT terminal FROM runtime_chat_messages WHERE id=$1", [id])).rows[0]?.terminal ?? undefined;
+    },
+    async workspaceReceipt(id: string) {
+      return (await pool.query<{receipt: WorkspaceReceipt}>(
+        "SELECT receipt FROM runtime_workspace_receipts WHERE task_id=$1", [id])).rows[0]?.receipt;
+    },
+    async recordWorkspaceReceipt(id: string, input: BrowserWorkspaceReceipt) {
+      return transaction(async db => {
+        const {rows: [saved]} = await db.query<{body: string; terminal: Payload}>(
+          "SELECT body,terminal FROM runtime_chat_messages WHERE id=$1 AND status='complete' FOR UPDATE", [id]);
+        if (!saved) return;
+        const {conversationId, turnId} = JSON.parse(saved.body);
+        const effect = (saved.terminal?.result as DiscoveryResponse | undefined)?.workspaceEffect;
+        if (input.conversationId !== conversationId || input.turnId !== turnId ||
+            effect?.state !== "proposed" || input.effectId !== effect.effectId || input.effectId !== "workspace:" + id) return;
+        const {rows: [previous]} = await db.query<{receipt: WorkspaceReceipt}>(
+          "SELECT receipt FROM runtime_workspace_receipts WHERE task_id=$1", [id]);
+        if (previous) {
+          if (previous.receipt.state !== input.state) throw new TaskConflict("本轮操作已有一份不同结果的回执。");
+          return previous.receipt;
+        }
+        const receipt: WorkspaceReceipt = {...input, taskId: id, reportedAt: Date.now()};
+        await db.query("INSERT INTO runtime_workspace_receipts(task_id,receipt) VALUES($1,$2)", [id, receipt]);
+        return receipt;
+      });
     },
     async latestCompleted(conversationId: string) {
       return (await pool.query<{id: string}>(`

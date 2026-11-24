@@ -13,6 +13,10 @@ export class TaskConflict extends Error {}
 /** A trusted worker outcome: the durable checkpoint owns continuation now. */
 export class TaskParked {}
 export type TaskStep = {id:string;body:any;checkpoint:Payload};
+export type ResearchExecutionReceipt = {
+  status: TaskStatus;
+  bindings: {taskId: string; messageId: string; state: string; operation: "discover" | "read"}[];
+};
 
 export function openTaskStore(file: string) {
   const db = new DatabaseSync(file);
@@ -150,7 +154,9 @@ type LocalTaskStore = ReturnType<typeof openTaskStore>;
 export type TaskStore = {
   [Method in Exclude<keyof LocalTaskStore,"materialEvents"|"step"|"clearStep"|"saveStep"|"park"|"cancelStep"|"cancelledSteps">]: (...args: Parameters<LocalTaskStore[Method]>) =>
     ReturnType<LocalTaskStore[Method]> | Promise<ReturnType<LocalTaskStore[Method]>>;
-}&{materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>;researchHandoff?:(id:string)=>Promise<Payload|undefined>}&{
+}&{materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>;researchHandoff?:(id:string)=>Promise<Payload|undefined>;
+  workspaceReceipt?:(id:string)=>Promise<import("../src/domain/turn-context").WorkspaceReceipt|undefined>;
+  researchExecution?:(id:string)=>Promise<ResearchExecutionReceipt|undefined>}&{
   [Method in "step"|"clearStep"|"saveStep"|"park"|"cancelStep"|"cancelledSteps"]?:(...args:Parameters<LocalTaskStore[Method]>)=>ReturnType<LocalTaskStore[Method]>|Promise<ReturnType<LocalTaskStore[Method]>>;
 };
 
@@ -194,7 +200,8 @@ export function taskRoutes(router: Router, base: string, store: TaskStore, valid
     const result=(await store.terminal(id))?.result??(task?await options.recoverRecord?.(task):undefined);
     if(!task||!result){res.status(404).json({error:"没有找到已完成的研究记录。"});return;}
     const {query,turnId,conversationId}=JSON.parse(task.body);
-    res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,result});
+    const workspaceReceipt=await store.workspaceReceipt?.(id);
+    res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,result,workspaceReceipt});
   });
   router.delete(base + "/:taskId", async (req, res) => {
     const id=String(req.params.taskId);

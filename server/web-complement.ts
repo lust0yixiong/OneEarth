@@ -5,6 +5,7 @@ import {publicPage,type FetchFocus} from "./fetch-pages";
 import {sourceExcerpts} from "./evidence-excerpts";
 import {paperNameIdentity} from "./paper-name-identity";
 import {rankEvidence,relevanceTerms} from "./evidence-ranking";
+import {modelSafeText,originalModelKey} from "./model-context-safety";
 
 const goals=["identity","version","method","quality","files","coverage","crosscheck"] as const;
 type Goal=typeof goals[number];
@@ -49,9 +50,12 @@ export const webComplementSchema={type:"object",additionalProperties:false,requi
     entityId:{type:"string"},action:{type:"string",enum:["read","exclude"]},goal:{type:"string",enum:goals},terms:{type:"string",maxLength:60},reason:{type:"string",maxLength:180},
   }}},discoveryQueries:{type:"array",maxItems:1,items:{type:"object",additionalProperties:false,required:["web","dataset","reason"],properties:{web:{type:"string",maxLength:160},dataset:{type:"string",maxLength:80},reason:{type:"string",maxLength:180}}}}}};
 export function complementSchema(input:WebComplementInput){
-  return {...webComplementSchema,properties:{...webComplementSchema.properties,checks:{...webComplementSchema.properties.checks,items:{
+  const allowed=input.entities.map(entity=>entity.id);
+  const safeIds=[...new Set(allowed.map(modelSafeText))].filter(id=>originalModelKey(id,allowed)!==undefined);
+  return {...webComplementSchema,properties:{...webComplementSchema.properties,checks:{...webComplementSchema.properties.checks,
+    maxItems:safeIds.length?webComplementSchema.properties.checks.maxItems:0,items:{
     ...webComplementSchema.properties.checks.items,properties:{...webComplementSchema.properties.checks.items.properties,
-      entityId:{type:"string",enum:input.entities.map(e=>e.id)},
+      entityId:{type:"string",enum:safeIds.length?safeIds:undefined},
     },
   }}}};
 }
@@ -164,10 +168,13 @@ export function complementPlan(raw:string|undefined,input:WebComplementInput):We
     values=parsed.checks;discovery=parsed.discoveryQueries||[];
   }
   const byId=new Map(input.entities.map(e=>[e.id,e])),checks:WebCheck[]=[],excluded:WebCheck[]=[];
-  for(const c of values as WebCheck[]){
-    if(!c||!byId.has(c.entityId)||!goals.includes(c.goal)||typeof c.terms!=="string"||
-      /https?:|10\.\d{4,9}\/|[\r\n]/i.test(c.terms)||typeof c.reason!=="string"||!c.reason.trim())
+  const allowed=[...byId.keys()];
+  for(const item of values as WebCheck[]){
+    const entityId=originalModelKey(item?.entityId,allowed);
+    if(!entityId||!goals.includes(item.goal)||typeof item.terms!=="string"||
+      /https?:|10\.\d{4,9}\/|[\r\n]/i.test(item.terms)||typeof item.reason!=="string"||!item.reason.trim())
       throw Error("网页核查对象或方向无效");
+    const c={...item,entityId};
     if(c.action!==undefined&&!['read','exclude'].includes(c.action))throw Error("网页核查执行方式无效");
     const negative=/无关|没有实际关联|不(?:应|需|宜|要).{0,20}(?:核查|核对|读取|安排)|irrelevant|unrelated|do not (?:read|check)/i.test(c.reason);
     if(c.action==='exclude'||negative){excluded.push({...c,action:'exclude'});continue;}

@@ -1,10 +1,12 @@
+import {boundResultBatch, browserPanelKey, browserTurnFrame, browserTurnRelations, previousChatAnswer, readBrowserBatch, resultBatchCandidates} from "./browser-turn-frame";
 import { datasetLayerFromView, decodeGlobeLayers, encodeGlobeLayers, focusedDatasetLayer, globeDatasetLayer, setDatasetLayer, type FieldLayerSelection, type GlobeDatasetLayer } from "./globe-dataset-layers";
-import {workspaceEffectActivity} from "./workspace-effect";
+import {submitsWorkspaceFields, workspaceEffectActivity, workspaceEffectFor, workspaceReceiptDetail} from "./workspace-effect";
+import type {BrowserWorkspaceReceipt} from "./turn-context";
 import {availableChatOperations, chatCandidateBatch, chatCandidateItems, chatCandidateKey, saveChatResearchList} from "./chat-workspace-operations";
 import {validWorkspaceOperationKind, workspaceCandidateOperationAllowed} from "./workspace-operations";
-import {projectWorkspaceView, workspaceActionState, type WorkspaceSurfaceReading} from "./workspace-view-projection";
+import {projectWorkspaceView, workspaceActionState, type WorkspaceSurfaceReading, type WorkspacePanelReading} from "./workspace-view-projection";
 import {authorizesWorkspaceViewAction, workspaceViewActionAllowed, type WorkspaceViewPublication} from "./workspace-view-context";
-import { answeredClarificationIds, messageClarificationPrompt, discoveryClarificationResult, loadResearchRecord, openTaskEvents, chatMessagesPath, researchRecordId, cancelChatRequest } from "./runtime-client";
+import { answeredClarificationIds, messageClarificationPrompt, discoveryClarificationResult, loadResearchRecord, openTaskEvents, chatMessagesPath, researchRecordId, cancelChatRequest, readWorkspaceReceipt, reportWorkspaceReceipt } from "./runtime-client";
 import {clarificationAnswerText,validClarificationPrompt,type ClarificationAnswer} from "./clarification";
 import {datasetScope,mergeScope,scopedQuestionContext,scopeDetail,scopeLabel,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
@@ -31,7 +33,7 @@ import type {ClarificationReply, QuestionDecision} from "./types";
 import {validAccessSection,initialAccessSection} from "./data-access";
 import { registerHaina, registerObservations, registerPapers, loadRemoteAssetIds } from "./datasets";
 import {loadHainaCatalog,type HainaCatalogStatus} from "./haina-catalog-client";
-import { type ChatDelivery, saveChatDelivery, unfinishedChatDeliveries, removeChatDelivery, legacySession, mergeMessages, readFavorites, readSession, readSessionMessage, sessionMessages, sessionSummaries, writeFavorite, writeSession } from "./session-storage";
+import { type ChatDelivery, claimWorkspaceEffect, saveChatDelivery, unfinishedChatDeliveries, removeChatDelivery, legacySession, mergeMessages, readFavorites, readSession, readSessionMessage, sessionMessages, sessionSummaries, writeFavorite, writeSession } from "./session-storage";
 import { sampleCamera } from "./earth-search";
 import { catalogResults, type SearchState } from "./results";
 import { catalogBatch } from "./batch-context";
@@ -263,6 +265,9 @@ function requestWorkspaceKey(s: State) {
   return JSON.stringify([s.view, s.caseId, s.filters, s.gridSystem, s.layer, s.selection, camera,
     s.dataView, s.visualization, s.fieldLayer, s.publicLayer, s.overview, s.mapResult, s.search, s.inspector,
     s.mapFocus, s.evidence?.id, s.previewKind, s.readerPosition]);
+}
+function frozenWorkspaceKey(s:State,reading:WorkspaceSurfaceReading|undefined) {
+  return JSON.stringify([requestWorkspaceKey(s),browserPanelKey(reading),s.globeLayers,s.globeLayerFocus,s.mesh,s.listLibraryOpen]);
 }
 type Action =
   | { type: "patch"; value: Partial<State> }
@@ -558,12 +563,25 @@ async function loadInitialSession(): Promise<State> {
           const stored=await readSession(saved.conversationId);
           state.clarificationReply=stored?.workspace.clarificationReply ?? null;
           const clarificationPrompt=validClarificationPrompt(reply.clarificationPrompt) ? reply.clarificationPrompt : undefined;
-          const proposed=reply.workspaceAction ?? reply.workspaceOperation;
+          const effect=workspaceEffectFor(reply,saved.id);
+          const receipt=effect && readWorkspaceReceipt(saved.workspaceReceipt,saved.id,saved.conversationId,saved.turnId);
+          const proposed=reply.workspaceAction ?? reply.workspaceOperation ?? effect;
+          const batch=boundResultBatch(reply.resultBatch,saved.id,saved.turnId,saved.conversationId);
           const messages:Message[]=[
             {id:saved.turnId,role:"user",text:saved.question,time:saved.created},
             {id:saved.id,role:"assistant",text:reply.message,time:saved.updated,replyTo:saved.turnId,
               chatMessage:true,...(proposed ? {historicalReply:true,
-                activity:workspaceEffectActivity(saved.id,proposed,"proposed",reply.message,"实际应用状态以原浏览器保存的回执为准。")} : {}),
+                activity:workspaceEffectActivity(saved.id,proposed,receipt?.state ?? "proposed",reply.message,workspaceReceiptDetail(receipt?.state),receipt)} : {}),
+              workspaceEffect:effect,workspaceReceipt:receipt,
+              ...(batch ? {candidates:{
+                resultBatch:batch,answerId:saved.id,title:batch.query,ids:resultBatchCandidates(batch,reply.modelIds??reply.catalogMatch?.ids),
+                caseId:reply.caseId ?? null,filters:answerFilters(emptyFilters(),reply.filters),
+                selection:reply.catalogMatch?.selection ?? null,layer:reply.layer ?? "all",
+                camera:reply.camera ?? defaultCamera,gridSystem:reply.gridSystem ?? "h3",
+                originKind:"chat",catalogConditions:batch.conditions,
+                researchRecord:{sessionId:saved.conversationId,messageId:saved.id,question:saved.question,
+                  intent:reply.researchIntent,notes:reply.answerNotes?.researchNotes ?? []},
+              },historicalReply:true} : {}),
               workspacePending:reply.workspacePending,researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
               conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
               answerNotes:reply.answerNotes,runTrace:reply.runTrace,researchRegion:reply.researchRegion,
@@ -635,13 +653,47 @@ function useWorkspaceValue(initialState: State) {
     surfaceReading.current = read;
     return () => { if (surfaceReading.current === read) surfaceReading.current = null; };
   }, []);
-  const workspaceViewAt = useCallback((s:State,batch:CandidateSet|null,operations:ReturnType<typeof availableChatOperations>)=>{
+  const panelReading = useRef(new Map<keyof WorkspacePanelReading, WorkspacePanelReading>());
+  const registerWorkspacePanel = useCallback((key:keyof WorkspacePanelReading,reading:WorkspacePanelReading) => {
+    panelReading.current.set(key,reading);
+    return () => { if(panelReading.current.get(key)===reading)panelReading.current.delete(key); };
+  },[]);
+  const readWorkspaceSurface = useCallback(():WorkspaceSurfaceReading|undefined=>{
     const reading=surfaceReading.current?.();
+    const panels:WorkspacePanelReading=Object.assign({},reading?.panels,...panelReading.current.values());
+    return {...reading,surface:reading?.surface??latest.current.view,panels};
+  },[]);
+  const workspaceViewAt = useCallback((s:State,batch:CandidateSet|null,operations:ReturnType<typeof availableChatOperations>,reading:WorkspaceSurfaceReading|undefined)=>{
     const items=chatCandidateItems(s,batch,reading?.surface===s.view ? reading.candidateItems : undefined);
     return {...projectWorkspaceView(s,reading),operations:[...operations.keys()],
       ...(items.length ? {candidateItems:items} : {})};
   },[]);
   const requests = useRef(new Map<string,{controller:AbortController;progress:ActiveChat}>());
+  const localBatchIds=useRef(new Map<string,string>());
+  const chatRequestSnapshot=useCallback((s:State,batch:CandidateSet|null,parentId?:string)=>{
+    const reading=readWorkspaceSurface();
+    const operations=availableChatOperations(s,batch);
+    const workspaceView=workspaceViewAt(s,batch,operations,reading);
+    const {batch:presented,expanded}=readBrowserBatch(s,reading);
+    let localBatchId:string|undefined;
+    if(presented && !presented.resultBatch){
+      const key=JSON.stringify([s.sessionId,presented.answerId,presented.title,presented.originKind,
+        presented.caseId,presented.filters,presented.selection,presented.catalogConditions,presented.ids]);
+      const cache=localBatchIds.current;
+      localBatchId=cache.get(key);
+      if(!localBatchId){
+        localBatchId=randomId();
+        if(cache.size>=128)cache.delete(cache.keys().next().value!);
+        cache.set(key,localBatchId);
+      }
+    }
+    const browserFrame=browserTurnFrame(s,reading,presented,expanded,localBatchId);
+    const related=browserTurnRelations(s,presented,parentId,[...requests.current.values()].map(({progress})=>progress));
+    const browserTurn={...browserFrame,...(related.length ? {related} : {})};
+    return {workspaceView,browserTurnFrame:browserTurn,workspaceKey:frozenWorkspaceKey(s,reading),
+      workspaceCandidateKey:workspaceView.candidateItems?.length ? chatCandidateKey(batch) : undefined,
+      workspaceOperationKeys:Object.fromEntries([...operations].map(([kind,target])=>[kind,target.key]))};
+  },[readWorkspaceSurface,workspaceViewAt]);
   const serial = useRef(0);
   const patch = useCallback((value: Partial<State>) => {
     const scopeChange=["caseId","view","mapResult","filters","selection","gridSystem"].some(key=>Object.hasOwn(value,key));
@@ -1383,6 +1435,28 @@ function useWorkspaceValue(initialState: State) {
       update({cancelling:false,cancelError:error instanceof Error ? error.message : "暂时无法取消本轮。"});
     }
   },[publishChatProgress]);
+  const receiptUploads=useRef(new Set<string>());
+  const uploadReceipt=useCallback((id:string,receipt:BrowserWorkspaceReceipt)=>{
+    if(receiptUploads.current.has(id))return;
+    receiptUploads.current.add(id);
+    void reportWorkspaceReceipt(id,receipt).then(final=>{
+      if(!final)receiptUploads.current.delete(id);
+    },()=>receiptUploads.current.delete(id));
+  },[]);
+  useEffect(()=>{
+    const session=state.sessionId;
+    const resend=()=>{
+      void sessionMessages(session).then(messages=>{
+        for(const m of messages){
+          const receipt=m.workspaceReceipt;
+          if(receipt && !("taskId" in receipt))uploadReceipt(m.id,receipt);
+        }
+      }).catch(()=>{});
+    };
+    resend();
+    window.addEventListener("online",resend);
+    return ()=>window.removeEventListener("online",resend);
+  },[state.sessionId,uploadReceipt]);
   const executeDiscovery = useCallback(
     async (attempt: DiscoveryAttempt, retrying: boolean, saved?: ChatDelivery, restoring=false) => {
       if ([...requests.current.values()].some(({progress})=>progress.userMessageId===attempt.userMessageId)) return;
@@ -1398,17 +1472,12 @@ function useWorkspaceValue(initialState: State) {
       const latestAssistant=assistantHistory.at(-1)?.id;
       const conversationAssertionEvidence=assistantHistory.filter(m=>m.conversationAssertionEvidence!==undefined).at(-1)?.conversationAssertionEvidence;
       const conversationReferences=conversationReferenceMemory(promptMessages);
-      // Completion order can differ from submission order while a study is running.
-      const questionOrder = new Map(preceding.flatMap((message,index)=>message.role==="user" ? [[message.id,index] as const] : []));
-      const previousAnswer = preceding.reduce<Message|undefined>((best,message)=>{
-        if (message.role!=="assistant" || message.failed || !researchRecordId.test(message.id)
-          || (!message.chatMessage && !message.answerNotes && !message.questionCheck && !message.discoveryClarification)) return best;
-        return !best || (questionOrder.get(message.replyTo || "") ?? -1) >= (questionOrder.get(best.replyTo || "") ?? -1)
-          ? message : best;
-      },undefined);
+      const previousTaskId=attempt.context.browserTurnFrame
+        ? attempt.context.browserTurnFrame.related?.find(entry=>entry.relation==="reply")?.taskId
+        : previousChatAnswer(preceding)?.id;
       const payload = {query:q, context:attempt.context, config:readChatModel(), deepseekTools:readDeepSeekTools(),
         conversationId:current.sessionId, turnId:attempt.userMessageId,
-        previousTaskId:attempt.clarificationReply ? undefined : attempt.clarificationAnswer?.parentTaskId ?? previousAnswer?.id,
+        previousTaskId:attempt.clarificationReply ? undefined : attempt.clarificationAnswer?.parentTaskId ?? previousTaskId,
         ...(attempt.clarificationAnswer?{clarificationAnswer:attempt.clarificationAnswer}:{}),
         ...(attempt.questionDecision?{questionDecision:attempt.questionDecision}:{}),
         ...(attempt.clarificationReply?{clarificationReply:attempt.clarificationReply}:{}),
@@ -1426,7 +1495,9 @@ function useWorkspaceValue(initialState: State) {
             ...(m.id===latestAssistant && conversationReferences.length?{conversationReferences}:{}),
             ...(m.role==="assistant" ? {assetIds:[...new Set(notes?.sources.map(source=>source.id) || [])].slice(0,100)} : {})};
         })};
-      const detached = retrying && requestWorkspaceKey(current) !== attempt.workspaceKey;
+      const workspaceKey=(state:State)=>attempt.context.browserTurnFrame
+        ? frozenWorkspaceKey(state,readWorkspaceSurface()) : requestWorkspaceKey(state);
+      const detached = retrying && workspaceKey(current) !== attempt.workspaceKey;
       const s: State = {
         ...current, ...attempt.context, view: attempt.view ?? current.view,
         origin: detached ? null : current.origin,
@@ -1460,6 +1531,13 @@ function useWorkspaceValue(initialState: State) {
         return submitted?.session===session && submitted.message.time>(rendered?.time ?? -1) ? submitted.message : rendered;
       };
       const version = serial.current;
+      let effect:ReturnType<typeof workspaceEffectFor>;
+      const effectReceipt=(state:BrowserWorkspaceReceipt["state"]):BrowserWorkspaceReceipt|undefined =>
+        effect ? {effectId:effect.effectId,conversationId:session,turnId:attempt.userMessageId,state} : undefined;
+      const completeWorkspace=async (message:string,extra:Partial<Message>,receipt?:BrowserWorkspaceReceipt)=>{
+        await complete(message,{...extra,workspaceEffect:effect,workspaceReceipt:receipt});
+        if(receipt)uploadReceipt(delivery.id,receipt);
+      };
       let keepDelivery=false;
       let regionFlight:{id:string;camera:Camera;kind:"research-region"}|undefined;
       let regionReceived=false;
@@ -1471,7 +1549,7 @@ function useWorkspaceValue(initialState: State) {
           (now.camera===current.camera || JSON.stringify(now.camera)===JSON.stringify(regionFlight.camera));
         const question = latestQuestion();
         return version===serial.current && (!question || question.id===attempt.userMessageId)
-          && requestWorkspaceKey(ownCamera?{...now,camera:current.camera}:now)===attempt.workspaceKey;
+          && workspaceKey(ownCamera?{...now,camera:current.camera}:now)===attempt.workspaceKey;
       };
       const receiveRegion=(region:ResearchRegion|null)=>{
         if(regionReceived || !isCurrent() || restoring)return;
@@ -1530,12 +1608,32 @@ function useWorkspaceValue(initialState: State) {
           }
           return;
         }
-        const proposed=r.workspaceAction ?? r.workspaceOperation;
-        if (proposed && restoring) {
-          const message="已接回原操作记录。本次恢复未执行操作。";
-          await complete(message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,historicalReply:true,
-            activity:workspaceEffectActivity(delivery.id,proposed,"not-applied",r.message,message)});
+        effect=workspaceEffectFor(r,delivery.id);
+        const proposed=r.workspaceAction ?? r.workspaceOperation ?? effect;
+        if(proposed && restoring){
+          const local=await readSessionMessage(session,delivery.id).catch(()=>null);
+          if(local && !local.failed){
+            if(local.workspaceReceipt && !("taskId" in local.workspaceReceipt))uploadReceipt(delivery.id,local.workspaceReceipt);
+            return;
+          }
+          const archive=effect ? await loadResearchRecord(delivery.id).catch(()=>undefined) : undefined;
+          if(!isCurrent())return;
+          const receipt=readWorkspaceReceipt(archive?.workspaceReceipt,delivery.id,session,attempt.userMessageId);
+          await complete(r.message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,historicalReply:true,
+            workspaceEffect:effect,workspaceReceipt:receipt,
+            activity:workspaceEffectActivity(delivery.id,proposed,receipt?.state ?? "proposed",r.message,
+              workspaceReceiptDetail(receipt?.state),receipt)});
           return;
+        }
+        if(effect){
+          const claimed=await claimWorkspaceEffect(session,delivery.id).catch(()=>null);
+          if(!isCurrent() || claimed===false)return;
+          if(claimed===null){
+            const receipt=effectReceipt("failed");
+            await completeWorkspace("浏览器无法保存本轮操作。",{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,
+              activity:workspaceEffectActivity(delivery.id,effect,"failed",r.message,"本地会话存储不可用，操作未提交。",receipt)},receipt);
+            return;
+          }
         }
         if (r.workspaceOperation !== undefined) {
           const now=latest.current;
@@ -1604,11 +1702,12 @@ function useWorkspaceValue(initialState: State) {
             }
           }
           if (stale) message="工作台已变化，本轮操作未应用。";
-          await complete(message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,
+          const receipt=effectReceipt(stale?"stale":applied?"applied":"failed");
+          await completeWorkspace(message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,
             workspacePending:r.workspacePending,conversationContext:r.conversationContext,
-            activity:workspaceEffectActivity(delivery.id,r.workspaceOperation,applied&&!stale?"applied":"not-applied",r.message,
-              applied && kind==="open-saved" ? "已提交收藏视图与仅收藏筛选。目录读取状态在资料页显示。" : message),
-            ...(stale ? {historicalReply:true} : {})});
+            activity:workspaceEffectActivity(delivery.id,r.workspaceOperation,receipt?.state ?? (applied?"applied":"not-applied"),r.message,
+              applied && kind==="open-saved" ? "已提交收藏视图与仅收藏筛选。目录读取状态在资料页显示。" : message,receipt),
+            ...(stale ? {historicalReply:true} : {})},receipt);
           return;
         }
         if (r.workspaceAction !== undefined) {
@@ -1627,17 +1726,19 @@ function useWorkspaceValue(initialState: State) {
             ? currentView.activeLayer?.controls.find(item => item.id === action.controlId) : undefined;
           const choice = control?.options.find(item => item.id === action.valueId)
             ?? (control?.publication ? surface?.resolvePublishedChoice?.(control.publication, action.valueId) : undefined);
-          const target = choice && surface?.applyControl?.(action) ? choice : undefined;
+          let target:typeof choice;
+          try { if(choice && surface?.applyControl?.(action))target=choice; } catch { /* No accepted control value. */ }
           const message = control && target ? "已将" + control.label + "切换到「" + target.label + "」。"
             : stale ? "工作台已变化，本轮操作未应用。"
             : "当前视图无法应用这项操作。";
           const raster=action?.layerId==="forest" || action?.layerId==="c40";
-          await complete(target && raster ? message+" 图层载入状态见球面。" : message, {id:delivery.id, replyTo:attempt.userMessageId,
-            activity:workspaceEffectActivity(delivery.id,action,target?"applied":"not-applied",r.message,
-              target ? "已向浏览器控件提交「"+target.label+"」。"+(raster?"图层载入结果独立显示。":"") : message),
+          const receipt=effectReceipt(stale?"stale":target?"applied":"failed");
+          await completeWorkspace(target && raster ? message+" 图层载入状态见球面。" : message, {id:delivery.id, replyTo:attempt.userMessageId,
+            activity:workspaceEffectActivity(delivery.id,action,receipt?.state ?? (target?"applied":"not-applied"),r.message,
+              target ? "已向浏览器控件提交「"+target.label+"」。"+(raster?"图层载入结果独立显示。":"") : message,receipt),
             runTrace:r.runTrace, workspacePending:r.workspacePending, ...(stale ? {historicalReply:true} : {}),
             researchIntent:r.researchIntent, conversationContext:r.conversationContext,
-            conversationEvidence:r.conversationEvidence, conversationAssertionEvidence:r.conversationAssertionEvidence});
+            conversationEvidence:r.conversationEvidence, conversationAssertionEvidence:r.conversationAssertionEvidence},receipt);
           return;
         }
         if(r.researchRegion===null || validResearchRegion(r.researchRegion))receiveRegion(r.researchRegion);
@@ -1740,7 +1841,7 @@ function useWorkspaceValue(initialState: State) {
         if (r.previewNeed !== undefined) {
           const id = r.previewCaseId || r.caseId || s.caseId;
           if (id) {
-            if (id === "wind") await loadWindData();
+            if(id==="wind")await loadWindData().catch(error=>{if(!effect)throw error;next.error="暂时无法载入风场预览。";});
             const doc =
               id === "wind"
                 ? windDocument(
@@ -1781,6 +1882,8 @@ function useWorkspaceValue(initialState: State) {
         if (r.paperRecords) registerPapers(r.paperRecords,false);
         if (r.paperOnly) next.fieldLayer=null;
         if(r.pushFeed) registerObservations(r.pushFeed.records);
+        const resultBatch=boundResultBatch(r.resultBatch,delivery.id,attempt.userMessageId,session);
+        const viewOnly=!!effect && !resultBatch;
         const match = r.catalogMatch;
         const support = r.gap?.dataSupport;
         const catalogBatchResult: CandidateSet | undefined = match ? {
@@ -1802,7 +1905,7 @@ function useWorkspaceValue(initialState: State) {
             catalogBatchResult.camera={center:geoCentroid(shape),zoom:Math.max(1,Math.min(80,48/Math.max(.3,hi-lo,e-w))),reason:"本次找到的影像足迹"};
           }
         }
-        if (catalogBatchResult) Object.assign(next, {
+        if (catalogBatchResult && !viewOnly) Object.assign(next, {
           view: "earth", overview: "catalog", caseId: null, dataView: null, visualization: null,
           selection: catalogBatchResult.selection, layer: "all", camera: catalogBatchResult.camera, filters: catalogBatchResult.filters,
           mapResult: catalogBatchResult, search: {...emptySearch, result: catalogBatchResult}, inspector: null, evidence: null,
@@ -1820,7 +1923,13 @@ function useWorkspaceValue(initialState: State) {
           camera:r.camera || s.camera, selection:r.clearSelection ? null : s.selection, gridSystem:s.gridSystem,
           layer:r.layer || s.layer, originKind:"chat"
         } : undefined;
-        const recommendations = (match ? catalogBatchResult : undefined) || modelBatch || catalogBatchResult || (
+        const recommendations = viewOnly ? undefined : (match ? catalogBatchResult : undefined) || modelBatch || catalogBatchResult || (
+          resultBatch ? {
+            title:resultBatch.query,ids:resultBatchCandidates(resultBatch),caseId:r.caseId ?? s.caseId,
+            filters:answerFilters(s.filters,r.filters),camera:r.camera ?? s.camera,
+            selection:r.clearSelection ? null : s.selection,gridSystem:r.gridSystem ?? s.gridSystem,
+            layer:r.layer ?? s.layer,originKind:"chat" as const,catalogConditions:resultBatch.conditions,
+          } :
           r.modelIds === undefined && (effective.caseId ||
             (effective.selection && !effective.selection.simulated)) &&
           (r.caseId ||
@@ -1843,17 +1952,25 @@ function useWorkspaceValue(initialState: State) {
           recommendations.answerId=delivery.id;
           recommendations.researchRecord={question:q,intent:r.researchIntent,sessionId:session,messageId:delivery.id,notes:r.answerNotes?.researchNotes || []};
         }
-        if (recommendations && !modelBatch && r.research)
+        if (recommendations && !resultBatch && !modelBatch && r.research)
           recommendations.ids = [
             ...new Set(r.research.rows.flatMap((row) => row.ids)),
           ];
+        if(recommendations && resultBatch){
+          recommendations.resultBatch=resultBatch;
+          recommendations.ids=resultBatchCandidates(resultBatch,recommendations.ids);
+          if(catalogBatchResult && !viewOnly){
+            next.mapResult=recommendations;
+            if(next.search)next.search={...next.search,result:recommendations};
+          }
+        }
         if (recommendations && !catalogBatchResult && r.catalogQuery === undefined)
           next.search = {...emptySearch, result:recommendations};
         if (recommendations && r.research) {
           next.inspector = null;
           if (r.previewNeed === undefined) next.evidence = null;
           next.origin = null;
-          if (!recommendations.ids.length) {
+          if (!recommendations.ids.length && !resultBatch?.itemIds.length) {
             next.mapResult = recommendations;
             next.caseId = null;
             next.view = "earth";
@@ -1866,14 +1983,19 @@ function useWorkspaceValue(initialState: State) {
         if(regionReceived && r.researchRegion && !next.visualization && !next.dataView && r.visualizeNeed===undefined){
           delete next.camera;next.flight=regionFlight || latest.current.flight;
         }
-        if (!historicalReply) patch(next);
+        // A view mutation must not relabel the previous research result as a fresh batch.
+        if(viewOnly && Object.hasOwn(next,"caseId") && !Object.hasOwn(next,"mapResult"))next.mapResult=s.mapResult;
+        const receipt=effectReceipt(historicalReply?"stale":effect && !submitsWorkspaceFields(r,effect,next,s)?"failed":"applied");
+        if (!historicalReply && receipt?.state!=="failed") patch(next);
         if (next.search && r.catalogQuery !== undefined)
           r.message +=
             " 当前匹配 " +
             catalogResults(next.search, effective.saved).length +
             " 份资料。";
         if (next.error && r.visualizeNeed !== undefined) r.message = next.error;
-        await complete(r.message, {
+        const message=receipt?.state==="failed" ? "当前工作台无法应用这项操作。"
+          : receipt?.state==="stale" ? "工作台已变化，本轮操作未应用。" : r.message;
+        await completeWorkspace(message, {
           id: delivery.id,
           researchRegion:r.researchRegion,
           researchIntent:r.researchIntent,conversationContext:r.conversationContext,
@@ -1886,7 +2008,8 @@ function useWorkspaceValue(initialState: State) {
           ...(match ? {catalogMatch: match} : {}),
           ...(r.research ? { research: r.research } : {}),
           ...(recommendations ? { candidates: recommendations } : {}),
-          activity: {
+          activity: effect ? workspaceEffectActivity(delivery.id,effect,receipt?.state ?? "proposed",r.message,
+            workspaceReceiptDetail(receipt?.state),receipt) : {
             id: "discovery-" + randomId(),
             title: "数据发现 · 执行记录",
             scope: q,
@@ -1953,9 +2076,15 @@ function useWorkspaceValue(initialState: State) {
               },
             ],
           },
-        });
+        },receipt);
       } catch (error) {
         if (!isCurrent()) return;
+        if(effect){
+          const receipt=effectReceipt(workspaceCurrent()?"failed":"stale");
+          await completeWorkspace("本轮工作台操作未提交。",{id:delivery.id,replyTo:attempt.userMessageId,
+            activity:workspaceEffectActivity(delivery.id,effect,receipt?.state ?? "failed","工作台操作",workspaceReceiptDetail(receipt?.state),receipt)},receipt);
+          return;
+        }
         if (error instanceof ChatResponseError && error.code==="cancelled") {
           await add("assistant",error.message,{id:delivery.id,replyTo:attempt.userMessageId,
             runTrace:error.runTrace || entry.progress.trace});
@@ -1979,7 +2108,7 @@ function useWorkspaceValue(initialState: State) {
         }
       }
     },
-    [add, inspectAsset, leaveDetail, patch, publishChatProgress],
+    [add, inspectAsset, leaveDetail, patch, publishChatProgress,readWorkspaceSurface,uploadReceipt],
   );
   const attachScope=(...items:ScopeItem[])=>{
     const previous=latest.current.draftScope || [];
@@ -2002,14 +2131,16 @@ function useWorkspaceValue(initialState: State) {
     try{decision=makeQuestionDecision(check,messageId,choice,edited);}
     catch(error){patch({error:error instanceof Error?error.message:"请核对问题内容。"});return;}
     const {clarificationReply: _clarificationReply,clarificationAnswer: _clarificationAnswer,...checkedAttempt}=check.attempt;
-    const attempt={...checkedAttempt,query:check.originalQuestion,userMessageId:randomId(),questionDecision:decision};
+    const {workspaceView,browserTurnFrame,...snapshot}=chatRequestSnapshot(current,chatCandidateBatch(current),messageId);
+    const attempt={...checkedAttempt,...snapshot,query:check.originalQuestion,userMessageId:randomId(),questionDecision:decision,
+      view:current.view,context:structuredClone({...checkedAttempt.context,workspaceView,browserTurnFrame})};
     confirmingQuestions.current.add(messageId);
     try{
       await add("user",(choice==="original"?"按原问题继续：":"按确认的问题继续：")+decision.dataQuestion,
-        {id:attempt.userMessageId,questionDecision:decision,attachedScope:attempt.context.attachedScope});
+        {id:attempt.userMessageId,questionDecision:decision,attachedScope:attempt.context.attachedScope,browserTurnFrame});
       if(latest.current.sessionId===current.sessionId)await executeDiscovery(attempt,true);
     }finally{confirmingQuestions.current.delete(messageId);}
-  },[add,patch,executeDiscovery]);
+  },[add,patch,executeDiscovery,chatRequestSnapshot]);
   useEffect(() => {
     let active = true;
     const session = state.sessionId;
@@ -2087,14 +2218,6 @@ function useWorkspaceValue(initialState: State) {
     },
     [patch],
   );
-  const chatRequestSnapshot=useCallback((s:State,batch:CandidateSet|null)=>{
-    const operations=availableChatOperations(s,batch);
-    const workspaceView=workspaceViewAt(s,batch,operations);
-    return {workspaceView,
-      workspaceCandidateKey:workspaceView.candidateItems?.length ? chatCandidateKey(batch) : undefined,
-      workspaceOperationKeys:Object.fromEntries([...operations].map(([kind,target])=>[kind,target.key]))};
-  },[workspaceViewAt]);
-
   const answeringClarifications=useRef(new Set<string>());
   const answerClarification=useCallback((reply:ClarificationAnswer)=>{
     const s=latest.current;
@@ -2108,15 +2231,16 @@ function useWorkspaceValue(initialState: State) {
     if (!prompt || !query) return false;
     const clarificationReply=prompt.kind==="research" ? {parentTaskId} : undefined;
     const clarificationAnswer=validClarificationPrompt(parent?.clarificationPrompt) ? reply : undefined;
-    const {workspaceView,...snapshot}=chatRequestSnapshot(s,chatCandidateBatch(s));
+    const {workspaceView,browserTurnFrame,...snapshot}=chatRequestSnapshot(s,chatCandidateBatch(s),parentTaskId);
     const unsent=s.messages.find(message=>message.role==="user" && message.id===s.unansweredQuestionId);
     const unsentParent=unsent?.clarificationAnswer?.parentTaskId ?? unsent?.clarificationReply?.parentTaskId;
     const originalTurnId=unsentParent===parentTaskId && unsent?.text===query
       && unsent.clarificationAnswer?.optionId===reply.optionId ? unsent.id : undefined;
-    const attempt:DiscoveryAttempt={query,userMessageId:originalTurnId ?? randomId(),workspaceKey:requestWorkspaceKey(s),view:s.view,
-      context:structuredClone({...scopedQuestionContext([],null),workspaceView}),...snapshot,clarificationReply,clarificationAnswer};
+    const attempt:DiscoveryAttempt={query,userMessageId:originalTurnId ?? randomId(),view:s.view,
+      context:structuredClone({...scopedQuestionContext([],null),workspaceView,browserTurnFrame:unsent?.browserTurnFrame && originalTurnId
+        ? unsent.browserTurnFrame : browserTurnFrame}),...snapshot,clarificationReply,clarificationAnswer};
     answeringClarifications.current.add(pendingKey);
-    if (!originalTurnId) void add("user",query,{id:attempt.userMessageId,clarificationReply,clarificationAnswer:reply});
+    if (!originalTurnId) void add("user",query,{id:attempt.userMessageId,clarificationReply,clarificationAnswer:reply,browserTurnFrame});
     patch({unansweredQuestionId:null,...(s.clarificationReply?.parentTaskId===parentTaskId ? {clarificationReply:null} : {})});
     void executeDiscovery(attempt,false).finally(()=>answeringClarifications.current.delete(pendingKey));
     return true;
@@ -2130,7 +2254,7 @@ function useWorkspaceValue(initialState: State) {
       return;
     }
     const batch=chatCandidateBatch(s);
-    const {workspaceView,...snapshot}=chatRequestSnapshot(s,batch);
+    const {workspaceView,browserTurnFrame,...snapshot}=chatRequestSnapshot(s,batch);
     const turnId = randomId();
     const items = s.draftScope ?? [];
     const citation = s.citation ? (({excerpt,...reference})=>reference)(s.citation) : null;
@@ -2151,9 +2275,9 @@ function useWorkspaceValue(initialState: State) {
         })),
         ...(observationBatch?{observationBatch:{catalogConditions:observationBatch.catalogConditions,
           selection:observationBatch.selection,period:observationBatch.filters.period,utcWindow:observationBatch.filters.utcWindow}}:{})};
-    const attempt:DiscoveryAttempt = {query:q,userMessageId:turnId,workspaceKey:requestWorkspaceKey(s),
-      view:s.view,context:structuredClone({...context,workspaceView}),...snapshot};
-    void add("user",q,{id:turnId,attachedScope:items,
+    const attempt:DiscoveryAttempt = {query:q,userMessageId:turnId,
+      view:s.view,context:structuredClone({...context,workspaceView,browserTurnFrame}),...snapshot};
+    void add("user",q,{id:turnId,attachedScope:items,browserTurnFrame,
       context:[caseById(s.caseId)?.title,s.filters.place,s.selection?.grid.label].filter(Boolean).join(" · ") || "全球视图",
       ...(s.citation?{citation:s.citation}:{})});
     patch({draftScope:null,citation:null,unansweredQuestionId:null});
@@ -2196,7 +2320,7 @@ function useWorkspaceValue(initialState: State) {
     add,
     send,
     attachScope,confirmQuestion,answerClarification,cancelChat,
-    registerWorkspaceSurface, noteManualNavigation,
+    registerWorkspaceSurface, registerWorkspacePanel, noteManualNavigation,
     retry,
     openCase,
     inspectAsset,

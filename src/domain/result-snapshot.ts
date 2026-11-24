@@ -3,6 +3,7 @@ import { validContext } from "./context-validation";
 import { validBatch } from "./research-list";
 import type { SearchState } from "./results";
 import type { CandidateSet } from "./types";
+import {validResultBatchReference} from "./browser-turn-frame";
 import {validAccessSection} from "./data-access";
 
 type Scope = Pick<
@@ -57,8 +58,10 @@ export function validResultSnapshot(v: unknown): v is ResultSnapshot {
     !fields(
       batch,
       scopeKeys +
-        " title originKind ids catalogConditions restoredFrom lookups metric sceneKey clusterOverlay answerId researchRecord",
+        " title originKind ids catalogConditions restoredFrom lookups metric sceneKey clusterOverlay answerId researchRecord resultBatch",
     ) ||
+    (batch.resultBatch !== undefined && (!validResultBatchReference(batch.resultBatch) ||
+      batch.resultBatch.taskId !== batch.answerId || !batch.ids.every(id=>batch.resultBatch!.itemIds.includes(id)))) ||
     !fields(v.scope, scopeKeys) ||
     !scopeFields(batch) ||
     !scopeFields(v.scope as Scope) ||
@@ -108,7 +111,7 @@ export function snapshotResult(
   return {
     version: 1,
     view,
-    batch,
+    batch: batch.resultBatch ? {...batch,resultBatch:{...batch.resultBatch,itemIds:batch.ids}} : batch,
     scope,
     catalog: {
       query,

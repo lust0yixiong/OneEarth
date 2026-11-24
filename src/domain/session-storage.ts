@@ -51,12 +51,19 @@ function result<T>(request: IDBRequest<T>) {
   });
 }
 
+function matchingWorkspaceReceipt(message:Message) {
+  const receipt=message.workspaceReceipt;
+  return receipt?.turnId===message.replyTo && receipt?.effectId==="workspace:"+message.id ? receipt : undefined;
+}
+
 export function mergeMessages(existing: Message[], incoming: Message[]) {
   const messages = new Map(existing.map(message => [message.id, message]));
   let changed = false;
   for (const message of incoming) {
     const previous = messages.get(message.id);
-    if (!previous || (previous.failed && !message.failed)) {
+    const receipt=matchingWorkspaceReceipt(message);
+    if (!previous || (previous.failed && !message.failed) ||
+      (receipt && previous.replyTo===message.replyTo && !matchingWorkspaceReceipt(previous))) {
       messages.set(message.id, message);
       changed = true;
     }
@@ -107,7 +114,20 @@ export async function writeSession(
     if (migrate && old) return;
     written = true;
     if (workspace) tx.objectStore("workspaces").put(workspace, id);
-    for (const message of messages) tx.objectStore("messages").put({ session: id, id: message.id, message });
+    for (const message of messages) {
+      const records=tx.objectStore("messages");
+      const row={session:id,id:message.id,message};
+      if(!message.workspaceEffect){
+        records.put(row);
+        continue;
+      }
+      const existing=records.get([id,message.id]);
+      existing.onsuccess=()=>{
+        const previous:Message|undefined=existing.result?.message;
+        if(previous && matchingWorkspaceReceipt(previous))return;
+        records.put(row);
+      };
+    }
     if (migrate) for (const key of workspace?.saved || []) tx.objectStore("favorites").put(true, key);
     const firstQuestion = old?.firstQuestion || messages.find((m) => m.role === "user")?.text.slice(0, 100);
     summaries.put({ id, firstQuestion, title: firstQuestion || title || old?.title || "新对话", updatedAt: Date.now() });
@@ -163,4 +183,13 @@ export async function saveResearchPdf(id:string,pdf:Blob) {
   const db=await database(), tx=db.transaction("workspaces","readwrite");
   tx.objectStore("workspaces").put(pdf,["research-pdf",id]);
   await completed(tx);
+}
+
+export async function claimWorkspaceEffect(session:string,id:string) {
+  const db=await database(),tx=db.transaction("workspaces","readwrite");
+  const done=completed(tx),store=tx.objectStore("workspaces"),key=["workspace-effect",session,id];
+  const claimed=await result(store.get(key))===undefined;
+  if(claimed)store.put(true,key);
+  await done;
+  return claimed;
 }

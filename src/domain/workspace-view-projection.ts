@@ -3,8 +3,15 @@ import {initialAccessSection} from "./data-access";
 import {assetById} from "./datasets";
 import {datasetLayers, globeCases} from "./regional-cases";
 import type {State} from "./store";
-import type {Camera, View} from "./types";
+import type {Camera, CandidateSet, View} from "./types";
 import type {WorkspaceViewAction, WorkspaceViewChoice, WorkspaceViewContext, WorkspaceViewPublication} from "./workspace-view-context";
+
+export type WorkspacePanelReading = {
+  inspector?: "expanded" | "collapsed";
+  evidence?: "docked" | "expanded";
+  layerMenu?: boolean;
+  researchLists?: boolean;
+};
 
 export type WorkspaceSurfaceReading = {
   surface: View;
@@ -14,6 +21,9 @@ export type WorkspaceSurfaceReading = {
   focus?: WorkspaceViewContext["focus"];
   candidates?: WorkspaceViewContext["candidates"];
   candidateItems?: WorkspaceViewContext["candidateItems"];
+  candidateBatch?: CandidateSet;
+  candidateListExpanded?: boolean;
+  panels?: WorkspacePanelReading;
   display?: WorkspaceViewContext["display"];
   applyControl?: (action: WorkspaceViewAction) => boolean;
   resolvePublishedChoice?: (publication:WorkspaceViewPublication, valueId:string) => WorkspaceViewChoice | undefined;

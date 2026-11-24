@@ -41,7 +41,7 @@ test("named prior and first-pass DOI records can be checked when assertions do n
     const entity=input.entities.find(e=>e.doi===doi)!;
     assert.ok(entity);assert.equal(entity.pinned,true);
     const enumIds=complementSchema(input).properties.checks.items.properties.entityId.enum;
-    assert.ok(enumIds.includes(entity.id));
+    assert.ok(enumIds?.includes(entity.id));
     const result=complementPlan(JSON.stringify({checks:[{entityId:entity.id,goal:"files",terms:"negative control reads",reason:"核对目标归档中的对照记录"}]}),input);
     assert.equal(result.strict,true);assert.deepEqual(result.queries,[]);assert.equal(result.targets[0].doi,doi);
   }

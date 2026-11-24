@@ -1,4 +1,5 @@
 import type {DiscoveryResponse,Message} from "./types";
+import {validBrowserWorkspaceReceipt,type BrowserWorkspaceReceipt,type WorkspaceReceipt} from "./turn-context";
 import {createClarificationPrompt,validClarificationPrompt} from "./clarification";
 
 export const chatMessagesPath = "/api/chat/messages";
@@ -59,6 +60,7 @@ interface ResearchRecord {
   created:number;
   updated:number;
   result:DiscoveryResponse;
+  workspaceReceipt?:WorkspaceReceipt;
 }
 
 export async function loadResearchRecord(id:string):Promise<ResearchRecord>{
@@ -69,4 +71,19 @@ export async function loadResearchRecord(id:string):Promise<ResearchRecord>{
   if(record.id!==id||typeof record.question!=="string"||typeof record.conversationId!=="string"||
     typeof record.turnId!=="string"||typeof record.result?.message!=="string")throw Error("研究记录格式无效。");
   return record;
+}
+
+
+export function readWorkspaceReceipt(receipt:WorkspaceReceipt|undefined,taskId:string,conversationId:string,turnId:string) {
+  if(!receipt || receipt.taskId!==taskId || !Number.isFinite(receipt.reportedAt) || receipt.turnId!==turnId ||
+    receipt.conversationId!==conversationId || receipt.effectId!=="workspace:"+taskId)return;
+  const {effectId,state}=receipt;
+  return validBrowserWorkspaceReceipt({effectId,conversationId,turnId,state}) ? receipt : undefined;
+}
+
+export async function reportWorkspaceReceipt(id:string,receipt:BrowserWorkspaceReceipt) {
+  const res=await fetch(chatMessagesPath+"/"+encodeURIComponent(id)+"/workspace-receipt",{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(receipt),signal:AbortSignal.timeout(8000),
+  });
+  return res.ok || res.status===400 || res.status===404 || res.status===409;
 }

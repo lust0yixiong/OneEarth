@@ -4,7 +4,7 @@ import type {SourceQuote} from "../domain/source-preview";
 import {WebSourceReader} from "./WebSourceReader";
 import {webUrl} from "../domain/web-preview";
 import {useWebPreview} from "./use-web-preview";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   X,
   Expand,
@@ -40,7 +40,7 @@ function Reader({ doc: storedDoc }: { doc: EvidenceDocument }) {
     const display=literatureDisplay(storedDoc);
     return {...display,tabs:display.tabs.map((tab,i)=>storedDoc.tabs[i].savedWebExcerpt?storedDoc.tabs[i]:tab)};
   },[storedDoc]);
-  const { state: s, patch } = useWorkspace();
+  const { state: s, patch, registerWorkspacePanel } = useWorkspace();
   const previewWeb=useWebPreview();
   const positionStyle=usePreviewPosition(s.inspector?110:0);
   const position = s.readerPosition;
@@ -48,6 +48,8 @@ function Reader({ doc: storedDoc }: { doc: EvidenceDocument }) {
   const setPage = (page: number) => patch({ readerPosition: { tab, page } });
   const [loadedSource,setLoadedSource]=useState<{tab:number;quote:SourceQuote|null}>();
   const [expanded, setExpanded] = useState(false);
+  useLayoutEffect(()=>registerWorkspacePanel("evidence",{evidence:expanded?"expanded":"docked"}),
+    [expanded,registerWorkspacePanel]);
   const [pdfZoom, setPdfZoom] = useState(1);
   const [imageError, setImageError] = useState(false);
   const [copied, setCopied] = useState(false);

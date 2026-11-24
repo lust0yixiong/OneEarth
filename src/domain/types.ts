@@ -197,6 +197,7 @@ export interface Citation {
   body: string;
 }
 export interface CandidateSet {
+  resultBatch?: import("./turn-context").ResultBatch;
   researchRecord?:import("./research-list").ResearchRecord;
   /** Answer whose evidence is shown on the globe. */
   answerId?: string;
@@ -288,6 +289,9 @@ export interface AnswerNotes {
 }
 export type ClarificationReply = {parentTaskId:string};
 export interface Message {
+  browserTurnFrame?: import("./turn-context").BrowserTurnFrame;
+  workspaceEffect?: import("./turn-context").WorkspaceEffect;
+  workspaceReceipt?: import("./turn-context").WorkspaceReceipt | import("./turn-context").BrowserWorkspaceReceipt;
   clarificationReply?: ClarificationReply;
   clarificationAnswer?: import("./clarification").ClarificationAnswer;
   clarificationPrompt?: import("./clarification").ClarificationPrompt;
@@ -344,6 +348,7 @@ export interface DiscoveryAttempt {
   view?: View;
 }
 export interface DiscoveryContext {
+  browserTurnFrame?: import("./turn-context").BrowserTurnFrame;
   workspaceView?: import("./workspace-view-context").WorkspaceViewContext;
   attachedScope?:import("./question-scope").ScopeItem[];
   inCandidateScope?: boolean;
@@ -375,6 +380,8 @@ export interface CapabilityGap {
   verification: string;
 }
 export interface DiscoveryResponse {
+  resultBatch?: import("./turn-context").ResultBatch;
+  workspaceEffect?: import("./turn-context").WorkspaceEffect;
   workspaceAction?: import("./workspace-view-context").WorkspaceViewAction;
   workspaceOperation?: import("./workspace-operations").WorkspaceOperation;
   workspacePending?: {question:string;originalQuestion?:string;proposedAction?:import("./workspace-view-context").WorkspaceViewAction;

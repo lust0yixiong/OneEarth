@@ -9,6 +9,7 @@ import type { DiscoveryResponse } from "../src/domain/types";
 import {clarificationParent} from "./clarification-guard";
 import {parseObservationCheck,type ObservationCheck} from "./observation-check-contract";
 import {validClarificationAnswer,validClarificationPrompt,clarificationAnswerText} from "../src/domain/clarification";
+import {validBrowserTurnFrame} from "../src/domain/turn-context";
 
 /** The archived parent owns choices; request mirrors and edited history do not. */
 export async function clarificationAnswerContext(tasks:TaskStore,body:Record<string,any>){
@@ -59,6 +60,8 @@ export async function validateTurnStructure(tasks: TaskStore, value: unknown): P
       return "原任务没有可供这次确认的问题，请回到该任务重新确认。";
   }
   const context = body.context as import("../src/domain/types").DiscoveryContext;
+  if (context.browserTurnFrame !== undefined && (!validBrowserTurnFrame(context.browserTurnFrame) ||
+    !taskIdPattern.test(body.conversationId) || !taskIdPattern.test(body.turnId))) return "发问时的工作台状态或轮次关联无效。";
   if (context.caseId && !cases.some(c => c.id === context.caseId)) return "未找到对应案例。";
   if(body.clarificationReply!==undefined){
     try{await clarificationParent(tasks,body as Parameters<typeof clarificationParent>[1]);}

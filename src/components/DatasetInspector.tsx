@@ -22,7 +22,7 @@ import { ResearchAssessment } from "./ResearchAssessment";
 import { BatchSpatialSummary } from "./BatchSpatialSummary";
 import { BatchContext, SaveResearchList } from "./ResearchLists";
 import { SeptemberComparison } from "./SeptemberComparison";
-import { Fragment, useState, useEffect, useMemo } from "react";
+import { Fragment, useState, useEffect, useLayoutEffect, useMemo } from "react";
 import {
   ChartNoAxesCombined,
   FileSearch,
@@ -459,7 +459,7 @@ function HainaLayerDetails({haina,selection}:{haina:HainaPublicLayer;selection:P
 }
 
 export function DatasetInspector({haina}:{haina:HainaPublicLayer}) {
-  const { state: s, patch, inspectCandidates } = useWorkspace();
+  const { state: s, patch, inspectCandidates, registerWorkspacePanel } = useWorkspace();
   const [collapsed, setCollapsed] = useState(false);
   const previewWeb=useWebPreview();
   const item = s.inspector;
@@ -477,8 +477,10 @@ export function DatasetInspector({haina}:{haina:HainaPublicLayer}) {
     return ()=>{active=false;};
   },[assetId,summary,readAttempt]);
   useEffect(()=>setCollapsed(false),[item]);
-  if (!item) return null;
   const compact = collapsed || !!s.evidence;
+  useLayoutEffect(()=>item?registerWorkspacePanel("inspector",{inspector:compact?"collapsed":"expanded"}):undefined,
+    [item,compact,registerWorkspacePanel]);
+  if (!item) return null;
   const asset = "assetId" in item ? assetById.get(item.assetId) : undefined;
   const batch = "batch" in item ? item.batch : null;
   const parent = "parent" in item ? item.parent : undefined;

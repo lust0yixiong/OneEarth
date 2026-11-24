@@ -6,6 +6,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {resolvedChatModel, type ChatModel} from "../src/domain/chat-model";
+import {assertModelContextSafe,modelSafeText} from "./model-context-safety";
 
 export interface ExecutorOptions {
   webSearch?: true;
@@ -24,6 +25,10 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
   configure:typeof configureService,slots:{active:number}) {
   if(options?.webSearch && (config.executor!=="codex" || (config.provider && config.provider!=="native")))
     throw Error("当前执行器未接入原生联网检索。");
+  prompt=modelSafeText(prompt);
+  assertModelContextSafe(prompt);
+  const schema=options?.outputSchema?modelSafeText(JSON.stringify(options.outputSchema)):undefined;
+  if(schema!==undefined)assertModelContextSafe(schema);
   config=resolvedChatModel(config);
   if(slots.active>=10) throw Error("模型执行器正在处理其他请求，请稍后重试。");
   const timing:ExecutorTiming={kind:'model-executor',model:config.model,executor:config.executor,startedAt:Date.now(),activeAtStart:slots.active,localQueueMs:0,
@@ -36,9 +41,9 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
       ? ["exec","--ignore-user-config","--ephemeral","--skip-git-repo-check","-s","read-only","--disable","shell_tool","--disable","unified_exec","--disable","plugins","--disable","multi_agent"]
       : ["--safe-mode","-p","--tools","","--strict-mcp-config","--mcp-config",'{"mcpServers":{}}',"--no-session-persistence","--disable-slash-commands","--setting-sources","user","--output-format","text"];
     if(options?.webSearch){args.unshift("--search");args.push("--json");}
-    if(options?.outputSchema && config.executor==="codex" && (!config.provider || config.provider==="native")){
+    if(schema!==undefined && config.executor==="codex" && (!config.provider || config.provider==="native")){
       const schemaPath=path.join(dir,"answer-schema.json");
-      await writeFile(schemaPath,JSON.stringify(options.outputSchema));
+      await writeFile(schemaPath,schema);
       args.push("--output-schema",schemaPath);
     }
     const env:NodeJS.ProcessEnv = {};

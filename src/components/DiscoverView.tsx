@@ -72,10 +72,11 @@ export function DiscoverView(){
   },[section,queryKey]);
   useEffect(()=>()=>{actionVersion.current++;},[]);
   const rows=data?.rows||[],ids=rows.map(r=>r.asset.id);
-  useLayoutEffect(()=>registerWorkspaceSurface(()=>({surface:"discover",
-    candidateItems:data?.rows.slice(0,16).map(row=>({id:row.asset.id,label:row.asset.title}))})),
-    [data,registerWorkspaceSurface]);
   const batch=catalogBatch(search,ids,s.camera,s.gridSystem);
+  useLayoutEffect(()=>registerWorkspaceSurface(()=>({surface:"discover",
+    candidateBatch:data ? batch : undefined, candidateListExpanded:!!data,
+    panels:{researchLists:s.listLibraryOpen},
+    candidateItems:data?.rows.slice(0,16).map(row=>({id:row.asset.id,label:row.asset.title}))})));
   const selectedIds=search.compare;
   const compared=selectedIds.flatMap(id=>assetById.get(id)||[]);
   const assessed={...batch,ids:selectedIds.length?selectedIds:batch.ids};

@@ -91,7 +91,7 @@ test("workspace clarification persists a server pending without model parent IDs
   const selected=await f.run("洛杉矶",decision("workspace",{kind:"resolve-control",layerId:"c40",controlId:"city",query:"Los Angeles"}),true,{pending});
   assert.equal(selected.result.workspaceAction.valueId,"los-angeles-usa");
   const trace=JSON.parse(selected.result.runTrace.calls.find((call:any)=>call.id==="turn-action").output);assert.equal(trace.pendingTaskId,taskId);assert.equal(trace.modelPlanning.pendingTaskId,undefined);
-  assert.ok(!selected.calls[0].includes(taskId));
+  assert.equal(selected.prompt.followUp.taskId,undefined,"parent identity is not a model approval field");
 });
 
 test("a specific proposal is archived without an action, then fixed approval releases only that stable target",async t=>{

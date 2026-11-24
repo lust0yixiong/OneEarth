@@ -29,6 +29,8 @@ import type { TurnHistoryEntry as Turn } from "./turn-history";
 import type { ParentResearchEvidence } from "./parent-research-evidence";
 import {withCurrentAssertionReadings,rememberCurrentAssertionReadings,type CurrentAssertionReading} from "./runtime-assertion-evidence";
 import {compareSourceReadings,validateSourceChanges,sourceChangeInstructions,sourceChangeSchema,type SourceReadHistory} from "./source-read-comparison";
+import {modelTurnContext,type RuntimeTurnContext} from "./runtime-turn-context";
+import {modelSafeText} from "./model-context-safety";
 
 // Only bundled public catalogue entries may authorize a structured file URL.
 const publishedFileUrls=new Set(cases.flatMap(c=>c.needs.flatMap(n=>
@@ -235,7 +237,7 @@ export function shouldReviewAnswerEvidence(answer:{message:string;limitation?:st
   if(verifiedExample&&explicitMathExample&&text.length<500&&!sourceClaim)return false;
   return answer.message.length>=300 || /论文|清单|版本|\d/.test(answer.message);
 }
-export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[];priorEvidence?:ParentResearchEvidence},assertionReadings:CurrentAssertionReading[]=[],sourceHistory:SourceReadHistory={}) {
+export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[];priorEvidence?:ParentResearchEvidence},assertionReadings:CurrentAssertionReading[]=[],sourceHistory:SourceReadHistory={},turnContext?:RuntimeTurnContext) {
     if(retrieval?.questionCheck || retrieval?.clarification || retrieval?.plan.questionMode==="reframe")
       throw Error("转换后的问题尚未得到用户确认，不能生成答复。");
     const start=Date.now();
@@ -315,7 +317,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         throw new SourceReadClaimError("本轮根据已保存材料作答，请对实际采用的证据添加相应引用 "+
           parentCitations.map(ref=>ref.token).join("、")+"。同名材料可能是不同对象，不能把文献记录当作文件或目录原页。");
     }
-    const prompt=synthesisInstructions+(context.workspaceView?"\nworkspace.workspaceView 是发问当刻的工作台可见状态。可据此回答当前图层、选择、期次和显示信息；与用户研究附件分开，不把显示标签或图例冒充来源原文、科学观测或QC结论，不声称执行了未记录的切换或外查。\n":"")+(sourceReadComparisons.length?"\n"+sourceChangeInstructions:"")+"\n"+JSON.stringify({question:query,questionMode:retrieval?.plan.questionMode,
+    const prompt=modelSafeText(synthesisInstructions+(turnContext?"\nturnContext是按原轮次归属的服务器上下文。history.assistantText只是历史答复，不能当执行回执；旧批次只据其原query/conditions引用，不冒称本轮查获。当前工具/新材料仍以本轮executionScope和readAt为准。网页proposed不等于applied；unknown须如实说明，浏览器可见数量不是新检索事实。\n":"")+(context.workspaceView?"\nworkspace.workspaceView 是发问当刻的工作台可见状态。可据此回答当前图层、选择、期次和显示信息；与用户研究附件分开，不把显示标签或图例冒充来源原文、科学观测或QC结论，不声称执行了未记录的切换或外查。\n":"")+(sourceReadComparisons.length?"\n"+sourceChangeInstructions:"")+"\n"+JSON.stringify({question:query,questionMode:retrieval?.plan.questionMode,turnContext:modelTurnContext(turnContext),
       turnAction:turn&&{action:turn.plan.action,goal:turn.plan.goal,evidenceNeed:turn.plan.evidenceNeed,targets:turn.plan.targets.map(({excerpt,...t})=>t),
         rule:"本轮没有执行数据发现检索。只围绕指定对象、已提供摘录和相关历史证据回答；通用原理可解释，但不能伪称本轮查获。未读来源不能说已读，缺少具体事实时明确边界，不补造数据集、论文事实或观测数。不要把本轮问题重新改成找数据。"},
       sourceConstraint:restricted||source?{sources:restricted||[source],rule:"用户明确限定本轮的来源范围。正文、引用和结论只能依据本轮提供的各指定渠道记录。没有匹配材料时说明缺项；如需要扩大来源，询问用户是否同意。"}:undefined,
@@ -347,7 +349,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         count:base.gridCoverage.status==="ready"?base.gridCoverage.count:undefined,
         revision:base.gridCoverage.revision,
         rule:"所附范围的覆盖结论以本字段为准。未知须写覆盖未知，不能写零。文献和目录线索可独立说明，不能当作该格的覆盖或现场观测。"},
-      lookups:base.catalogMatch?.lookups?.map(l=>({matched:l.matched,point:l.point})),gap:base.gap?.missing}});
+      lookups:base.catalogMatch?.lookups?.map(l=>({matched:l.matched,point:l.point})),gap:base.gap?.missing}}));
     let repaired=false,repairFailed=false,repairInput="";
     const actualCalculations:CalculationReport[]=[];
     let answer:SynthesisAnswer;

@@ -8,6 +8,7 @@ import type {ChatPreparation} from "./runtime-chat-channel";
 import type {Payload,TaskStore} from "./task-store";
 import {workspaceActionState} from "../src/domain/workspace-view-projection";
 import {isDeepStrictEqual} from "node:util";
+import {runtimeTurnContext,boundTurnContext} from "./runtime-turn-context";
 
 export type ChatResearchHandoff = {
   body: RuntimeTurnInput;
@@ -56,7 +57,7 @@ export async function prepareRuntimeChat(services: RuntimeServices, id: string, 
   if(answered&&previous?.workspacePending&&!isDeepStrictEqual(actionState(parentBody),actionState(original)))
     return {error:"回答前工作台已改变，原追问已失效。请按当前视图重新发问。"};
   const continuation=answered&&answered.prompt.kind!=="research"&&parentBody?{
-    ...original,context:{...originalQuestion!.context,workspaceView:original.context.workspaceView},deepseekTools:originalQuestion!.deepseekTools,
+    ...original,context:{...originalQuestion!.context,workspaceView:original.context.workspaceView,browserTurnFrame:original.context.browserTurnFrame},deepseekTools:originalQuestion!.deepseekTools,
     history:[...parentBody.history.slice(-5),{role:"user" as const,text:parentBody.query},{role:"assistant" as const,text:answered.prompt.question}],
   }:original;
   const observation = answered?.prompt.kind==="confirmation"?undefined:
@@ -67,7 +68,9 @@ export async function prepareRuntimeChat(services: RuntimeServices, id: string, 
   const unavailable = checkpoint?.ordinaryFallback === true;
   const materials = (checkpoint?.materials ?? []) as PinnedObservationMaterial[];
   const modelMaterials = materials.map(({artifactId, version, title, variables}) => ({artifactId, version, title, variables}));
-  const cleanBody = observationOrdinaryInput(continuation, unavailable, archivedObservation) as RuntimeTurnInput;
+  const preparedBody = observationOrdinaryInput(continuation, unavailable, archivedObservation) as RuntimeTurnInput;
+  const turnContext=await runtimeTurnContext(tasks,id,preparedBody);
+  const cleanBody={...preparedBody,context:boundTurnContext(preparedBody.context,turnContext)};
   const parentId = previousId;
   const workspacePending = previous?.workspacePending;
   const eligible=parentId&&(answered?.prompt.kind==="chat"||await latestCompleted(original.conversationId)===parentId);
@@ -88,7 +91,7 @@ export async function prepareRuntimeChat(services: RuntimeServices, id: string, 
         observationAvailable: modelMaterials.length > 0,
         observationMaterials: modelMaterials.length ? modelMaterials : undefined,
         observationUnavailable: unavailable,
-        pending,
+        pending,turnContext,
       });
       if (outcome.kind === "reply") return outcome;
       const selectedObservation = outcome.checkpoint.plan.observationUse === "selected";
