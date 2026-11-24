@@ -10,6 +10,6 @@ export function literatureDisplay<T>(value: T): T {
   if (typeof value === "string") return literatureText(value) as T;
   if (Array.isArray(value)) return value.map(literatureDisplay) as T;
   if (value && typeof value === "object")
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, literatureDisplay(item)])) as T;
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key==="providerReasoning"?item:literatureDisplay(item)])) as T;
   return value;
 }

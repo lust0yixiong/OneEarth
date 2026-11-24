@@ -34,6 +34,7 @@ test("runtime history includes old and handed-off turns in admission order, with
   const oldest=await add("A".repeat(800),"legacy");
   const full="历史结论\n\n"+("首段条目".repeat(300))+"\n\n较老轮后段的独立站点证据。";
   const url="https://example.test/archived/report";
+  const displayOnly="仅供原轮展示的模型说明";
   assert.ok(await tasks.finish(oldest.id,"complete",{result:{message:full,answerNotes:{
     references:[{kind:"web",url,title:"原来源"}],
     webSources:[{url,title:"原来源",stage:"pdf-excerpt",pageExcerpt:"不进入历史投影的材料原文。"}],
@@ -41,7 +42,9 @@ test("runtime history includes old and handed-off turns in admission order, with
   const front=await add("普通前台问答","chat");
   assert.ok(await tasks.chat.finish(front.id,"complete",{result:{message:"普通前台答复"}}));
   const research=await add("前台转后台","research");
-  assert.ok(await tasks.finish(research.id,"complete",{result:{message:"真实后台终档"}}));
+  assert.ok(await tasks.finish(research.id,"complete",{result:{message:"真实后台终档",runTrace:{
+    started:100,stages:[],calls:[],providerReasoning:[{id:research.id+":fixture",revision:1,kind:"deepseek-thinking",text:displayOnly}]
+  }}}));
 
   const intermediate=[];
   for(let n=0;n<5;n++){
@@ -71,6 +74,7 @@ test("runtime history includes old and handed-off turns in admission order, with
   assert.equal(history[0].assistantText,full);
   assert.deepEqual(history[0].references,[{kind:"web",url,title:"原来源",webEvidenceStage:"pdf-excerpt"}]);
   assert.equal(history[2].assistantText,"真实后台终档");
+  assert.ok(!JSON.stringify(history).includes(displayOnly));
   assert.equal(history.at(-1)?.observationRestricted,true);
   assert.equal(history.at(-1)?.assistantText,undefined);
   assert.equal(history.at(-1)?.references,undefined);

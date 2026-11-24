@@ -73,3 +73,97 @@ test("findings arrive before the terminal answer, replace by source and restore 
   assert.equal(snapshots[0].findings?.[0].summary,first.summary);
   assert.deepEqual(snapshots[2].findings,[first]);
 });
+
+function reasoningResponse(events:unknown[]) {
+  return new Response(events.map(event=>JSON.stringify(event)+"\n").join(""),{headers:{"content-type":"application/x-ndjson"}});
+}
+
+const reasoningSummary={id:"planner",revision:1,kind:"summary" as const,text:"供应方已返回首段摘要。"};
+const reasoningLater={...reasoningSummary,revision:2,text:"供应方已返回首段摘要。\n这里是第二段。",complete:true};
+
+test("provider snapshots replace by revision, and stale trace and terminal data cannot erase the update",async()=>{
+  const snapshots:RunTrace[]=[];
+  const result=await readChatResponse(reasoningResponse([
+    {providerReasoning:reasoningSummary,traceStarted:21},
+    {providerReasoning:{...reasoningSummary,text:"同版本不替换"}},
+    {providerReasoning:reasoningLater},
+    {providerReasoning:{...reasoningSummary,revision:3,text:"   "}},
+    {stage:"真实阶段",runTrace:{started:21,stages:[],calls:[],providerReasoning:[reasoningSummary]}},
+    {result:{message:"正文",runTrace:{started:21,stages:["归档阶段"],calls:[],providerReasoning:[reasoningSummary]}}},
+  ]),(_stage,_searches,trace)=>{if(trace)snapshots.push(trace);});
+  assert.equal(snapshots.length,3);
+  assert.deepEqual(snapshots[0].providerReasoning,[reasoningSummary]);
+  assert.deepEqual(snapshots[1].providerReasoning,[reasoningLater]);
+  assert.deepEqual(snapshots[2].providerReasoning,[reasoningLater]);
+  assert.deepEqual(result.runTrace?.providerReasoning,[reasoningLater]);
+  assert.deepEqual(result.runTrace?.stages,["归档阶段"]);
+  assert.equal(result.message,"正文");
+});
+
+test("same-task reconnect retains the last observed revision; separate tasks may reuse a snapshot ID",async()=>{
+  const [reconnected,independent]=await Promise.all([
+    readChatResponse(reasoningResponse([{providerReasoning:reasoningSummary},{result:{message:"同任务"}}]),()=>{},
+      undefined,[reasoningLater]),
+    readChatResponse(reasoningResponse([{providerReasoning:{...reasoningSummary,kind:"deepseek-thinking",text:"身份独立"}},{result:{message:"新任务"}}]),()=>{}),
+  ]);
+  assert.deepEqual(reconnected.runTrace?.providerReasoning,[reasoningLater]);
+  assert.equal(independent.runTrace?.providerReasoning?.[0].text,"身份独立");
+});
+
+test("a failure event can retain the last real provider snapshot in its original trace",async()=>{
+  await assert.rejects(()=>readChatResponse(reasoningResponse([
+    {providerReasoning:reasoningSummary},
+    {error:"运行中断",code:"fixture",providerReasoning:reasoningLater},
+  ]),()=>{}),error=>{
+    assert.ok(error instanceof ChatResponseError);
+    assert.equal(error.code,"fixture");
+    assert.deepEqual(error.runTrace?.providerReasoning,[reasoningLater]);
+    return true;
+  });
+});
+
+test("an empty or malformed provider snapshot never creates reasoning content",async()=>{
+  const result={message:"普通回答"};
+  assert.deepEqual(await readChatResponse(reasoningResponse([
+    {providerReasoning:{...reasoningSummary,text:"  "}},
+    {providerReasoning:{...reasoningSummary,kind:"internal-debug"}},
+    {providerReasoning:{...reasoningSummary,revision:Infinity}},
+    {result},
+  ]),()=>{}),result);
+});
+
+test("long same-kind reasoning segments preserve independent IDs and explicit truncation",async()=>{
+  const one={...reasoningSummary,id:"segment-one",text:"前".repeat(8000),complete:true};
+  const two={...reasoningSummary,id:"segment-two",revision:2,text:"后".repeat(10000),complete:true,truncated:true};
+  const older={...two,revision:1,text:"旧段",truncated:false};
+  const result=await readChatResponse(reasoningResponse([
+    {providerReasoning:one},{providerReasoning:older},{providerReasoning:two},
+    {runTrace:{started:1,stages:[],calls:[],providerReasoning:[one,older]}},
+    {result:{message:"正文独立保留"}},
+  ]),()=>{});
+  assert.deepEqual(result.runTrace?.providerReasoning,[one,two]);
+  assert.equal(result.message,"正文独立保留");
+});
+
+test("provider reasoning keeps the newest twelve IDs in arrival order across reconnect",async()=>{
+  const parts=Array.from({length:13},(_,i)=>({...reasoningSummary,id:"attempt-"+i}));
+  const updated={...parts[4],revision:2,text:"仍在原位置"};
+  const tail={...parts[12],truncated:true};
+  const archived=[...parts.slice(1,12),tail];
+  const retired=new Set<string>();
+  let latest:RunTrace|undefined;
+  await assert.rejects(readChatResponse(reasoningResponse([
+    ...parts.slice(0,12).map(providerReasoning=>({providerReasoning})),
+    {providerReasoning:tail},
+  ]),(_stage,_searches,trace)=>{latest=trace;},undefined,undefined,retired),/连接在回复完成前中断/);
+  assert.deepEqual(latest?.providerReasoning,archived);
+
+  const result=await readChatResponse(reasoningResponse([
+    {providerReasoning:parts[0]},
+    {providerReasoning:updated},
+    {result:{message:"重连后正文",runTrace:{started:1,stages:[],calls:[],providerReasoning:archived}}},
+  ]),()=>{},undefined,latest?.providerReasoning,retired);
+  const expected=archived.map(part=>part.id===updated.id ? updated : part);
+  assert.deepEqual(result.runTrace?.providerReasoning,expected);
+  assert.equal(result.message,"重连后正文");
+});

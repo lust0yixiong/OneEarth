@@ -1,7 +1,8 @@
 import {literatureDisplay, literatureText} from "../domain/literature-label";
 import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from "react";
 import {Clock3,Copy,Check,ChevronDown} from "lucide-react";
-import type {RunTrace,SearchRun,ToolCall} from "../domain/types";
+import type {ProviderReasoningSnapshot,RunTrace,SearchRun,ToolCall} from "../domain/types";
+import {mergeProviderReasoning} from "../domain/provider-reasoning";
 
 export function CopyButton({text,label}:{text:string;label:string}) {
   const [status,setStatus]=useState("");
@@ -105,9 +106,32 @@ function CallHistory({calls,runs,working,failed}:{calls:ToolCall[];runs:SearchRu
     </div>
   </>;
 }
+function ProviderReasoning({snapshots}:{snapshots:ProviderReasoningSnapshot[]}) {
+  const groups:ProviderReasoningSnapshot[][]=[];
+  for(const snapshot of snapshots){
+    const group=groups.at(-1);
+    if(group?.[0].kind===snapshot.kind)group.push(snapshot);
+    else groups.push([snapshot]);
+  }
+  return groups.map(group=>{
+    const first=group[0], multiple=group.length>1;
+    const label=first.kind==="summary" ? "推理摘要" : "供应方推理说明";
+    const truncated=group.find(item=>item.truncated)?.id;
+    return <div key={first.id} className={multiple?"oe-provider-reasoning-group":undefined}
+      role={multiple?"region":undefined} aria-label={multiple?label:undefined} tabIndex={multiple?0:undefined}>
+      {group.map((item,index)=><section className="oe-provider-reasoning" key={item.id}
+        data-provider-reasoning-kind={item.kind} data-provider-reasoning-truncated={item.truncated || undefined} aria-live="off">
+        {index===0 && <h3>{label}</h3>}
+        <div className="oe-provider-reasoning-text" tabIndex={multiple?undefined:0}>{item.text}</div>
+        {item.id===truncated && <p className="oe-provider-reasoning-note">此处仅显示部分内容。</p>}
+      </section>)}
+    </div>;
+  });
+}
 export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,working=false,failed=false,openFinding}:{trace?:RunTrace;stage?:string;runs?:SearchRun[];working?:boolean;failed?:boolean;openFinding?:(id:string)=>void}) {
   const trace=useMemo(()=>literatureDisplay(rawTrace),[rawTrace]);
   const reported=useMemo(()=>literatureDisplay(rawReported),[rawReported]);
+  const reasoning=useMemo(()=>mergeProviderReasoning(undefined,rawTrace?.providerReasoning) ?? [],[rawTrace?.providerReasoning]);
   const stage=rawStage && literatureText(rawStage);
   const runs=reported ?? trace?.searches ?? [];
   const [open,setOpen]=useState(working),[now,setNow]=useState(Date.now);
@@ -117,7 +141,7 @@ export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,worki
     output:r.status==="done"?JSON.stringify({returned:r.hits.length,total:r.total,hits:r.hits,warning:r.warning,cacheStoredAt:r.cacheStoredAt},null,2):undefined,
   }))];
   const stages=trace?.stages?.length?trace.stages:stage?[stage]:[];
-  if(!working && !calls.length && !stages.length)return null;
+  if(!working && !calls.length && !stages.length && !reasoning.length)return null;
   const findings=trace?.findings?.length ? <section className="oe-findings" aria-label="阶段发现" aria-live={working?"polite":"off"}>
     {trace.findings.map(f=><div key={f.id}>
       <p><strong>{f.source}</strong> · {f.summary}</p>
@@ -129,7 +153,8 @@ export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,worki
   return <>{working && findings}<details className="oe-run" open={open} onToggle={e=>setOpen(e.currentTarget.open)}>
     <summary><Clock3 size={14}/><span>{working?"Working for "+Math.max(0,Math.floor((now-(trace?.started||now))/1000))+"秒":"思考过程"}</span><ChevronDown size={13}/></summary>
     {!working && findings}
-    <StageHistory stages={stages} working={working}/>
+    {!!reasoning.length && <ProviderReasoning snapshots={reasoning}/>}
+    {!!stages.length && <StageHistory stages={stages} working={working}/>}
     {!!calls.length && <div className="oe-call-group">
     <CallHistory calls={calls} runs={runs} working={working} failed={failed}/></div>}
   </details></>;

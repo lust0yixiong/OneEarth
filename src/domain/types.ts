@@ -272,7 +272,15 @@ export interface SearchFinding {
   id:string; source:string; summary:string;
   items:{title:string; detail?:string; assetId?:string; url?:string}[];
 }
-export interface RunTrace {timings?:{kind:'model-executor';model:string;executor:string;startedAt:number;activeAtStart:number;localQueueMs:number;spawnMs?:number;firstStdoutMs?:number;elapsedMs:number;promptBytes:number;outputBytes:number}[]; findings?:SearchFinding[]; started:number; stages:string[]; calls:ToolCall[]; searches?:SearchRun[]}
+export type ProviderReasoningSnapshot = {
+  id: string;
+  revision: number;
+  kind: "summary" | "deepseek-thinking";
+  text: string;
+  complete?: boolean;
+  truncated?: boolean;
+};
+export interface RunTrace {timings?:{kind:'model-executor';model:string;executor:string;startedAt:number;activeAtStart:number;localQueueMs:number;spawnMs?:number;firstStdoutMs?:number;elapsedMs:number;promptBytes:number;outputBytes:number}[]; findings?:SearchFinding[]; started:number; stages:string[]; calls:ToolCall[]; searches?:SearchRun[]; providerReasoning?:ProviderReasoningSnapshot[]}
 export interface AnswerNotes {
   researchNotes?:{id:string;note:string}[];
   references?: AnswerReference[];

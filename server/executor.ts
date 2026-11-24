@@ -7,22 +7,27 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {resolvedChatModel, type ChatModel} from "../src/domain/chat-model";
 import {assertModelContextSafe,modelSafeText} from "./model-context-safety";
+import https from "node:https";
+import {providerReasoningRelay,publicFlashResponses} from "./provider-reasoning-relay";
+import {isolateProviderCli} from "./provider-cli-isolation";
+import type {ProviderReasoningSink} from "./provider-reasoning";
 
 export interface ExecutorOptions {
   webSearch?: true;
   outputSchema?: Record<string, unknown>;
+  providerReasoning?: ProviderReasoningSink;
 }
 
-export function createModelExecutor(configure = configureService) {
+export function createModelExecutor(configure = configureService,providerTransport?:typeof https.request) {
   const slots = {active:0};
   return (config:ChatModel,prompt:string,signal:AbortSignal,options?:ExecutorOptions) =>
-    executeModel(config,prompt,signal,options,configure,slots);
+    executeModel(config,prompt,signal,options,configure,slots,providerTransport??https.request);
 }
 
 export const runExecutor = createModelExecutor();
 
 async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,options:ExecutorOptions|undefined,
-  configure:typeof configureService,slots:{active:number}) {
+  configure:typeof configureService,slots:{active:number},providerTransport:typeof https.request) {
   if(options?.webSearch && (config.executor!=="codex" || (config.provider && config.provider!=="native")))
     throw Error("当前执行器未接入原生联网检索。");
   prompt=modelSafeText(prompt);
@@ -35,6 +40,7 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
     elapsedMs:0,promptBytes:Buffer.byteLength(prompt),outputBytes:0};
   slots.active++;
   let dir:string|undefined;
+  let relay:Awaited<ReturnType<typeof providerReasoningRelay>>|undefined;
   try {
     dir=await mkdtemp(path.join(tmpdir(),"oneearth-chat-"));
     const args=config.executor==="codex"
@@ -51,6 +57,18 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
       if (/^(?:HOME|PATH|SHELL|USER|LOGNAME|TMPDIR|LANG|LC_[A-Z_]+|XDG_[A-Z_]+|CODEX_HOME|CLAUDE_CONFIG_DIR|OPENAI_API_KEY|ANTHROPIC_[A-Z_]+|HTTPS?_PROXY|NO_PROXY|NODE_EXTRA_CA_CERTS)$/.test(name)) env[name]=value;
     }
     configure(config,args,env);
+    if(options?.providerReasoning&&publicFlashResponses(config)){
+      const key=env.ONEEARTH_EXECUTOR_KEY;
+      if(!key)throw Error("The authorized model service is unavailable.");
+      // Qualification uses the original server-pinned provider, never a local
+      // endpoint claimed by the browser. The temporary token cannot reach it.
+      relay=await providerReasoningRelay(key,options.providerReasoning,signal,prompt,providerTransport);
+      const base='model_providers.oneearth_service.base_url="https://api.deepseek.com"';
+      if(args.filter(arg=>arg===base).length!==1)throw Error("The authorized provider configuration could not be verified.");
+      args[args.indexOf(base)]="model_providers.oneearth_service.base_url="+JSON.stringify(relay.baseUrl);
+      env.ONEEARTH_EXECUTOR_KEY=relay.token;
+      await isolateProviderCli(dir,args,env);
+    }
     if(config.provider && config.provider!=="native" && !config.model)throw Error("请选择模型服务提供的模型。");
     if(config.model) args.push("--model",config.model);
     if(config.executor==="codex") args.push("-");
@@ -71,5 +89,5 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
       });
       child.stdin.end(prompt);
     });
-  } finally {timing.elapsedMs=Date.now()-timing.startedAt;requestPerformance.getStore()?.push(timing);slots.active--; if(dir) await rm(dir,{recursive:true,force:true});}
+  } finally {timing.elapsedMs=Date.now()-timing.startedAt;requestPerformance.getStore()?.push(timing);slots.active--;try{await relay?.close();}finally{if(dir) await rm(dir,{recursive:true,force:true});}}
 }

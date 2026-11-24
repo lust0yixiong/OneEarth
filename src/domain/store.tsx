@@ -1590,12 +1590,15 @@ function useWorkspaceValue(initialState: State) {
       const controller = new AbortController();
       const delivery: ChatDelivery = saved || {id: randomId(), attempt, body: JSON.stringify(payload), route:"chat"};
       const session = current.sessionId;
+      const priorReasoning=saved && current.messages.find(message=>message.id===saved.id)?.runTrace?.providerReasoning;
+      const retiredReasoning=new Set<string>(); // Preserve evictions on a stream reconnect for this task.
       const legacy = delivery.route !== "chat";
       const clarificationAttempt=isClarificationAttempt(attempt);
       const entry = {controller,progress:{id:delivery.id,userMessageId:attempt.userMessageId,
         scope:{filters:attempt.context.filters,selection:attempt.context.selection},
         stage:saved ? "正在接回本轮回答" : "正在提交问题",phase:legacy ? "research" as const : "foreground" as const,
-        trace:{started:Date.now(),stages:[],calls:[]},searches:[]} as ActiveChat};
+        trace:{started:Date.now(),stages:[],calls:[],...(priorReasoning?{providerReasoning:priorReasoning}:{})},
+        searches:[]} as ActiveChat};
       requests.current.set(delivery.id,entry);
       const isCurrent = () => !controller.signal.aborted && latest.current.sessionId === session
         && requests.current.get(delivery.id) === entry;
@@ -1617,6 +1620,7 @@ function useWorkspaceValue(initialState: State) {
       };
       const version = serial.current;
       let effect:ReturnType<typeof workspaceEffectFor>;
+      let completedTrace:DiscoveryResponse["runTrace"];
       const effectReceipt=(state:BrowserWorkspaceReceipt["state"],reason?:WorkspaceRejectionReason,target?:PublishedRasterTarget):BrowserWorkspaceReceipt|undefined =>
         effect ? {effectId:effect.effectId,conversationId:session,turnId:attempt.userMessageId,state,
           ...(state==="stale" ? {reason:"workspace-changed" as const} : reason ? {reason} : {}),
@@ -1687,7 +1691,7 @@ function useWorkspaceValue(initialState: State) {
           return readChatResponse(response, (stage, searches, trace, phase) => {
             if (isCurrent()) updateProgress({...(stage ? {stage} : phase==="research" ? {stage:"研究已进入队列"} : {}),
               ...(searches ? {searches} : {}),...(trace ? {trace} : {}),...(phase ? {phase} : {})});
-          },receiveRegion);
+          },receiveRegion,entry.progress.trace.providerReasoning,retiredReasoning);
         };
         let r: DiscoveryResponse;
         try { r = await receive(); }
@@ -1697,6 +1701,7 @@ function useWorkspaceValue(initialState: State) {
           r = await receive();
         }
         if (!isCurrent()) return;
+        completedTrace=r.runTrace;
         const clarificationPrompt=validClarificationPrompt(r.clarificationPrompt) ? r.clarificationPrompt : undefined;
         if (r.questionCheck || clarificationPrompt || r.clarification) {
           if(r.researchRegion===null || validResearchRegion(r.researchRegion))receiveRegion(r.researchRegion);
@@ -2213,7 +2218,7 @@ function useWorkspaceValue(initialState: State) {
         if (!isCurrent()) return;
         if(effect){
           const receipt=effectReceipt(workspaceCurrent()?"failed":"stale");
-          await completeWorkspace("本轮工作台操作未提交。",{id:delivery.id,replyTo:attempt.userMessageId,
+          await completeWorkspace("本轮工作台操作未提交。",{id:delivery.id,replyTo:attempt.userMessageId,runTrace:completedTrace ?? entry.progress.trace,
             activity:workspaceEffectActivity(delivery.id,effect,receipt?.state ?? "failed","工作台操作",workspaceReceiptDetail(receipt?.state),receipt)},receipt);
           return;
         }

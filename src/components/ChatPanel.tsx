@@ -354,10 +354,13 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                     input.current?.focus();
                   }}>这条问题未收到回答，重新提问</button>
               )}
-              {m.role==="assistant" && m.questionCheck && <QuestionCheck check={m.questionCheck} pending={s.activeChats.some(chat=>chat.userMessageId===m.replyTo)}
+              {m.role==="assistant" && m.questionCheck && <>
+                {!!m.runTrace?.providerReasoning?.length && <RunDetails trace={m.runTrace}/>}
+                <QuestionCheck check={m.questionCheck} pending={s.activeChats.some(chat=>chat.userMessageId===m.replyTo)}
                 closed={s.messages.find(next=>next.role==="user" && next.time>m.time)?.questionDecision ||
                   (s.messages.some(next=>next.role==="user" && next.time>m.time)?"superseded":undefined)}
-                onChoose={(choice,edited)=>void confirmQuestion(m.id,choice,edited)}/>}
+                onChoose={(choice,edited)=>void confirmQuestion(m.id,choice,edited)}/>
+              </>}
               {m.role==="assistant" && !m.questionCheck && <AnswerBody message={m} archived={historyIds.has(m.id)} animate={!historyIds.has(m.id) && Date.now()-m.time<3000} onReady={answerReady}
                 clarificationAction={replyTargets.has(m.id) && <button type="button" className="activity-link"
                   aria-expanded={activeClarification?.message.id===m.id}

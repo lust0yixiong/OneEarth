@@ -10,6 +10,7 @@ import type {SearchRun,ToolCall} from "../src/domain/types";
 import type {SourceReadInput,SourceReadResult} from "./discovery-materials-contract";
 import {webGrantInput,type RuntimeWebToolContext} from "./runtime-web-tool-authority";
 import {modelSafeText,modelSafeValue,assertModelContextSafe} from "./model-context-safety";
+import type {ProviderReasoningSink} from "./provider-reasoning";
 
 type ReadDependencies={stage:(text:string,searches?:SearchRun[])=>void;report:(call:ToolCall)=>void;callPrefix?:string;
   options?:DiscoveryA2AOptions;onFailure?:(message:string)=>void;onResult?:(result:SourceReadResult)=>Promise<void>};
@@ -21,7 +22,7 @@ export function discoveryProtocol():"a2a"|"v1"{
 }
 
 /** Bind the turn's authorized model and channel configuration once. */
-export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|undefined,signal:AbortSignal,webTools?:RuntimeWebToolContext){
+export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|undefined,signal:AbortSignal,webTools?:RuntimeWebToolContext,providerReasoning?:ProviderReasoningSink){
   const protocol=discoveryProtocol();
   const cancellation=protocol==="v1"?discoveryCancellation(signal):undefined;
   const a2aCancellation=discoveryA2ACancellation(signal);
@@ -38,7 +39,7 @@ export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|un
     model:async(prompt:string,options?:ExecutorOptions,modelSignal=signal)=>{
       const safe=modelSafeText(prompt),schema=options?.outputSchema?modelSafeValue(options.outputSchema):undefined;
       assertModelContextSafe(safe);if(schema)assertModelContextSafe(JSON.stringify(schema));
-      return modelSafeText(await runExecutor(config,safe,modelSignal,options?{...options,outputSchema:schema}:options));
+      return modelSafeText(await runExecutor(config,safe,modelSignal,{...options,outputSchema:schema,providerReasoning}));
     },
     discover:async(id:string,input:Omit<DiscoveryBusinessInput,"deepseekTools">|DiscoveryClarificationInput,emit:(event:DiscoveryEvent)=>void,options:DiscoveryA2AOptions&{webToolQuestion?:string}={})=>{
       if(protocol==="v1"&&("clarificationReply" in input||options.target))throw Error("该研究记录需要原发现服务的 A2A 续行接口。");

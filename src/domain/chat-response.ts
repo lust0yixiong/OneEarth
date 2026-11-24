@@ -1,14 +1,19 @@
-import type { DiscoveryResponse, SearchRun, RunTrace } from "./types";
+import type { DiscoveryResponse, SearchRun, RunTrace, ProviderReasoningSnapshot } from "./types";
+import {mergeProviderReasoning,traceWithProviderReasoning} from "./provider-reasoning";
 import {validResearchRegion,type ResearchRegion} from "./research-region";
 export class ChatResponseError extends Error {
   constructor(message:string,readonly code?:string,readonly runTrace?:RunTrace){super(message);this.name="ChatResponseError";}
 }
 export type ChatPhase = "foreground" | "research";
-export async function readChatResponse(response:Response,onStage:(text:string,searches?:SearchRun[],trace?:RunTrace,phase?:ChatPhase)=>void,onRegion?:(region:ResearchRegion|null)=>void):Promise<DiscoveryResponse> {
+export async function readChatResponse(response:Response,onStage:(text:string,searches?:SearchRun[],trace?:RunTrace,phase?:ChatPhase)=>void,onRegion?:(region:ResearchRegion|null)=>void,
+  initialReasoning?:ProviderReasoningSnapshot[],retiredReasoning=new Set<string>()):Promise<DiscoveryResponse> {
+  let reasoning=initialReasoning;
   if(!response.headers.get("content-type")?.includes("application/x-ndjson")){
     const data=await response.json();
-    if(!response.ok) throw new ChatResponseError(data.error || "数据发现请求失败。",data.code);
-    return data;
+    reasoning=mergeProviderReasoning(reasoning,data.runTrace?.providerReasoning,retiredReasoning);
+    const trace=traceWithProviderReasoning(data.runTrace,reasoning);
+    if(!response.ok) throw new ChatResponseError(data.error || "数据发现请求失败。",data.code,trace);
+    return reasoning ? {...data,runTrace:trace} : data;
   }
   const reader=response.body!.pipeThrough(new TextDecoderStream()).getReader();
   let pending="",stageText="";
@@ -24,6 +29,11 @@ export async function readChatResponse(response:Response,onStage:(text:string,se
         if(Object.hasOwn(event,"researchRegion") && (event.researchRegion===null || validResearchRegion(event.researchRegion)))onRegion?.(event.researchRegion);
         if(event.runTrace)trace=event.runTrace;
         if(!trace && typeof event.traceStarted==="number")trace={started:event.traceStarted,stages:[],calls:[]};
+        const previousReasoning=reasoning;
+        reasoning=mergeProviderReasoning(reasoning,event.runTrace?.providerReasoning,retiredReasoning);
+        reasoning=mergeProviderReasoning(reasoning,event.providerReasoning,retiredReasoning);
+        trace=traceWithProviderReasoning(trace,reasoning);
+        const reasoningChanged=previousReasoning!==reasoning;
         if(trace && event.call){
           const calls=[...trace.calls],index=calls.findIndex(c=>c.id===event.call.id);
           if(index<0)calls.push(event.call);else calls[index]=event.call;
@@ -42,8 +52,12 @@ export async function readChatResponse(response:Response,onStage:(text:string,se
         if(event.error)throw new ChatResponseError(event.error,event.code,trace);
         const phase = event.chatPhase === "research" || event.queued === true ? "research"
           : event.chatPhase === "foreground" ? "foreground" : undefined;
-        if(event.stage || event.call || event.finding || event.runTrace || phase)onStage(stageText,event.searches,trace,phase);
-        if(event.result)return event.result;
+        if(event.stage || event.call || event.finding || event.runTrace || phase || reasoningChanged)
+          onStage(stageText,event.searches,trace,phase);
+        if(event.result){
+          reasoning=mergeProviderReasoning(reasoning,event.result.runTrace?.providerReasoning,retiredReasoning);
+          return reasoning ? {...event.result,runTrace:traceWithProviderReasoning(event.result.runTrace ?? trace,reasoning)} : event.result;
+        }
       }
       if(done)throw Error("连接在回复完成前中断，请重试。");
     }

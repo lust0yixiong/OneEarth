@@ -1,4 +1,5 @@
 import {literatureText,literatureDisplay} from "../src/domain/literature-label";
+import {providerReasoningArchive} from "./provider-reasoning";
 import {isDeepStrictEqual} from "node:util";
 import { requestPerformance } from "./request-performance";
 import type { TaskStore } from "./task-store";
@@ -133,6 +134,12 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     if(i<0)runTrace.calls.push(call);else runTrace.calls[i]=call;
     event({call,traceStarted:runTrace.started});
   }
+  const reasoning=providerReasoningArchive(taskId,runTrace.providerReasoning,snapshot=>{
+    if(signal.aborted)return;
+    runTrace.providerReasoning=reasoning.values;
+    publish({providerReasoning:snapshot,traceStarted:runTrace.started});
+  });
+  if(reasoning.values.length)runTrace.providerReasoning=reasoning.values;
   async function synthesisContext(){
     const latest=await refreshWorkspaceObservations(tasks,turnContext);
     if(latest.history.some(record=>record.execution.workspace.effectId))report({id:"workspace-observation-refresh",kind:"tool",name:"读取原操作的最新已存浏览器回执",input:"仅刷新已经核验归属的原操作回执，不替换冻结意图或浏览快照",status:"done",
@@ -157,7 +164,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     const decision=clarification?.original.questionDecision??body.questionDecision;
     if(clarification)context={...clarification.context,workspaceView:body.context.workspaceView};
     const executor=activeExecutor=researchExecutor(body.config,clarification?clarification.original.deepseekTools:body.deepseekTools,signal,
-      services.webTools?{researchTaskId:taskId,authority:services.webTools}:undefined);
+      services.webTools?{researchTaskId:taskId,authority:services.webTools}:undefined,{taskId,onSnapshot:snapshot=>{if(!signal.aborted)reasoning.accept(snapshot);}});
     event({conversationId:body.conversationId,turnId:body.turnId, ...(decision ? {continuedFrom:decision.checkMessageId} : {})});
     stage("正在理解问题");
     const gridCoverage=await readCoverage(context);
