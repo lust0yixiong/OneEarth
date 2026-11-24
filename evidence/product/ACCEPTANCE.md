@@ -4,6 +4,7 @@
 
 | 查找范围 | 从这一节开始 |
 | --- | --- |
+| 数据速览与前台追问 | [数据上球与前台决定隔离验收](#mac-mini-数据上球与前台决定隔离验收) |
 | 工作台与球体动作 | [工作台和球体动作隔离验收](#mac-mini-工作台和球体动作隔离验收) |
 | 人工追问弹框 | [人工追问弹框隔离验收](#mac-mini-人工追问弹框隔离验收) |
 | 工作台后端与运行时 API | [同进程双入口正式发布](#mac-mini-工作台后端合并正式发布) |
@@ -14,6 +15,32 @@
 | rc.9 后续交付 | [发现渠道正式发布](#mac-mini-发现渠道范围正式发布) · [目录导航静态发布](#mac-mini-数据触达浏览入口静态发布) · [KEO 文件读取](#mac-mini-日常入口的-keo-文件读取) |
 | rc.9、rc.8、rc.7 快照 | [网格问答引用 rc.9](#mac-mini-网格问答目录引用-v020-rc9) · [论文与投影 rc.8](#mac-mini-论文发布与时空投影-v020-rc8) · [日常入口 rc.7](#mac-mini-日常入口-v020-rc7) |
 | 更早候选和存储基线 | [A2A rc.6](#mac-mini-a2a-与发现模型独立配置候选-v020-rc6) · [研究工作流 rc.5](#mac-mini-研究工作流候选-v020-rc5) · [存储与恢复 dev.1](#mac-mini-存储与恢复历史基线-v020-dev1) · [0.1.0 验收](../ACCEPTANCE.md) |
+
+## Mac mini 数据上球与前台决定隔离验收
+
+### 球面速览的「数据上球」
+
+早期未归档的隔离实现位于 `iterations/data-globe-action/web`，基线 `32057738119a35149f658bde50cadd66c28646fe`，补丁 SHA-256 为 `bdf0d2d827d6839276cfdd96b511aff8ca7f7edcba69eb24b2e2e740e188041d`。该补丁增加上球按钮，并在正文保留旧目录按钮。本次在主线 `67fc57f` 上更新实际标题入口，展开、折叠均显示同位按钮，独立的资料目录与详情导航照常。
+
+候选 `b7a0e6efebb08abdf5dc5c36bcd0c4ae6e2d2d75`，源树 `25768d8e6aa1340a1d6d19446326c7f3fed56155`，隔离 8174。3,427 个静态文件的清单 SHA-256 为 `e73631256f156eb74975dfab71fcf69d0a9e19a0cdd62618119fe26fdab30562`，首页 SHA-256 为 `40401eaabfb0b56e71ab56b4e883e10e3a026392d8d3baa7f48d67b5f8800345`。独立 Chrome 验证当前选中 CTD 进入 150 m 剖面。纯 PDO、未选资料的批次及单项批次均禁用，鼠标和键盘没有导航或请求图层。测试用浏览器临时批次选第二项森林后实取 2023-07-15 图层，同批首项 C40 没有启动。数据触达自身的独立上球入口可用。独立索引 `iterations/inspector-globe-followup-independent.Ccjg2D/b7a0e6e-independent-index.json` SHA-256 为 `ab6f6578dd26ab78635a286becb8690aeec4168173609d17711b77bc9af09b8c`。
+
+模块的 16 项受控 Chrome 检查另覆盖森林到风场、C40 到 CTD、当前 Q19 改用所选资料范围和发布目录失联。复跑入口为 `iterations/data-globe-and-clarification-contract/globe-evidence/verify-data-globe.mts`。独立实例复用公开的 C40 95 城与森林 4,791 日期清单，森林加上 15 张核对用实图。测试没有研究提交。
+
+后续测试脚本提交 `4dc66230d1742b2817625d24b6e48e4a9276f561` 改用现有清单保存及恢复入口进入原批次，产品源码与 8174 构建相同。隔离实例的 `test:collection-ui` 通过，另复跑 `test:handoff-ui` 的完整研究批次下载场景。其他引用旧按钮的脚本已迁移选择器并通过语法检查。
+
+### 前台追问决定
+
+上轮 DeepSeek Flash 经 Codex CLI 的原始失败输出保留于本机证据。用户从原追问 `d6e9dd0b-badf-4f08-9d5f-e0f9b18b63fa` 补答纽约后，模型在 `1111469d-19c3-4209-9215-3e247fd57e4e` 同时生成 `action="workspace"` 与 `workspacePending=true`，运行时拒绝。只读原样摘录 `iterations/data-globe-and-clarification-contract/evidence/flash-old-conflict.json` 的 SHA-256 为 `58a3d98b3fbea04de985c3c896bda3b1afb0edee4101ab468eef9f845292c9a9`。新模型协议使用互斥决定分支。真实弹框回复的父消息在平台核定。经过确认的控件目标与待办不会由模型重填。
+
+候选 `c7f6ace3ecad06618ab341756d1f8f2f2af12345`，源树 `09074ad11a1fbfcb61b1eca21710398f0c5bc403`，隔离 8274。3,427 个静态文件的清单 SHA-256 为 `ca44bfb1f6b5734795bfc86d59f1c0e82215041f02d661224bdf4a866262e0d3`，首页 SHA-256 为 `d055b618eff20a7628b7ca62b1835e50fbce6e78a5e62a4e4833b42ad4079668`。
+
+独立 Chrome 在 London 发同一句「切到我之前提到的那座城市」。DeepSeek Flash 经 Codex CLI 首轮 `9d28090a-c24a-486c-8df4-99579e6615cf` 选择追问，POST 后 7.881 秒出现弹框。用户在该弹框填「纽约」，答复轮 `3928098e-dc84-4b04-99a6-413cc127dd09` 选择切换城市。运行时在 95 城发布目录解析 `new-york-city-usa`，POST 后 7.900 秒浏览器显示纽约，正式目录中对应的 WebP 在隔离实例返回 HTTP 200。每轮一次实际模型规划，两次提交均 HTTP 202。隔离 PostgreSQL 保留同一会话内的一条父子绑定，两轮均无后台研究排队、发现委托或网页工具授权。独立索引 `iterations/inspector-globe-followup-independent.Ccjg2D/c7f6ace-independent-index.json` SHA-256 为 `25ca2e251edaae3e99d6e695c6ff18fa5b4b3afb6d81035256b5ddf766105bc5`。主程只读复核 `iterations/data-globe-and-clarification-contract/evidence/runtime-live-root-audit.json` SHA-256 为 `7a776613337e6029cb6372bb534a8a167bdd096dbc9497174d727c92eed7b01c`。
+
+上述真实模型验证为一组两轮。另用受控执行器重放旧冲突原文，确认运行时拒绝混合决定。在同一旧档中用合法单分支解析纽约。明确批准只应用已存目标，拒绝不触发动作，两者均无需再次调用模型。模块定向 78/78，独立定向 62/62，包含旧私有研究计划恢复、限定海纳的补答无网页授权、原控件变化与旧确认兼容。模块补丁与复跑命令见 `iterations/data-globe-and-clarification-contract/runtime-evidence/runtime-validation.json`。
+
+### 合流
+
+源码合流提交 `b550008bc2cd0cc3055e8e58fc8684cc7cab95bd`，树 `c6a46d9d55e2a10d55208750204bfbd0ee12a656`，保留两组独立验收对应的源码。合流类型检查、生产构建及全套通过，924 项通过、7 项环境门控跳过、零失败。随后针对独立 PostgreSQL 启用 Chat 移交门控单测并通过。全套及单测命令分别为 `node --import tsx --test --test-concurrency=2` 和设置独立测试库 `ONEEARTH_CHAT_TEST_DATABASE_URL` 后运行 `node --import tsx --test server/runtime-chat-channel.test.ts`。两项均由总体在隔离实例签收。正式 5474 首页切前后 SHA-256 一致，本轮没有正式发布或更改默认模型。
 
 ## Mac mini 工作台和球体动作隔离验收
 
