@@ -9,7 +9,7 @@ import {DiscoveryA2AError} from "./discovery-a2a-client";
 import {currentAssertionView,type CurrentAssertionReading} from "./runtime-assertion-evidence";
 
 type Decision={action:"answer"|"read"|"discover"|"clarify";reason:string;gap:string|null;targets:string[];clarification:string|null};
-type Materials={retrieval?:DataSearchResult;reads:SearchRun[];assertionReadings?:CurrentAssertionReading[];issues?:string[];attemptedReadTargets?:string[]};
+type Materials={retrieval?:DataSearchResult;reads:SearchRun[];assertionReadings?:CurrentAssertionReading[];issues?:string[];attemptedReadTargets?:string[];blockedDiscovery?:string};
 type ReadOutcome={searches:SearchRun[];issues?:string[]};
 export type ResearchEvidenceAuthority={allowDiscovery:boolean;allowReread?:boolean;discoveryLimit?:string;sourcePolicy?:DiscoverySourcePolicy};
 /** Only server-held parent evidence can preserve an earlier channel boundary.
@@ -175,14 +175,16 @@ function joinedDiscovery(previous:DataSearchResult,next:DataSearchResult):DataSe
 
 export async function continueResearch(question:string,plan:TurnPlan,material:Materials,signal:AbortSignal,deps:Dependencies,confirmation?:QuestionDecision,authority?:ResearchEvidenceAuthority):Promise<Outcome>{
   let {retrieval}=material;
-  const reads=[...material.reads],issues=[...(material.issues||[])];
+  const reads=[...material.reads],issues=[...(material.issues||[]),...(material.blockedDiscovery?[material.blockedDiscovery]:[])];
   const attempted=new Set(material.attemptedReadTargets||[]),gaps=new Set<string>();
   const discoveryAllowed=authority?.allowDiscovery??(plan.action==="search"&&!!retrieval);
   const limit=2;
   let rereadUsed=false;
   let toolAttempts=0,corrections=0,assessment:Outcome["assessment"]="unresolved";
   type Failure={kind:"decision"|"read"|"discover";message:string;toolAttempted:boolean;diagnostic?:{code:string;allowedActions:string[];allowedTargets:string[];invalidTargets?:string[]};attempted?:{action:string;targets:string[]}};
-  let previousFailure:Failure|undefined=issues.length?{kind:"read",message:issues.join("；").slice(0,1000),toolAttempted:true}:undefined;
+  let previousFailure:Failure|undefined=material.blockedDiscovery?
+    {kind:"decision",message:material.blockedDiscovery,toolAttempted:false,attempted:{action:"discover",targets:[]}}:
+    issues.length?{kind:"read",message:issues.join("；").slice(0,1000),toolAttempted:true}:undefined;
   const failureText=(error:unknown)=>modelSafeText(typeof error==="string"?error:error instanceof SyntaxError?"证据决策不是有效JSON。":error instanceof Error?error.message:"本步骤未完成。").slice(0,1000);
   const addIssue=(message:string)=>{if(!issues.includes(message))issues.push(message);};
   // Keep the existing three-decision/two-acquisition budget. At most one

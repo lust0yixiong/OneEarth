@@ -15,10 +15,10 @@ const source="https://example.org/fictional-report.pdf",independent="https://exa
 const natural="这张图的归一化用了什么输入？缺少的不确定度依据会怎样影响比较？";
 const decision=(action:string,gap:string|null=null,targets:string[]=[])=>({action,reason:"use actual material within original scope",gap,targets,clarification:null});
 const readRun=(round=0):SearchRun=>({engine:"PDF 原文",query:source,requestUrl:source,status:"done",hits:[{url:source,title:"Fictional sensor report",snippet:"actual bounded read",pageExcerpt:round?"The fictional appendix defines uncertainty as an instrument bound; no recomputation was done.":"The fictional chart normalizes two instrument inputs. This sampled window does not state their uncertainty.",stage:"pdf-excerpt",readBy:"platform",readAt:"2026-01-01T00:00:0"+round+"Z"}]});
-async function fixture(t:TestContext,{lostDiscovery=false,readFails=false,emptyRead=false}:{lostDiscovery?:boolean;readFails?:boolean;emptyRead?:boolean}={}){
+async function fixture(t:TestContext,{lostDiscovery=false,readFails=false,emptyRead=false,initialAction="read"}:{lostDiscovery?:boolean;readFails?:boolean;emptyRead?:boolean;initialAction?:"read"|"search"}={}){
  const dir=mkdtempSync(path.join(tmpdir(),"oneearth-read-followup-")),responses=path.join(dir,"responses.json"),callsFile=path.join(dir,"calls.jsonl");
  const saved={PATH:process.env.PATH,ONEEARTH_DISCOVERY_URL:process.env.ONEEARTH_DISCOVERY_URL,ONEEARTH_DISCOVERY_PROTOCOL:process.env.ONEEARTH_DISCOVERY_PROTOCOL};const originalFetch=globalThis.fetch;
- writeFileSync(path.join(dir,"codex"),`#!${process.execPath}\nimport fs from 'node:fs';let prompt='';for await(const chunk of process.stdin)prompt+=chunk;fs.appendFileSync(${JSON.stringify(callsFile)},JSON.stringify({prompt})+'\\n');let settings=JSON.parse(fs.readFileSync(${JSON.stringify(responses)},'utf8'));let value;if(prompt.startsWith('仅做本轮'))value={decide:{kind:'read',targets:['web:${source}']}};else if(prompt.includes('你负责决定同一轮研究任务的下一步')){value=settings.steps.shift();fs.writeFileSync(${JSON.stringify(responses)},JSON.stringify(settings));}else {const at=prompt.lastIndexOf('\\n{'),input=JSON.parse(prompt.slice(at+1));value={message:'仅据虚构原报告与实际交回的资料说明限制。'+input.webResults.map(r=>'['+r.ref+']').join(''),sections:[],limitation:'没有测量或重新计算。',followUp:'',researchNotes:[],calculationRequests:[]};}process.stdout.write(JSON.stringify(value));\n`,{mode:0o700});
+ writeFileSync(path.join(dir,"codex"),`#!${process.execPath}\nimport fs from 'node:fs';let prompt='';for await(const chunk of process.stdin)prompt+=chunk;fs.appendFileSync(${JSON.stringify(callsFile)},JSON.stringify({prompt})+'\\n');let settings=JSON.parse(fs.readFileSync(${JSON.stringify(responses)},'utf8'));let value;if(prompt.startsWith('仅做本轮'))value=settings.initialAction==='search'?{decide:{kind:'search',goal:'Study the original chart question',targets:[]}}:{decide:{kind:'read',targets:['web:${source}']}};else if(prompt.includes('你负责决定同一轮研究任务的下一步')){value=settings.steps.shift();fs.writeFileSync(${JSON.stringify(responses)},JSON.stringify(settings));}else {const at=prompt.lastIndexOf('\\n{'),input=JSON.parse(prompt.slice(at+1));value={message:'仅据虚构原报告与实际交回的资料说明限制。'+input.webResults.map(r=>'['+r.ref+']').join(''),sections:[],limitation:'没有测量或重新计算。',followUp:'',researchNotes:[],calculationRequests:[]};}process.stdout.write(JSON.stringify(value));\n`,{mode:0o700});
  process.env.PATH=dir+path.delimiter+(saved.PATH||"");process.env.ONEEARTH_DISCOVERY_PROTOCOL="a2a";
  const app=express();app.use(express.json({type:"application/a2a+json"}));const requests:any[]=[],jobs=new Map<string,any>();let reads=0,finds=0,dropped=false;
  app.post("/message:send",(req,res)=>{
@@ -46,7 +46,7 @@ async function fixture(t:TestContext,{lostDiscovery=false,readFails=false,emptyR
  t.after(async()=>{globalThis.fetch=originalFetch;tasks.close();for(const [key,value] of Object.entries(saved)){if(value===undefined)delete process.env[key];else process.env[key]=value;}server.closeAllConnections();await new Promise<void>(done=>server.close(()=>done()));rmSync(dir,{recursive:true,force:true});});
  const calls=()=>{try{return readFileSync(callsFile,"utf8").trim().split("\n").filter(Boolean).map(line=>JSON.parse(line));}catch{return [];}};
  return {requests,tasks,jobs,calls,counts:()=>({reads,finds}),async run(query:string,steps:unknown[]){
-  writeFileSync(responses,JSON.stringify({steps}));
+  writeFileSync(responses,JSON.stringify({steps,initialAction}));
   const id=randomUUID(),body:RuntimeTurnInput={query,context:{caseId:null,filters:emptyFilters(),selection:null,citation:null,attachedScope:[{kind:"reference",number:1,messageId:randomUUID(),reference:{kind:"web",url:source,title:"Fictional sensor report"}}],gridSystem:"h3",layer:"all",camera:{center:[0,0],zoom:1,reason:"controlled"}},history:[],config:{executor:"codex",model:""},conversationId:randomUUID(),turnId:randomUUID()};
   const parent=new AbortController(),first=await runForegroundTurn(services,id,body,parent.signal,()=>{});assert.equal(first.kind,"research");if(first.kind!=="research")throw Error("not handed off");
   tasks.submit(id,body);tasks.claim();const outcome=await resumePlannedTurn(services,id,body,first.checkpoint,parent.signal,event=>tasks.append(id,event));
@@ -94,4 +94,17 @@ test("an empty successful precise reply still receives one evidence decision wit
 test("a model's proposed gap is sanitized before its new discovery wire, without rewriting actual source identity",async t=>{
  const f=await fixture(t),r=await f.run(natural,[decision("discover","independent basis https://example.org/metadata?sig=controlled-secret"),decision("answer")]);
  const request=f.requests.find(request=>request.kind==="oneearth.discovery.request.v1")!;assert.doesNotMatch(request.input.evidenceGap,/controlled-secret|[?&]sig=/);assert.equal(request.input.query,natural);assert.equal(f.requests[0].input.targets[0].url,source);assert.equal(r.result.answerNotes.searches.find((run:SearchRun)=>run.engine==="PDF 原文").query,source);
+});
+
+test("an initial search outside a report-only scope is rejected before any discovery request",async t=>{
+ const f=await fixture(t,{initialAction:"search"}),r=await f.run(natural+"仅依据本报告，不另查。",
+  [decision("read","original report chart source",["W1"]),decision("answer")]);
+ assert.deepEqual(f.counts(),{reads:1,finds:0});
+ assert.equal(r.result.resultBatch,undefined);
+ assert.deepEqual(f.requests.map(request=>request.kind),["oneearth.source.read.v1"]);
+ const review=f.calls().find((call:any)=>call.prompt.includes("你负责决定同一轮研究任务的下一步"));
+ const input=JSON.parse(review.prompt.slice(review.prompt.lastIndexOf("\n{")+1));
+ assert.equal(input.previousFailure.kind,"decision");assert.equal(input.previousFailure.toolAttempted,false);
+ assert.ok(!input.actions.includes("discover"));assert.deepEqual(input.materials.exactReadTargets.map((target:any)=>target.url),[source]);
+ assert.ok(r.result.answerNotes.searches.some((run:SearchRun)=>run.hits.some(hit=>hit.url===source)));
 });
