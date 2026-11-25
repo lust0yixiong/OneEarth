@@ -8,7 +8,7 @@ class ExpiredCoverageScope extends Error {}
 /** The rendering path only reads counts. Intersections and persistent caches belong to the server. */
 export function createCoverageClient(changed:()=>void,fetcher:typeof fetch=fetch) {
   const scopes=new Map<string,Scope>();
-  let scope:Scope|undefined,filters:Filters,batch:CandidateSet|null|undefined,revision=-1;
+  let scope:Scope|undefined,filters:Filters,batch:CandidateSet|null|undefined,revision:number|string=-1;
   let wanted:{scope:Scope;cache:GridCache;cells:string[]}|undefined;
   let timer:ReturnType<typeof setTimeout>|undefined,running=false,disposed=false,deferred=false,error="";
   const controller=new AbortController();
@@ -71,7 +71,7 @@ export function createCoverageClient(changed:()=>void,fetcher:typeof fetch=fetch
     }
   }
   return {
-    read(grid:GridSpec,cells:string[],nextFilters:Filters,nextBatch:CandidateSet|null|undefined,nextRevision:number,defer=false) {
+    read(grid:GridSpec,cells:string[],nextFilters:Filters,nextBatch:CandidateSet|null|undefined,nextRevision:number|string,defer=false) {
       if(!scope || filters!==nextFilters || batch!==nextBatch || revision!==nextRevision) {
         filters=nextFilters;batch=nextBatch;revision=nextRevision;
         const key=JSON.stringify([revision,filters,coverageBatchKey(batch)]);

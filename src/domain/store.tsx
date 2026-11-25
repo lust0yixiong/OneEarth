@@ -22,7 +22,7 @@ import {validHainaMonth} from "./haina-published-raster";
 import {isPublicLayerId,validPublicViewId,type PublicLayerId,type PublicLayerSelection} from "./haina-public-layer";
 import {isRainYear} from "./rain-catalog";
 import { paperId } from "./paper-record";
-import { loadPaperCatalog,readPaperCatalogStatus, type PaperCatalogStatus } from "./paper-catalog-client";
+import { readPaperCatalogStatus, type PaperCatalogStatus } from "./paper-catalog-client";
 import { randomId } from "./id";
 import { ChatResponseError, readChatResponse, type ChatPhase } from "./chat-response";
 import {readDeepSeekTools,loadDeepSeekTools} from "./deepseek-tools";
@@ -856,22 +856,30 @@ function useWorkspaceValue(initialState: State) {
     if(current.flight?.kind==="layer-control" || current.globeLayerFit)
       patch({globeLayerFit:null,...(current.flight?.kind==="layer-control" ? {flight:null} : {})});
   }, [patch]);
-  const paperCatalogLoaded=useRef(false);
-  useEffect(() => {
+  useEffect(()=>{
     const controller=new AbortController();
-    const work=state.view==="discover"||paperCatalogLoaded.current
-      ?readPaperCatalogStatus(controller.signal,latest.current.paperFeed?.loaded||0).then(status=>patch({paperFeed:status}))
-      :loadPaperCatalog(controller.signal,(records,status)=>{
-      registerPapers(records);
-      if(!status.loading)paperCatalogLoaded.current=true;
-      patch({paperFeed:status});
-    });
-    void work.catch(error=>{
-      if(!controller.signal.aborted)patch({paperFeed:{loaded:latest.current.paperFeed?.loaded||0,total:latest.current.paperFeed?.total||0,
-        loading:false,complete:false,sourceTotal:null,filteredOut:0,updatedAt:null,error:error instanceof Error?error.message:"未能载入论文目录。"}});
-    });
-    return ()=>controller.abort();
-  },[patch,state.view]);
+    let checking=false;
+    async function check(){
+      if(checking || document.visibilityState==="hidden")return;
+      checking=true;
+      try{
+        const status=await readPaperCatalogStatus(AbortSignal.any([controller.signal,AbortSignal.timeout(15_000)]));
+        if(!controller.signal.aborted && JSON.stringify(status)!==JSON.stringify(latest.current.paperFeed))
+          patch({paperFeed:status});
+      }catch(error){
+        if(!controller.signal.aborted){
+          const last=latest.current.paperFeed;
+          const message=error instanceof Error?error.message:"未能读取文献资料目录状态。";
+          if(last?.error!==message)patch({paperFeed:{...(last??{loaded:0,total:0,loading:false,complete:false,
+            sourceTotal:null,filteredOut:0,updatedAt:null}),error:message}});
+        }
+      }finally{checking=false;}
+    }
+    void check();
+    const timer=setInterval(check,60_000);
+    document.addEventListener("visibilitychange",check);
+    return ()=>{controller.abort();clearInterval(timer);document.removeEventListener("visibilitychange",check);};
+  },[patch]);
   useEffect(()=>{
     const controller=new AbortController();
     let timer:ReturnType<typeof setTimeout>;

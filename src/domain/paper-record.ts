@@ -2,7 +2,9 @@ import {literatureDisplay} from "./literature-label";
 import {validResearchPath,validAssertionEvidenceLinks,type ResearchPath,type AssertionEvidenceLinks} from "./assertion-relations";
 import type { CaseStudy, Coordinate, Need, SpatialModel } from "./types";
 
+export type AssertionCatalogKind = "metadata-with-usage"|"metadata-only";
 export interface PaperRecord {
+  assertionCatalogKind?:AssertionCatalogKind;
   /** Catalogue transport omits reading tabs; fetch the exact id before opening details. */
   catalogSummary?: true;
   id: string;
@@ -47,15 +49,23 @@ export const paperId = (id: string) => /^earthnano:[a-f0-9]{64}$/.test(id);
 export function validPaperRecord(value: unknown): value is PaperRecord {
   const r = value as Partial<PaperRecord> | null;
   return !!r && typeof r.id === "string" && paperId(r.id) &&
-    typeof r.dsKey === "string" && !!r.dsKey.trim() && Number.isInteger(r.papers) && r.papers! > 0 &&
+    typeof r.dsKey === "string" && !!r.dsKey.trim() && Number.isInteger(r.papers) && r.papers! >= 0 &&
     typeof r.need?.product === "string" && ["文献资料", "EarthNano 论文断言库"].includes(r.need.source) &&
     (r.researchQuestions===undefined || (Array.isArray(r.researchQuestions) && r.researchQuestions.every(q=>q && [q.paperId,q.rqId,q.datasetId,q.paperTitle,q.question].every(v=>typeof v==="string")))) &&
     (r.researchPaths===undefined || (Array.isArray(r.researchPaths) && r.researchPaths.every(validResearchPath))) &&
     (r.evidenceLinks===undefined || (Array.isArray(r.evidenceLinks) && r.evidenceLinks.every(validAssertionEvidenceLinks))) &&
     !!r.need.profile && typeof r.need.profile.coverage === "string" && ["data","index"].includes(r.need.profile.role) &&
     Array.isArray(r.points) && r.points.every(p => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) && Math.abs(p[0])<=180 && Math.abs(p[1])<=90) &&
-    Array.isArray(r.need.tabs) && r.need.tabs.some(t => t.kind === "table" && t.label === "论文用法（本页）" &&
-      t.rows?.some(row => typeof row[4] === "string" && !!row[4].trim() && typeof row[5] === "string" && !!row[5].trim()));
+    Array.isArray(r.need.tabs) && (()=>{
+      const kind=r.assertionCatalogKind;
+      const hasUsage=r.need.tabs.some(t=>t.kind==="table"&&t.label==="论文用法（本页）");
+      if(kind==="metadata-only")
+        return r.dsKey!.startsWith("doi:")&&r.papers===0&&!r.paperTitle&&!hasUsage&&!r.researchQuestions?.length&&
+          (r.catalogSummary===true||r.need.tabs.some(t=>t.kind==="table"&&t.label==="数据集时空元数据"));
+      return (kind===undefined||kind==="metadata-with-usage")&&r.papers!>0&&
+        r.need.tabs.some(t=>t.kind==="table"&&t.label==="论文用法（本页）"&&
+          t.rows?.some(row=>typeof row[4]==="string"&&!!row[4].trim()&&typeof row[5]==="string"&&!!row[5].trim()));
+    })();
 }
 export const asksForPapers = (q: string) => /断言库|EarthNano|论文|文献/i.test(q);
 

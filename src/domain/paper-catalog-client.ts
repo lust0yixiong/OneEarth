@@ -2,7 +2,7 @@ import { validPaperRecord, type PaperRecord } from "./paper-record";
 
 export interface PaperCatalogStatus {
   loaded:number; total:number; loading:boolean; complete:boolean; error:string;
-  sourceTotal:number|null; filteredOut:number; updatedAt:string|null;
+  sourceTotal:number|null; filteredOut:number; updatedAt:string|null; revision?:string;
 }
 export async function readPaperCatalogStatus(signal:AbortSignal,loaded=0):Promise<PaperCatalogStatus>{
   const res=await fetch("/api/paper-records?limit=1",{signal});
@@ -10,7 +10,8 @@ export async function readPaperCatalogStatus(signal:AbortSignal,loaded=0):Promis
   const body=await res.json();
   if(!Number.isSafeInteger(body.total)||body.total<0||typeof body.catalog?.complete!=="boolean")throw Error("论文目录状态无效。");
   return {loaded,total:body.total,loading:false,complete:body.catalog.complete,error:"",sourceTotal:body.catalog.sourceTotal??null,
-    filteredOut:body.catalog.filteredOut??0,updatedAt:body.catalog.updatedAt??null};
+    filteredOut:body.catalog.filteredOut??0,updatedAt:body.catalog.updatedAt??null,
+    revision:typeof body.catalog.revision==="string"?body.catalog.revision:undefined};
 }
 export async function loadPaperCatalog(signal:AbortSignal, accept:(records:PaperRecord[],status:PaperCatalogStatus)=>void, fetcher:typeof fetch=fetch) {
   let cursor="",loaded=0;

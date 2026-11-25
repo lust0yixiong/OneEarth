@@ -1,7 +1,7 @@
 import {DatabaseSync,type SQLInputValue} from "node:sqlite";
 import {createHash} from "node:crypto";
 import {Router} from "express";
-import {accessDatasetKey,accessMembership,validAccessSection,type AccessPage,type AccessQuery,type AccessRow,type AccessSection} from "../src/domain/data-access";
+import {accessDatasetKey,accessMembership,validAccessSection,type AccessCatalogues,type AccessPage,type AccessQuery,type AccessRow,type AccessSection} from "../src/domain/data-access";
 import {discoverableAsset,assetIdentity,observationAsset,registerObservations,type Asset} from "../src/domain/datasets";
 import {observationById,type Observation} from "../src/domain/push-observations";
 import {paperRecords} from "../src/domain/paper-record";
@@ -20,26 +20,31 @@ export function dataAccessIndex(file:string){
     CREATE INDEX IF NOT EXISTS access_section_title ON access_records(entities,clues,timely,title COLLATE NOCASE);
     CREATE INDEX IF NOT EXISTS access_received ON access_records(timely,received DESC,id DESC);
     CREATE INDEX IF NOT EXISTS access_identity ON access_records(json_extract(payload,'$.identity'));
+    CREATE TABLE IF NOT EXISTS access_state(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     CREATE VIRTUAL TABLE IF NOT EXISTS access_fts USING fts5(id UNINDEXED,body,tokenize='trigram');`);
   if(Number(db.prepare("PRAGMA user_version").get()?.user_version)<2){
     db.exec("DROP TABLE access_fts;CREATE VIRTUAL TABLE access_fts USING fts5(id UNINDEXED,body,tokenize='trigram');UPDATE access_records SET signature='';PRAGMA user_version=2;");
   }
-  const put=db.prepare("INSERT OR REPLACE INTO access_records VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
-  const putText=db.prepare("INSERT INTO access_fts(rowid,id,body) VALUES (?,?,?)"),removeText=db.prepare("DELETE FROM access_fts WHERE rowid=?");
-  let revision=0;
-  function replace(items:Iterable<Asset>,observations?:Iterable<Observation>){
-    const old=new Map(db.prepare("SELECT rowid,id,signature FROM access_records").all().map(r=>[String(r.id),{signature:String(r.signature),rowid:r.rowid}]));
-    let changed=false;
-    db.exec("BEGIN IMMEDIATE");
+  let revision=Number(db.prepare("SELECT value FROM access_state WHERE key='revision'").get()?.value)||0;
+  let snapshot=db.prepare("SELECT value FROM access_state WHERE key='snapshot'").get()?.value;
+  let initialized=!!db.prepare("SELECT value FROM access_state WHERE key='revision'").get()||!!db.prepare("SELECT 1 AS present FROM access_records LIMIT 1").get();
+  let writing=false,closed=false,writer:DatabaseSync|undefined;
+  function* replacement(connection:DatabaseSync,items:Iterable<Asset>,observations?:Iterable<Observation>,publication?:AccessCatalogues,preserveOrigins:readonly string[]=[]){
+    const put=connection.prepare("INSERT OR REPLACE INTO access_records VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    const putText=connection.prepare("INSERT INTO access_fts(rowid,id,body) VALUES (?,?,?)"),removeText=connection.prepare("DELETE FROM access_fts WHERE rowid=?");
+    const remove=connection.prepare("DELETE FROM access_records WHERE id=?");
+    const old=new Map(connection.prepare("SELECT rowid,id,signature,origins FROM access_records").all().map(r=>[String(r.id),{signature:String(r.signature),rowid:r.rowid,origins:JSON.parse(String(r.origins)) as string[]}]));
+    let changed=false,count=0;
+    connection.exec("BEGIN IMMEDIATE");
     try{
       function write(a:Asset,r=observationById(a.id)){
-        if(r?r.test:!discoverableAsset(a))return;
+        if(a.origins.some(origin=>preserveOrigins.includes(origin))||(r?r.test:!discoverableAsset(a)))return;
         const membership=accessMembership(a),paper=paperRecords.get(a.id);
         const {tabs:_tabs,...rest}=a;
         const asset={...rest,description:a.description.slice(0,2400),profile:a.profile?{...a.profile,area:undefined}:undefined};
         const mappable=!!r||!!paper?.points.length||!!a.profile?.area||a.profile?.extent==="world"||(!paper&&canMapAsset(a));
         const entry:Entry={asset,identity:assetIdentity(a),observation:r,papers:paper?.papers||0,mappable,
-          evidenceKinds:[...(paper||a.paperSource||a.paperSources?.length?["论文用法"]:[]),...(a.origins.includes("public")?["发布方目录"]:[])]};
+          evidenceKinds:[...(paper?.assertionCatalogKind?["数据集元数据"]:[]),...((paper?paper.assertionCatalogKind!=="metadata-only"&&paper.papers>0:a.paperSource||a.paperSources?.length)?["论文用法"]:[]),...(a.origins.includes("public")?["发布方目录"]:[])]};
         const body=[a.title,a.description,a.source,a.datasetId,a.canonicalId,a.version,a.holding?.channelName,a.profile?.coverage,...a.categories,...entry.evidenceKinds,r?.satellite,r?.collection,r?.sourceName].filter(Boolean).join(" ");
         const payload=JSON.stringify(entry),signature=createHash("sha256").update(payload).update("\n"+body).digest("hex");
         const prior=old.get(a.id);old.delete(a.id);if(prior?.signature===signature)return;
@@ -48,14 +53,33 @@ export function dataAccessIndex(file:string){
           Number(hasLocalMaterial(a)),Number(mappable),Number(a.holding?.access==="restricted"||a.profile?.spatial==="restricted"||a.profile?.role==="request"),
           years?.[0]??null,years?.[1]??null,r?.observedAt??null,r?.receivedAt??null,payload,signature);
         if(prior)removeText.run(prior.rowid);
-        putText.run(inserted.lastInsertRowid,a.id,body);
-        changed=true;
+        putText.run(inserted.lastInsertRowid,a.id,body);changed=true;
       }
-      for(const a of items)if(!observations||!a.origins.includes("constellation"))write(a);
-      for(const r of observations||[])write(observationAsset(r),r);
-      for(const [id,prior] of old){db.prepare("DELETE FROM access_records WHERE id=?").run(id);removeText.run(prior.rowid);changed=true;}
-      db.exec("COMMIT");if(changed)revision++;
-    }catch(error){db.exec("ROLLBACK");throw error;}
+      for(const a of items){if(!observations||!a.origins.includes("constellation"))write(a);if(++count%128===0)yield;}
+      for(const r of observations||[]){write(observationAsset(r),r);if(++count%128===0)yield;}
+      for(const [id,prior] of old){if(prior.origins.some(origin=>preserveOrigins.includes(origin)))continue;remove.run(id);removeText.run(prior.rowid);changed=true;if(++count%128===0)yield;}
+      const next=revision+Number(changed),metadata=publication?JSON.stringify(publication):snapshot;
+      connection.prepare("INSERT OR REPLACE INTO access_state VALUES ('revision',?)").run(String(next));
+      if(metadata!==undefined)connection.prepare("INSERT OR REPLACE INTO access_state VALUES ('snapshot',?)").run(metadata);
+      connection.exec("COMMIT");revision=next;snapshot=metadata;initialized=true;
+    }catch(error){connection.exec("ROLLBACK");throw error;}
+  }
+  function finishClose(){if(closed&&!writing){writer?.close();db.close();}}
+  function replace(items:Iterable<Asset>,observations?:Iterable<Observation>,publication?:AccessCatalogues,preserveOrigins:readonly string[]=[]){
+    if(closed||writing)throw Error("数据索引正在更新或已关闭。");
+    for(const _ of replacement(db,items,observations,publication,preserveOrigins)){ /* synchronous compatibility for small local callers */ }
+  }
+  async function replaceAsync(items:Iterable<Asset>,observations?:Iterable<Observation>,publication?:AccessCatalogues,preserveOrigins:readonly string[]=[]){
+    if(closed||writing)throw Error("数据索引正在更新或已关闭。");
+    writing=true;
+    try{
+      // A separate WAL writer lets readers see only the last committed generation.
+      if(file!==":memory:"&&!writer){writer=new DatabaseSync(file);writer.exec("PRAGMA journal_mode=WAL;PRAGMA busy_timeout=3000;");}
+      for(const _ of replacement(writer||db,items,observations,publication,preserveOrigins)){
+        if(closed)throw Error("数据索引已关闭。");
+        if(writer)await new Promise<void>(resolve=>setImmediate(resolve));
+      }
+    }finally{writing=false;finishClose();}
   }
   function search(q:AccessQuery):AccessPage{
     const conditions:string[]=[],args:SQLInputValue[]=[];
@@ -92,9 +116,9 @@ export function dataAccessIndex(file:string){
       .map(r=>({id:String(r.source_id),name:String(r.name),count:Number(r.n),latest:String(r.latest)})):[];
     return {rows,total:counts[q.section],page,pages,limit:q.limit,counts,types,sources:sourceIds.map(id=>({id,label:sourceLabels[id]||id})),channels,revision,checkedAt:new Date().toISOString()};
   }
-  return {replace,search,close:()=>db.close()};
+  return {replace,replaceAsync,search,initialized:()=>initialized,snapshot:()=>snapshot?JSON.parse(String(snapshot)) as AccessCatalogues:undefined,close:()=>{closed=true;finishClose();}};
 }
-export function dataAccessRouter(index:ReturnType<typeof dataAccessIndex>,refresh:()=>void|Promise<void>,streamStatus?:()=>{configured:number;sources:{id:string;name:string}[]}){
+export function dataAccessRouter(index:ReturnType<typeof dataAccessIndex>,refresh:()=>void|Promise<void>,streamStatus?:()=>{configured:number;sources:{id:string;name:string}[]},catalogueStatus?:()=>AccessCatalogues){
   const router=Router();
   router.post("/search",async(req,res)=>{
     const q=req.body;
@@ -106,7 +130,7 @@ export function dataAccessRouter(index:ReturnType<typeof dataAccessIndex>,refres
       q.scope?.utcWindow&&(!Array.isArray(q.scope.utcWindow)||q.scope.utcWindow.length!==2||!q.scope.utcWindow.every(Number.isFinite)))
       {res.status(400).json({error:"数据触达查询条件无效。"});return;}
     try{await refresh();if(res.destroyed)return;const page=index.search(q);registerObservations(page.rows.flatMap(r=>r.observation?[r.observation]:[]));
-      res.set("Cache-Control","no-store").json({...page,stream:streamStatus?.()});}
+      res.set("Cache-Control","no-store").json({...page,stream:streamStatus?.(),catalogues:catalogueStatus?.()});}
     catch{res.status(503).json({error:"数据索引暂时无法读取，请重试。"});}
   });
   return router;

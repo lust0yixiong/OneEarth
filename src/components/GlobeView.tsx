@@ -350,6 +350,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
   latest.current=scene;
   const c = caseById(s.caseId);
   const [gridList, setGridList] = useState<CandidateSet | null>(null);
+  const [gridListCoverageRevision,setGridListCoverageRevision]=useState<string>();
   const scopeRequest=useRef<AbortController | null>(null);
   useEffect(()=>{
     return ()=>{
@@ -847,6 +848,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
     if (s.visualization) batch.ids = windProbe ? ["wind-0"] : [];
     if (s.dataView?.kind === "ctd") batch.ids = dataSamples.length ? ["Q19-4"] : [];
     if (s.dataView?.kind === "front") batch.ids = entries.length ? ["Q20-1"] : [];
+    setGridListCoverageRevision(selectedCoverage?.revision);
     setGridList(batch);
   };
   const footer = <div className={toolsHost && (catalogMode||forestMode||c40Mode||publicLayer) ? "catalog-distribution" : undefined}>
@@ -1448,7 +1450,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
           </div>}
           <p>
             {countedCatalog && !outsideFrozen && <span className="cell-hit-row cell-related-total">
-              关联产品共 {distribution?.total||0} 种（含覆盖与范围说明）
+              {s.mapResult?"关联产品共":"当前已载入的关联产品"} {distribution?.total||0} 种（含覆盖与范围说明）
             </span>}
             {(catalogMode || c) && !s.dataView && !s.visualization ? (
               outsideFrozen ? (
@@ -1558,7 +1560,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
           </div>
           {gridList && (
             <div className="grid-evidence-anchor" hidden={!!s.evidence}>
-              <GridDataPopover batch={gridList} source={s.source} onClose={closeGridList} organizeByLocation={countedCatalog} coverageBatch={s.mapResult} />
+              <GridDataPopover batch={gridList} source={s.source} onClose={closeGridList} organizeByLocation={countedCatalog} coverageBatch={s.mapResult} coverageRevision={gridListCoverageRevision} />
             </div>
           )}
         </div>

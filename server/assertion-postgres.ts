@@ -1,3 +1,4 @@
+import {createHash} from "node:crypto";
 import type {PaperDatasetEvidence} from "../src/domain/paper-record";
 import pg, { type PoolConfig, type PoolClient } from "pg";
 
@@ -21,7 +22,7 @@ const QUESTION_SELECT=`SELECT m.paper_id AS "paperId",m.rq_id AS "rqId",m.datase
   JOIN public.rc_recipe r ON r.paper_id=m.paper_id AND r.rq_id=m.rq_id
   WHERE m.ds_key=$1 AND (m.paper_id,m.rq_id,m.dataset_id)>($2,$3,$4)
   ORDER BY m.paper_id,m.rq_id,m.dataset_id LIMIT $5`;
-const PAGE_SELECT=`WITH page AS (SELECT * FROM public.dataset_metadata WHERE ds_key>$1 ORDER BY ds_key LIMIT $2)
+const PAGE_SELECT=`WITH page AS (SELECT * FROM public.dataset_metadata WHERE ds_key=ANY($1::text[]))
   SELECT m.ds_key,m.title,m.version,m.publisher,left(m.abstract,800) AS abstract,m.extent_geographic_bbox,
     m.extent_temporalelement,m.online_resources,m.paper_id,m.paper_doi,x.n_papers,
     u.dataset_id,u.paper_id AS usage_paper_id,split_part(u.paper_head,' ; ',1) AS paper_title,
@@ -29,14 +30,23 @@ const PAGE_SELECT=`WITH page AS (SELECT * FROM public.dataset_metadata WHERE ds_
     COALESCE(q.questions,'[]'::json) AS questions,COALESCE(o.official,'[]'::json) AS official
   FROM page m LEFT JOIN public.ds_axis_meta x ON x.ds_key=m.ds_key
   LEFT JOIN LATERAL (SELECT e.* FROM public.ev_axis e WHERE e.ds_key=m.ds_key
-    ORDER BY (e.paper_id=m.paper_id) DESC,e.doc_id LIMIT 1) u ON true
+    AND NULLIF(btrim(e.paper_id),'') IS NOT NULL AND NULLIF(btrim(e.dataset_id),'') IS NOT NULL
+    ORDER BY (e.paper_id=m.paper_id) DESC NULLS LAST,e.doc_id,e.paper_id,e.dataset_id LIMIT 1) u ON true
   LEFT JOIN LATERAL (SELECT json_agg(v) AS questions FROM (
     SELECT a.paper_id AS "paperId",a.rq_id AS "rqId",a.dataset_id AS "datasetId",r.paper_title AS "paperTitle",r.task_text AS question
     FROM public.rc_member a JOIN public.rc_recipe r ON r.paper_id=a.paper_id AND r.rq_id=a.rq_id
-    WHERE a.ds_key=m.ds_key ORDER BY a.paper_id,a.rq_id,a.dataset_id LIMIT 3) v) q ON true
-  LEFT JOIN LATERAL (SELECT json_agg(json_build_object('source',d.source,'spatial',d.spatial,'temporal',d.temporal)) AS official
+    WHERE u.paper_id IS NOT NULL AND a.ds_key=m.ds_key ORDER BY a.paper_id,a.rq_id,a.dataset_id LIMIT 3) v) q ON true
+  LEFT JOIN LATERAL (SELECT json_agg(json_build_object('source',d.source,'spatial',d.spatial,'temporal',d.temporal)
+      ORDER BY d.source,d.spatial::text,d.temporal::text) AS official
     FROM public.ds_meta d WHERE d.ds_key=m.ds_key) o ON true
-  ORDER BY m.ds_key`;
+  ORDER BY m.ds_key COLLATE "C"`;
+
+const METADATA_KEYS=`SELECT DISTINCT ds_key COLLATE "C" AS ds_key FROM public.dataset_metadata ORDER BY ds_key`;
+function keyDigest(keys:string[]){
+  const digest=createHash("sha256");
+  for(const key of keys)digest.update(key+"\n");
+  return digest.digest("hex");
+}
 
 /** Only fixed SELECTs are exposed; every source read uses both a read-only session and transaction. */
 export function assertionReader(config:PoolConfig,pool:Pick<pg.Pool,"connect"|"end">=new pg.Pool(config)) {
@@ -51,15 +61,21 @@ export function assertionReader(config:PoolConfig,pool:Pick<pg.Pool,"connect"|"e
   }
   return {
     snapshot:async(accept:(rows:AssertionDatasetRow[],loaded:number,total:number)=>Promise<void>|void)=>read(async client=>{
-      const total=Number((await client.query("SELECT count(*) AS n FROM public.dataset_metadata")).rows[0].n);
-      let cursor="",loaded=0;
-      while(loaded<total) {
-        const rows=(await client.query<AssertionDatasetRow>(PAGE_SELECT,[cursor,250])).rows;
-        if(!rows.length || rows.at(-1)!.ds_key<=cursor)throw Error("论文研究数据分页未推进，未发布不完整快照。");
-        loaded+=rows.length;if(loaded>total)throw Error("论文研究数据行数发生变化，未发布快照。");
-        await accept(rows,loaded,total);cursor=rows.at(-1)!.ds_key;
+      const sourceClock=(await client.query<{snapshot:string;checkedAt:Date}>(
+        `SELECT txid_current_snapshot()::text AS snapshot,transaction_timestamp() AS "checkedAt"`)).rows[0];
+      const keys=(await client.query<{ds_key:string|null}>(METADATA_KEYS)).rows.map(row=>row.ds_key);
+      if(!keys.every((key):key is string=>typeof key==="string"&&key.startsWith("doi:")&&key.length>4&&key.length<=1000)||
+        new Set(keys).size!==keys.length)
+        throw Error("源元数据含无效或重复 DOI 身份，已保留原目录。");
+      for(let offset=0;offset<keys.length;offset+=250){
+        const page=keys.slice(offset,offset+250);
+        const rows=(await client.query<AssertionDatasetRow>(PAGE_SELECT,[page])).rows;
+        if(rows.length!==page.length||rows.some((row,i)=>row.ds_key!==page[i]))
+          throw Error("断言源分页与固定 metadata 身份清单不一致，已保留原目录。");
+        await accept(rows,offset+rows.length,keys.length);
       }
-      return {total,readOnly:true,checkedAt:new Date().toISOString()};
+      return {total:keys.length,metadataSha:keyDigest(keys),readOnly:true,
+        checkedAt:sourceClock.checkedAt.toISOString(),sourceSnapshot:sourceClock.snapshot};
     }),
     questions:async(dsKey:string,cursor="")=>read(async client=>{
       let after=["","",""];

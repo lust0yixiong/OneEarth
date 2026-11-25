@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import express from "express";
+import {mkdtemp,rm} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import path from "node:path";
 import type { PaperRecord } from "../src/domain/paper-record";
 import type { PaperQueryOutput } from "./discovery-materials-contract";
 import { hainaRecord } from "../src/domain/haina-record";
-import { hainaCatalogueProjection, paperCatalogueProjection } from "./runtime-workbench-queries";
+import { hainaCatalogueProjection, paperCatalogueProjection, runtimeWorkbenchQueries } from "./runtime-workbench-queries";
 
 function paper(dsKey: string, version: string): PaperRecord {
   return {
@@ -153,3 +157,46 @@ for(const failure of ["revision","total","duplicate","incomplete","cursor-cycle"
     fail=false;await pull();assert.deepEqual(updates,[[a],[b,tail]]);
   });
 }
+
+test("publication paging has a per-page deadline rather than one short deadline for the whole generation",async()=>{
+ const records=[paper("alpha","a"),paper("beta","b"),paper("zeta","c")],published:PaperRecord[][]=[];
+ const seen:AbortSignal[]=[];
+ const pull=paperCatalogueProjection(async(input,signal)=>{
+  seen.push(signal);await new Promise(resolve=>setTimeout(resolve,15));signal.throwIfAborted();
+  if(input.limit===1)return page([records[0]],3,"alpha","long-generation");
+  const i=input.cursor?Number(input.cursor):0;return page([records[i]],3,i<2?String(i+1):null,"long-generation");
+ },rows=>published.push(rows),Date.now,{pageMs:45,totalMs:500});
+ await pull();assert.deepEqual(published,[records]);assert.equal(new Set(seen).size,4);assert.equal(pull.status().revision,"long-generation");assert.equal(pull.status().total,3);
+});
+
+test("the bounded full-generation deadline does not publish a timed-out partial catalogue",async()=>{
+ const a=paper("alpha","a"),published:PaperRecord[][]=[];
+ const pull=paperCatalogueProjection(async(input,signal)=>{
+  await new Promise(resolve=>setTimeout(resolve,20));signal.throwIfAborted();return page([a],2,input.limit===1?"first":"next","slow");
+ },rows=>published.push(rows),Date.now,{pageMs:100,totalMs:30});
+ await assert.rejects(pull);assert.deepEqual(published,[]);assert.equal(pull.status().state,"unavailable");
+});
+
+test("actual workbench queries remain available through source failure, atomic replacement and restart",async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),"oneearth-workbench-"));
+ const a=paper("controlled-dataset","a"),b=paper("controlled-dataset","b");
+ let revision="whole-a",fail=false;
+ const read=async()=>{if(fail)throw Error("controlled provider failure");return page([revision==="whole-a"?a:b],1,null,revision);};
+ const haina=async()=>({records:[],synced:"2026-11-25T00:00:00Z",endpoint:"https://example.org",areaId:"test",total:0,complete:true as const,nextCursor:null,warning:"",refreshing:false});
+ const observations={router:express.Router(),version:()=>"none",latest:()=>({records:[]}),catalogRecords:()=>[],status:()=>({configured:0,sources:[]})} as unknown as Parameters<typeof runtimeWorkbenchQueries>[3];
+ let workbench=runtimeWorkbenchQueries(dir,read,haina,observations);
+ const app=express();app.use((req,res,next)=>workbench.router(req,res,next));
+ const server=app.listen(0,"127.0.0.1");await new Promise(r=>server.once("listening",r));const address=server.address();assert.ok(address&&typeof address!=="string");const base="http://127.0.0.1:"+address.port;
+ async function get(){const res=await fetch(base+"/api/data-access/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({section:"clues",query:"",type:"",source:"paper",page:0,limit:30})});assert.equal(res.status,200);return res.json();}
+ async function waitFor(predicate:(value:any)=>boolean){for(let i=0;i<60;i++){const value=await get();if(predicate(value))return value;await new Promise(r=>setTimeout(r,50));}assert.fail("controlled projection did not settle");}
+ try{
+  const ready=await waitFor(v=>v.catalogues.paper.state==="ready"&&v.catalogues.paper.revision==="whole-a");assert.deepEqual(ready.rows.map((r:any)=>r.asset.id),[a.id]);
+  const checked=ready.catalogues.paper.checkedAt;
+  fail=true;await new Promise(r=>setTimeout(r,2050));
+  const stale=await waitFor(v=>v.catalogues.paper.state==="stale");assert.equal(stale.catalogues.paper.revision,"whole-a");assert.equal(stale.catalogues.paper.checkedAt,checked);assert.match(stale.catalogues.paper.warning,/上次完整/);assert.deepEqual(stale.rows.map((r:any)=>r.asset.id),[a.id]);
+  workbench.close();workbench=runtimeWorkbenchQueries(dir,read,haina,observations);
+  const reopened=await get();assert.deepEqual(reopened.rows.map((r:any)=>r.asset.id),[a.id]);assert.equal(reopened.catalogues.paper.revision,"whole-a");
+  fail=false;revision="whole-b";await new Promise(r=>setTimeout(r,2050));
+  const newer=await waitFor(v=>v.catalogues.paper.state==="ready"&&v.catalogues.paper.revision==="whole-b");assert.deepEqual(newer.rows.map((r:any)=>r.asset.id),[b.id]);assert.equal(newer.catalogues.paper.warning,undefined);
+ }finally{workbench.close();server.closeAllConnections();server.close();await rm(dir,{recursive:true,force:true});}
+});

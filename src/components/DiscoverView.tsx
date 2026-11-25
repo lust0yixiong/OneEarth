@@ -21,7 +21,7 @@ export function DiscoverView(){
   const [loading,setLoading]=useState(true),[error,setError]=useState(""),[reload,setReload]=useState(0);
   const [expanded,setExpanded]=useState<string|null>(null),[evidenceStatus,setEvidenceStatus]=useState("");
   const [connected,setConnected]=useState(false),[streamError,setStreamError]=useState("");
-  const [busy,setBusy]=useState(false);
+  const [busy,setBusy]=useState(false),[clueRefresh,setClueRefresh]=useState("");
   const element=useRef<HTMLElement>(null),currentData=useRef(data),latestSearch=useRef(search),actionVersion=useRef(0);
   const expansionVersion=useRef(0);
   currentData.current=data;latestSearch.current=search;
@@ -39,7 +39,7 @@ export function DiscoverView(){
   }
   useEffect(()=>{
     const controller=new AbortController(),version=++actionVersion.current;
-    setLoading(true);setError("");setData(null);setIncoming(null);setExpanded(null);setEvidenceStatus("");
+    setLoading(true);setError("");setClueRefresh("");setData(null);setIncoming(null);setExpanded(null);setEvidenceStatus("");
     const timer=setTimeout(()=>void readAccessPage(query,controller.signal).then(page=>{
       if(controller.signal.aborted||actionVersion.current!==version)return;
       if(!latestSearch.current.section&&!page.total){
@@ -70,6 +70,41 @@ export function DiscoverView(){
     document.addEventListener("visibilitychange",visible);
     return ()=>{controller.abort();events.close();clearInterval(timer);document.removeEventListener("visibilitychange",visible);};
   },[section,queryKey]);
+  useEffect(()=>{
+    if(section!=="clues")return;
+    const controller=new AbortController(),version=actionVersion.current;
+    let checking=false;
+    async function check(){
+      if(checking||!currentData.current||document.visibilityState==="hidden")return;
+      checking=true;
+      try{
+        const page=await readAccessPage(query,AbortSignal.any([controller.signal,AbortSignal.timeout(20_000)]));
+        const previous=currentData.current;
+        if(controller.signal.aborted||version!==actionVersion.current||!previous)return;
+        const identity=(p:AccessPage)=>JSON.stringify([p.revision,p.page,p.total,p.counts,p.catalogues?.paper.revision,
+          p.rows.map(row=>[row.key,row.asset.id,row.relatedIds])]);
+        if(identity(page)!==identity(previous)){
+          setExpanded(key=>{
+            const row=(p:AccessPage)=>p.rows.find(item=>item.key===key);
+            const before=row(previous),after=row(page);
+            return before && after && before.asset.id===after.asset.id && JSON.stringify(before.relatedIds)===JSON.stringify(after.relatedIds)?key:null;
+          });
+          accept(page);
+          setClueRefresh("数据线索已更新");
+        }else {
+          if(JSON.stringify(page.catalogues?.paper)!==JSON.stringify(previous.catalogues?.paper))
+            setData(page);
+          setClueRefresh(message=>message.startsWith("暂时")?"":message);
+        }
+      }catch{
+        if(!controller.signal.aborted&&version===actionVersion.current)
+          setClueRefresh("暂时无法检查目录更新，已保留当前列表。");
+      }finally{checking=false;}
+    }
+    const timer=setInterval(check,60_000);
+    document.addEventListener("visibilitychange",check);
+    return ()=>{controller.abort();clearInterval(timer);document.removeEventListener("visibilitychange",check);};
+  },[section,queryKey,reload]);
   useEffect(()=>()=>{actionVersion.current++;},[]);
   const rows=data?.rows||[],ids=rows.map(r=>r.asset.id);
   const batch=catalogBatch(search,ids,s.camera,s.gridSystem);
@@ -107,6 +142,12 @@ export function DiscoverView(){
   function chooseSection(next:AccessSection){set({section:next,source:"",kind:"all"});}
   const icons={entities:Database,clues:ListFilter,timely:Radio};
   const sourceOptions=data?.sources||[],typeOptions=data?.types||[];
+  const paperCatalogue=data?.catalogues?.paper;
+  const paperPublication=paperCatalogue?.state==="refreshing"
+    ? "文献资料索引正在更新"
+    : paperCatalogue?.state==="stale" ? "文献资料本次同步未完成"
+    : paperCatalogue?.state==="unavailable" ? "文献资料索引暂不可用"
+    : "";
   const statusSources=data?.stream?.sources||[];
   const channelRows=statusSources.length?statusSources.map(c=>({...c,...data?.channels.find(v=>v.id===c.id)})):data?.channels.map(c=>({...c,name:c.name}))||[];
   return <section className="discover-view data-access-view" ref={element}>
@@ -134,7 +175,14 @@ export function DiscoverView(){
       <button className="access-refresh" disabled={loading} onClick={()=>setReload(n=>n+1)} aria-label="刷新数据触达"><RefreshCw size={14}/>刷新</button></div>
     <div id="access-panel" role="tabpanel" aria-labelledby={"access-tab-"+section} aria-busy={loading}>
       {section==="entities"&&<p className="access-section-note">实验室持有的数据实体；范围和文件内容以实际持有清单为准。</p>}
-      {section==="clues"&&<div className="access-section-note"><span>按数据集与版本汇聚来源依据</span><small>网页存证尚未接入</small></div>}
+      {section==="clues"&&<><div className="access-section-note"><span>按数据集与版本汇聚来源依据</span><small>网页存证尚未接入</small></div>
+        {paperCatalogue&&<p className="access-catalog-update" role={paperPublication?"status":undefined}>
+          {paperPublication&&<>{paperPublication}{paperCatalogue.revision?" · 显示上次已索引版本":""}</>}
+          {paperCatalogue.total!==undefined&&<>{paperPublication?" · ":""}文献资料已索引 {paperCatalogue.total.toLocaleString()} 个</>}
+          {paperCatalogue.revision&&<> · <span title={paperCatalogue.revision}>版本 {paperCatalogue.revision.slice(0,12)}</span></>}
+        </p>}
+        {clueRefresh&&data&&<p className="access-catalog-update" role="status">{clueRefresh}</p>}
+      </>}
       {section==="timely"&&<>
         <div className="access-stream-status"><span><i data-connected={connected}/>{connected?"接收更新已连接":"接收更新正在连接"}</span><span>已配置 {data?.stream?.configured??s.pushFeed?.configured??0} 个来源</span></div>
         {!!channelRows.length&&<div className="access-channels">{channelRows.map(c=><section key={c.id}><strong>{c.name}</strong><span>{c.count?.toLocaleString()||0} 条接收记录</span><small>{c.latest?"最近接收 "+accessStamp(c.latest):"等待首条观测"}</small></section>)}</div>}
@@ -144,7 +192,7 @@ export function DiscoverView(){
       {loading&&<p className="access-loading" role="status">正在检索{accessSections[section]}…</p>}
       {error&&<div className="access-error" role="alert">{error}<button onClick={()=>setReload(n=>n+1)}>重试</button></div>}
       {!loading&&!error&&data&&<>
-        <div className="result-caption access-result-caption"><span>{data.total.toLocaleString()} {section==="timely"?"条接收记录":"个数据集"}{data.total>data.limit?` · 本页 ${data.page*data.limit+1}—${Math.min(data.total,(data.page+1)*data.limit)}`:""}</span>
+        <div className="result-caption access-result-caption"><span>{data.total.toLocaleString()} {section==="timely"?"条接收记录":"个数据集"}{data.total>data.limit?` · 本页 ${(data.page*data.limit+1).toLocaleString()}—${Math.min(data.total,(data.page+1)*data.limit).toLocaleString()}`:""}</span>
           {!!rows.some(r=>r.mappable)&&<button disabled={busy} onClick={()=>actions.map(ids)}><Globe size={13}/>{data.pages>1?"在球上查看本页":"在球上查看这批数据"}</button>}
           {!!selectedIds.length&&<div><button disabled={busy||selectedIds.length<2} onClick={()=>void hydrated(selectedIds,()=>patch({inspector:{comparedBatch:assessed,comparison:comparison(compared,scope,search.result?.selection)},evidence:null}))}>比较已选（{selectedIds.length}）</button><button onClick={()=>patch({search:{...search,compare:[]}})}>清除选择</button></div>}
         </div>
@@ -156,7 +204,13 @@ export function DiscoverView(){
         {section==="timely"&&<TimelyRows rows={rows} actions={actions}/>}
         {!rows.length&&<div className="empty-state">{section==="timely"&&!data.stream?.configured&&!data.total?"尚未配置星座接收来源，接入后将在这里显示真实接收记录。":"当前条件下没有匹配的"+accessSections[section]+"。"}
           <button onClick={()=>set({query:"",type:"",source:"",savedOnly:false,capability:""})}>清除筛选</button></div>}
-        {data.pages>1&&<nav className="access-pagination" aria-label="数据触达分页"><button disabled={!data.page} onClick={()=>patch({search:{...search,page:data.page-1,pageIds:undefined}})}>上一页</button><span>{data.page+1} / {data.pages}</span><button disabled={data.page+1>=data.pages} onClick={()=>patch({search:{...search,page:data.page+1,pageIds:undefined}})}>下一页</button></nav>}
+        {data.pages>1&&<nav className="access-pagination" aria-label="数据触达分页">
+          {section==="clues"&&<button disabled={!data.page} onClick={()=>patch({search:{...search,page:0,pageIds:undefined}})}>首页</button>}
+          <button disabled={!data.page} onClick={()=>patch({search:{...search,page:data.page-1,pageIds:undefined}})}>上一页</button>
+          <span>{data.page+1} / {data.pages}</span>
+          <button disabled={data.page+1>=data.pages} onClick={()=>patch({search:{...search,page:data.page+1,pageIds:undefined}})}>下一页</button>
+          {section==="clues"&&<button disabled={data.page+1>=data.pages} onClick={()=>patch({search:{...search,page:data.pages-1,pageIds:undefined}})}>末页</button>}
+        </nav>}
       </>}
     </div>
   </section>;

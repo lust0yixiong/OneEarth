@@ -16,7 +16,7 @@ import {paperCatalogRoutes} from "./paper-catalog";
 import {readPaperCatalogSqlite,writePaperCatalogSqlite} from "./paper-catalog-sqlite";
 import {paperProjectionQueryKind,paperProjectionResultKind,type PaperProjectionResult} from "./paper-projection-contract";
 import {paperQueryKind} from "./discovery-materials-contract";
-import {postgresPaperCatalog} from "./postgres-paper-catalog";
+import {postgresPaperCatalog,withPaperCatalogSync} from "./postgres-paper-catalog";
 
 const record = (key:string,tag:string):PaperRecord => ({
   id:"earthnano:"+tag.repeat(64),dsKey:key,papers:1,paperTitle:"fixture "+tag,studyContext:"",points:[[1,2]],
@@ -193,17 +193,67 @@ test("real discovery PostgreSQL migrates v2, preserves publication order, and se
       INSERT INTO dataset_metadata VALUES ('doi:pg-fixture','Fixture PostgreSQL dataset','v1','Fixture','description','[0,0,5,5]',
         '2020','[]','paper-one','10.0/paper');
       INSERT INTO ds_axis_meta VALUES('doi:pg-fixture',1);
-      INSERT INTO ev_axis VALUES('doi:pg-fixture','dataset-one','paper-one',1,'Fixture research','used for measurements','temperature','fixture');
+      INSERT INTO ev_axis VALUES('doi:pg-fixture','dataset-one','paper-one',1,'Fixture research','used for measurements','temperature','fixture'),
+        ('name:out-of-scope','local-term','paper-one',2,'A paper','another usage','temperature','fixture');
+      INSERT INTO dataset_metadata VALUES ('doi:standalone','Metadata with no documented use','v1','Fixture','description',
+        NULL,NULL,'[]','unverified-paper','10.0/unverified');
     `);
-    const formalPg=cli([],"postgres","scripts/sync-assertion-postgres.ts",{
+    const sourceEnv={
       ONEEARTH_ASSERTION_PG_HOST:work,ONEEARTH_ASSERTION_PG_PORT:"5432",ONEEARTH_ASSERTION_PG_USER:"paper_fixture",
       ONEEARTH_ASSERTION_PG_DATABASE:"assertion_fixture",
-    });
+    };
+    const sync=(args:string[]=[])=>cli(args,"postgres","scripts/sync-assertion-postgres.ts",sourceEnv);
+    const formalPg=sync(["--expected-count","2"]);
     assert.equal(formalPg.readOnly,true);
+    assert.equal(formalPg.state,"published");
     assert.equal(formalPg.linkedDatasets,1);
-    assert.equal(formalPg.versionCount,4);
-    assert.equal((await papers.page("",10)).records[0].dsKey,"doi:pg-fixture");
-    assert.equal((await upstream.query("SELECT count(*) FROM dataset_metadata")).rows[0].count,"1");
+    assert.equal(formalPg.metadataOnly,1);
+    assert.equal(formalPg.preservedCurrent,1);
+    assert.equal(formalPg.versionCount,5);
+    assert.equal(formalPg.publishedCount,3);
+    const current=(await papers.page("",10)).records;
+    assert.ok(current.some(record=>record.id===C.id));
+    assert.ok(!current.some(record=>record.dsKey==="name:out-of-scope"));
+    const quiet=current.find(record=>record.dsKey==="doi:standalone")!;
+    assert.equal(quiet.assertionCatalogKind,"metadata-only");
+    assert.equal(quiet.papers,0);
+    assert.equal(quiet.paperTitle,"");
+    const quietCatalog=paperCatalogAccess(papers,{assertion:()=>assert.fail("metadata-only triggered an upstream evidence call")});
+    assert.deepEqual((await quietCatalog.evidence(quiet.id)).data,{dataset:null,papers:[]});
+    assert.deepEqual(await quietCatalog.questions(quiet.id),{items:[],nextCursor:null});
+    const noop=sync();
+    assert.equal(noop.state,"unchanged");
+    assert.equal(noop.revision,formalPg.revision);
+    assert.equal(noop.generation,formalPg.generation);
+    const guard=await withPaperCatalogSync(pool,async()=>sync());
+    assert.ok(guard.acquired);
+    assert.equal(guard.value.state,"already-running");
+
+    const beganBeforeUpdate=await papers.beginLookup();
+    await upstream.query("UPDATE dataset_metadata SET version='v2' WHERE ds_key='doi:pg-fixture'");
+    await upstream.query("DELETE FROM dataset_metadata WHERE ds_key='doi:standalone'");
+    await upstream.query("INSERT INTO dataset_metadata VALUES ('doi:new-metadata','New metadata',NULL,'Fixture','description',NULL,NULL,'[]',NULL,NULL)");
+    assert.throws(()=>sync(["--expected-count","3"]),/条数或身份 SHA-256/);
+    assert.equal((await papers.status()).generation,formalPg.generation);
+    assert.equal((await papers.getMany([quiet.id])).length,1);
+    const updated=sync();
+    assert.equal(updated.publishedCount,formalPg.publishedCount);
+    assert.equal(updated.added,1);
+    assert.equal(updated.retired,1);
+    assert.equal(updated.changed,2);
+    assert.equal(updated.preservedCurrent,1);
+    assert.notEqual(updated.revision,formalPg.revision);
+    const updatedPage=(await papers.page("",10)).records;
+    assert.ok(updatedPage.every(record=>record.id!==quiet.id));
+    assert.ok(updatedPage.some(record=>record.dsKey==="doi:new-metadata"));
+    assert.ok(updatedPage.some(record=>record.id===C.id));
+    const before=current.find(record=>record.dsKey==="doi:pg-fixture")!;
+    assert.deepEqual((await papers.getMany([quiet.id,before.id,C.id])).map(record=>record.id),[quiet.id,before.id,C.id]);
+    const delta=await page(updated.generation,formalPg.generation);
+    assert.equal(delta.entries.find(record=>record.id===quiet.id)?.published,false);
+    await papers.publishLookup([before],beganBeforeUpdate);
+    assert.equal((await papers.status()).revision,updated.revision);
+    assert.equal((await upstream.query("SELECT count(*) FROM dataset_metadata")).rows[0].count,"2");
     assert.equal((await upstream.query("SELECT to_regclass('paper_catalog_head') AS table")).rows[0].table,null);
   } finally {await upstream.end();}
 

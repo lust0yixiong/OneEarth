@@ -82,7 +82,7 @@ export interface Scene {
   pending?:boolean;
   mapFocus?: {answerId:string;assetId:string;locked:boolean}|null;
   catalogStyle?: DistributionMode;
-  paperFeed?:{loading:boolean}|null;
+  paperFeed?:{revision?:string}|null;
   fieldLayer?: {id:string;frame:number}|null;
   publicLayer?: PublicLayerSelection|null;
   publicPoints?:PublicLayerPoint[];
@@ -675,7 +675,9 @@ export function createRenderer(
         canvas.dataset.viewportPending=String(viewportPending);
         const ids=visible.map(cell=>cell.id);
         if(!frozen && scene.selection?.grid.key===evidenceGrid.key && !ids.includes(scene.selection.id))ids.unshift(scene.selection.id);
-        const coverage=coverageClient.read(evidenceGrid,ids,scene.filters,scene.mapResult,scene.paperFeed?.loading?0:catalogRevision(),interacting);
+        const publicationKey=scene.paperFeed?.revision
+          ? catalogRevision()+"/"+scene.paperFeed.revision : catalogRevision();
+        const coverage=coverageClient.read(evidenceGrid,ids,scene.filters,scene.mapResult,publicationKey,interacting);
         const cells=coverage.cells;
         canvas.dataset.coveragePending=String(coverage.pending||viewportPending);
         canvas.dataset.coverageSource="server-index";
@@ -690,7 +692,7 @@ export function createRenderer(
           // A retained selection keeps its original grid when navigation zooms
           // to another level. Its headline still reads the indexed exact count.
           const selected=scene.selection.grid.key===evidenceGrid.key ? coverage : !frozen ?
-            selectedCoverageClient.read(scene.selection.grid,[scene.selection.id],scene.filters,scene.mapResult,scene.paperFeed?.loading?0:catalogRevision(),interacting) : undefined;
+            selectedCoverageClient.read(scene.selection.grid,[scene.selection.id],scene.filters,scene.mapResult,publicationKey,interacting) : undefined;
           if (selected?.revision) coverageSelection={
             selection:scene.selection,filters:scene.filters,batch:scene.mapResult,revision:selected.revision,
           };

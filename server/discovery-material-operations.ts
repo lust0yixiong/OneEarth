@@ -98,8 +98,13 @@ export async function runSourceRead(job: SourceReadJob, signal: AbortSignal, emi
       return;
     }
     papers.push(paper);
-    emit({finding:{id:call.id,source:"文献资料",summary:"已读取指定版本的论文记录。",items:[{assetId:paper.id,title:paper.need.product}]},
+    const metadataOnly=paper.assertionCatalogKind==="metadata-only";
+    emit({finding:{id:call.id,source:"文献资料",summary:metadataOnly?"已读取指定版本的数据集元数据。":"已读取指定版本的论文记录。",items:[{assetId:paper.id,title:paper.need.product}]},
       sourceReadProgress:{papers:[paper]}});
+    if(metadataOnly){
+      emit({call:{...call,status:"done",output:JSON.stringify({id,stage:"assertion-record",papers:0,assertionCatalogKind:paper.assertionCatalogKind})}});
+      return;
+    }
     try {
       const {data} = await catalog.evidence(id,{fresh:true,signal});
       signal.throwIfAborted();

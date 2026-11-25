@@ -26,7 +26,13 @@ export interface AccessQuery {
   capability?:"local"|"map"|"request"|"";ids?:string[];savedIds?:string[];scope?:Filters;
   savedIdentities?:string[];
 }
+export interface CatalogueProjectionStatus {
+  state:"ready"|"refreshing"|"stale"|"unavailable";
+  revision?:string;total?:number;checkedAt?:string;warning?:string;
+}
+export type AccessCatalogues={paper:CatalogueProjectionStatus;haina:CatalogueProjectionStatus};
 export interface AccessPage {
+  catalogues?:AccessCatalogues;
   channels:{id:string;name:string;count:number;latest:string}[];
   stream?:{configured:number;sources:{id:string;name:string}[]};
   rows:AccessRow[];total:number;page:number;pages:number;limit:number;

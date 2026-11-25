@@ -19,7 +19,7 @@ test("PostgreSQL source reads enforce session and transaction read-only mode and
   const client={query:async(sql:string)=>{
     statements.push(sql);
     if(sql.includes("current_setting"))return {rows:[{transaction_read_only:"on",default_transaction_read_only:"on"}]};
-    if(sql.includes("count(*)"))return {rows:[{n:"0"}]};
+    if(sql.includes("txid_current_snapshot"))return {rows:[{checkedAt:new Date("2026-01-01T00:00:00Z"),snapshot:"1:1:"}]};
     return {rows:[]};
   },release:()=>released++};
   const pool={connect:async()=>client,end:async()=>{}} as unknown as Pick<pg.Pool,"connect"|"end">;
@@ -47,7 +47,11 @@ test("dataset coverage, version and real research-question identifiers remain in
   const missing=assertionDataset({...row,extent_geographic_bbox:null,official:[]});
   assert.equal(missing.record?.need.profile?.area,undefined);
   assert.deepEqual(missing.record?.points,[],"the Alaska study-context label cannot supply dataset geometry");
-  assert.equal(assertionDataset({...row,usage_paper_id:null}).record,undefined,"metadata without a verified usage cannot claim a paper link");
+  const standalone=assertionDataset({...row,usage_paper_id:null}).record!;
+  assert.ok(validPaperRecord(standalone));
+  assert.equal(standalone.assertionCatalogKind,"metadata-only");assert.equal(standalone.papers,0);
+  assert.equal(standalone.paperTitle,"");assert.deepEqual(standalone.researchQuestions,[]);
+  assert.ok(standalone.need.tabs.every(tab=>tab.label!=="论文用法（本页）"));
   const located=assertionDataset({...row,extent_geographic_bbox:null,official:[{source:"datacite",spatial:JSON.stringify([{raw_kind:"geoLocations",points:[[31,121]]}]),temporal:null}]}).record!;
   registerPapers([located]);
   assert.equal(spatialEntries(located.id,{...emptyFilters(),period:[2015,2015]},"all").length,1);
@@ -92,4 +96,18 @@ test("paper evidence binds the dataset and paper identities inside a read-only t
     assert.deepEqual(statement.values,["doi:10.example/argo",'[{"paperId":"p1","datasetId":"d1"}]']);
     assert.match(statement.sql,/e.ds_key=\$1/);
   }
+});
+
+test("a fixed source key without its metadata row aborts the read-only snapshot",async()=>{
+  const statements:string[]=[];
+  const client={query:async(sql:string)=>{
+    statements.push(sql);
+    if(sql.includes("current_setting"))return {rows:[{transaction_read_only:"on",default_transaction_read_only:"on"}]};
+    if(sql.includes("txid_current_snapshot"))return {rows:[{checkedAt:new Date("2026-01-01T00:00:00Z"),snapshot:"1:1:"}]};
+    if(sql.includes("SELECT DISTINCT ds_key"))return {rows:[{ds_key:row.ds_key}]};
+    return {rows:[]};
+  },release(){}};
+  const reader=assertionReader({}, {connect:async()=>client,end:async()=>{}} as unknown as Pick<pg.Pool,"connect"|"end">);
+  await assert.rejects(reader.snapshot(()=>assert.fail("an incomplete page must not be accepted")),/分页/);
+  assert.equal(statements.at(-1),"ROLLBACK");
 });

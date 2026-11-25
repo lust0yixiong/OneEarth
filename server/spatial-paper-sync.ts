@@ -15,23 +15,43 @@ function object(value: unknown): value is Record<string, unknown> {
 const text = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 const number = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const count = (value: unknown): value is number => number(value) && Number.isSafeInteger(value) && value >= 0;
-function point(value: unknown): value is Coordinate {
-  return Array.isArray(value) && value.length === 2 && value.every(number) &&
-    Math.abs(value[0]) <= 180 && Math.abs(value[1]) <= 90;
+type Area = NonNullable<PaperMapEntry["profile"]["area"]>;
+
+function withinAxis(value: unknown, limit: 180 | 90): value is number {
+  // Densified rectangle interpolation can overshoot an endpoint by two floating-point steps.
+  const twoSteps = (limit === 180 ? 256 : 128) * Number.EPSILON;
+  return number(value) && Math.abs(value) <= limit + twoSteps;
 }
-function polygon(value: unknown): boolean {
+function point(value: unknown): value is Coordinate {
+  return Array.isArray(value) && value.length === 2 && withinAxis(value[0], 180) && withinAxis(value[1], 90);
+}
+function polygon(value: unknown): value is Coordinate[][] {
   return Array.isArray(value) && value.length > 0 && value.every(ring => {
     if (!Array.isArray(ring) || ring.length < 4 || !ring.every(point)) return false;
     const first = ring[0], last = ring[ring.length - 1];
+    // Check closure before rounding: clamping two endpoints must not repair an open ring.
     return first[0] === last[0] && first[1] === last[1];
   });
 }
-function area(value: unknown): boolean {
+function area(value: unknown): value is Area {
   return object(value) &&
-    (value.bbox === undefined || (Array.isArray(value.bbox) && value.bbox.length === 4 && value.bbox.every(number))) &&
+    (value.bbox === undefined || (Array.isArray(value.bbox) && value.bbox.length === 4 &&
+      point(value.bbox.slice(0, 2)) && point(value.bbox.slice(2)))) &&
     (value.type === "Polygon" ? polygon(value.coordinates)
       : value.type === "MultiPolygon" && Array.isArray(value.coordinates) &&
         value.coordinates.length > 0 && value.coordinates.every(polygon));
+}
+function boundedPoint([longitude, latitude]: number[]): Coordinate {
+  return [Math.max(-180, Math.min(180, longitude)), Math.max(-90, Math.min(90, latitude))];
+}
+function boundedArea(shape: Area): Area {
+  const coordinates = (rings: number[][][]) => rings.map(ring => ring.map(boundedPoint));
+  const bbox = shape.bbox ? {
+    bbox: [...boundedPoint(shape.bbox.slice(0, 2)), ...boundedPoint(shape.bbox.slice(2))] as [number, number, number, number],
+  } : {};
+  return shape.type === "Polygon"
+    ? { ...shape, ...bbox, coordinates: coordinates(shape.coordinates) }
+    : { ...shape, ...bbox, coordinates: shape.coordinates.map(coordinates) };
 }
 
 function entry(value: unknown): PaperMapEntry {
@@ -52,8 +72,8 @@ function entry(value: unknown): PaperMapEntry {
     throw Error("Invalid paper coverage projection geometry or time");
   return {
     id: value.id, dsKey: value.dsKey, title: value.title, type: value.type, source: value.source,
-    points: value.points, published: value.published,
-    profile: { role, spatial, coverage, areaBasis, extent, area: shape, years, utcWindow } as PaperMapEntry["profile"],
+    points: value.points.map(boundedPoint), published: value.published,
+    profile: { role, spatial, coverage, areaBasis, extent, area: shape === undefined ? undefined : boundedArea(shape), years, utcWindow } as PaperMapEntry["profile"],
   };
 }
 

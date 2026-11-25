@@ -51,9 +51,10 @@
 .access-dataset-overview dd{margin:0}
 .access-evidence-actions{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:14px;color:#286d50;font-size:12px}
 .access-evidence-actions button{display:inline-flex;align-items:center;gap:4px;padding:4px 0}
-.access-pagination{display:flex;justify-content:flex-end;align-items:center;gap:13px;margin:22px 0 0;font-size:12px;color:#657c6d}
+.access-pagination{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:13px;margin:22px 0 0;font-size:12px;color:#657c6d}
 .access-pagination button{background:#f9fcfa;border:1px solid #d4e2d8;border-radius:7px;padding:7px 13px;color:#446953}
 .access-pagination button:disabled{opacity:.4}
+.access-catalog-update{color:#446953;font-size:12px}
 .access-loading{padding:28px 0;color:#718578;font-size:13px}
 .access-error{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 0;color:#976737;font-size:13px}
 .access-error button{color:#2c7557;font-size:12px}

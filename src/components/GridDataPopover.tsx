@@ -4,14 +4,17 @@ import { gridData, dataForTopic, sciencePaths } from "../domain/grid-science-top
 import { spatialRelation } from "../domain/results";
 import { useWorkspace } from "../domain/store";
 import type { CandidateSet } from "../domain/types";
-import {catalogRevision,type Asset} from "../domain/datasets";
+import {assetById,loadRemoteAssetIds,type Asset} from "../domain/datasets";
 import {products} from "../domain/product-distribution";
 import {gridDataScopes,groupGridData,type GridDataScope} from "../domain/grid-data-groups";
 import {useGridMembership} from "./use-grid-membership";
+import {useCatalogRevision} from "./use-catalog-revision";
+import {paperId,paperRecords} from "../domain/paper-record";
 
 type SimRow = [number, number, number, number, number?, number?];
 type SimPage = { total: number; sourceCounts: number[]; rows: SimRow[] };
 const pageSize = 24;
+const referencePageSize = 60;
 const families = ["海纳收录", "论文线索", "科学家推荐"];
 const sources = ["海纳收录示例", "论文线索示例", "科学家推荐示例"];
 const coordinate = (value: number, positive: string, negative: string) =>
@@ -23,12 +26,14 @@ export function GridDataPopover({
   onClose,
   organizeByLocation=false,
   coverageBatch,
+  coverageRevision,
 }: {
   batch: CandidateSet;
   source: number;
   onClose: () => void;
   organizeByLocation?:boolean;
   coverageBatch?:CandidateSet|null;
+  coverageRevision?:string;
 }) {
   const { inspectAsset, patch } = useWorkspace();
   const [category, setCategory] = useState("全部");
@@ -41,13 +46,35 @@ export function GridDataPopover({
   const simulation = !!selection.simulated;
   const grouped=organizeByLocation && !simulation;
   const [locationScope,setLocationScope]=useState<GridDataScope>("local");
-  const membership=useGridMembership(grouped,selection,batch.filters,coverageBatch);
+  const includeReferences=grouped&&!coverageBatch;
+  const membership=useGridMembership(grouped,selection,batch.filters,coverageBatch,includeReferences,coverageRevision);
   const [term,setTerm] = useState("");
-  const revision=catalogRevision();
-  const allRows=useMemo(()=>dataForTopic(gridData(batch.ids,batch.filters.source==="paper"),"全部"),[batch,revision]);
+  const [referenceLimit,setReferenceLimit]=useState(referencePageSize);
+  const [referenceRetry,retryReferences]=useState(0);
+  const [referenceError,setReferenceError]=useState("");
+  const revision=useCatalogRevision();
+  const paperReferences=useMemo(()=>membership.referenceIds?.filter(paperId)??[],[membership.referenceIds]);
+  const requestedReferences=useMemo(()=>paperReferences.slice(0,referenceLimit),[paperReferences,referenceLimit]);
+  const resolvedReferences=requestedReferences.filter(id=>assetById.has(id)).length;
+  useEffect(()=>{
+    const controller=new AbortController();
+    setReferenceError("");
+    const missing=requestedReferences.filter(id=>!assetById.has(id));
+    if(missing.length)void loadRemoteAssetIds(missing,controller.signal).then(()=>{
+      if(!controller.signal.aborted&&missing.some(id=>!assetById.has(id)))
+        throw Error("部分格内文献资料未能读取。");
+    }).catch(()=>{
+      if(!controller.signal.aborted)setReferenceError("部分格内文献资料未能读取。");
+    });
+    return ()=>controller.abort();
+  },[requestedReferences,referenceRetry]);
+  const allRows=useMemo(()=>dataForTopic([
+    ...gridData(batch.ids,batch.filters.source==="paper"),...gridData(requestedReferences,true),
+  ],"全部"),[batch,revision,requestedReferences]);
   const groups=useMemo(()=>membership.members?groupGridData(allRows,membership.members,batch.filters):null,[allRows,membership.members,batch.filters]);
   const scoped=grouped?(locationScope==="all"?allRows:groups?.[locationScope]||[]):allRows;
-  const waiting=grouped && locationScope!=="all" && membership.members===null;
+  const referencePending=!referenceError && resolvedReferences<requestedReferences.length;
+  const waiting=grouped && locationScope!=="all" && (membership.members===null || referencePending);
   const paths = useMemo(()=>scoped.flatMap(sciencePaths),[scoped]);
   const terms = [...new Set(paths.filter(([topic]) => topic === category).map(([,name]) => name))];
   const filtered = dataForTopic(scoped,category,term);
@@ -163,15 +190,21 @@ export function GridDataPopover({
       {grouped && <>
         <div className="grid-data-scope-tabs" role="group" aria-label="资料空间关联范围">
           {gridDataScopes.map(scope=><button key={scope.id} aria-pressed={scope.id===locationScope}
-            disabled={scope.id!=="all" && !groups} onClick={()=>changeScope(scope.id)}>
-            {scope.label} <span>{scope.id==="all"?products(allRows).size:groups?products(groups[scope.id]).size:"…"} 种</span>
+            disabled={scope.id!=="all" && (!groups || referencePending)} onClick={()=>changeScope(scope.id)}>
+            {scope.label} <span>{scope.id==="all"?products(allRows).size:groups&&!referencePending?products(groups[scope.id]).size:"…"} 种</span>
           </button>)}
         </div>
         <div className="grid-data-scope-summary" aria-live="polite">
           {membership.error ? <span>{membership.error} <button onClick={membership.retry}>重试</button></span> : waiting ? <span>正在读取格内定位关系…</span> : <>
             <strong>{products(scoped).size} 种数据集 · {scoped.length} 条资料</strong><span>{scopeInfo.description}</span>
             <small>种数按数据集去重，资料保留来源与版本。</small>
+            {includeReferences&&locationScope!=="local"&&<small>此处列出已载入的覆盖和范围说明。</small>}
           </>}
+          {paperReferences.length>0&&<small>已读取 {resolvedReferences.toLocaleString()} / {paperReferences.length.toLocaleString()} 条格内文献来源。
+            {referenceError&&<> {referenceError}<button onClick={()=>retryReferences(n=>n+1)}>重试</button></>}
+            {!referencePending&&!referenceError&&referenceLimit<paperReferences.length&&
+              <button onClick={()=>setReferenceLimit(n=>n+referencePageSize)}>读取更多格内来源</button>}
+          </small>}
         </div>
       </>}
       <div className="grid-data-tabs" role="tablist" aria-label={simulation ? "模拟记录来源" : "一级科学主题"}>
@@ -248,7 +281,8 @@ export function GridDataPopover({
               className="grid-data-row"
               key={asset.id}
               onClick={() => {
-                inspectAsset(asset.id, batch.filters, selection, batch);
+                const sourceBatch=batch.ids.includes(asset.id)?batch:{...batch,ids:[...new Set([...batch.ids,...requestedReferences.filter(id=>assetById.has(id))])]};
+                inspectAsset(asset.id, batch.filters, selection, sourceBatch);
                 onClose();
               }}
             >
@@ -256,7 +290,7 @@ export function GridDataPopover({
                 <strong>{asset.title}</strong>
                 {grouped && rowBadge(asset)}
                 <small>
-                  {asset.id.startsWith("haina:") && sciencePaths(asset)[0][1] && "海纳主题 · "}{[...new Set(sciencePaths(asset).map(([topic, term]) => term || topic))].join(" / ")} · {asset.origins.includes("paper")?"论文研究数据":asset.type} ·{" "}
+                  {asset.id.startsWith("haina:") && sciencePaths(asset)[0][1] && "海纳主题 · "}{[...new Set(sciencePaths(asset).map(([topic, term]) => term || topic))].join(" / ")} · {paperRecords.get(asset.id)?.assertionCatalogKind==="metadata-only"?"数据集元数据":asset.origins.includes("paper")?"论文研究数据":asset.type} ·{" "}
                   {spatialRelation(
                     asset,
                     batch.filters,
@@ -269,7 +303,7 @@ export function GridDataPopover({
             </button>
           ))
         )}
-        {!waiting && !loading && !error && (!simulation || page) && !length && (
+        {!waiting && !loading && !error && !referenceError && (!simulation || page) && !length && (
           <p>{grouped&&locationScope==="local"&&category==="全部"?"本格没有可定位数据集，可切换到全球覆盖或范围说明查看关联资料。":"当前网格和筛选条件下没有匹配的数据。"}</p>
         )}
       </div>

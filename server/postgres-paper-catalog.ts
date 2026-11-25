@@ -3,7 +3,18 @@ import type {Pool,PoolClient} from "pg";
 import {validPaperRecord,type PaperRecord} from "../src/domain/paper-record";
 import type {PaperMapEntry,PaperProjectionHead,PaperProjectionResult} from "./paper-projection-contract";
 
-export type CatalogStatus = {complete:boolean;source:string;sourceTotal:number|null;filteredOut:number;updatedAt:string|null};
+export type CatalogStatus = {complete:boolean;source:string;sourceTotal:number|null;filteredOut:number;updatedAt:string|null;metadataSha?:string};
+const assertionMetadataSource="public.dataset_metadata";
+const catalogueSyncLock=7142533;
+export async function withPaperCatalogSync<T>(pool:Pool,work:()=>Promise<T>):
+  Promise<{acquired:true;value:T}|{acquired:false}> {
+  const db=await pool.connect();
+  try {
+    const {rows}=await db.query<{locked:boolean}>("SELECT pg_try_advisory_lock($1::bigint) AS locked",[catalogueSyncLock]);
+    if(!rows[0].locked)return {acquired:false};
+    return {acquired:true,value:await work()};
+  } finally {db.release(true);}
+}
 export type PaperCatalogSnapshot = {records:PaperRecord[];published:{dsKey:string;id:string}[];catalog:CatalogStatus};
 const emptyStatus: CatalogStatus = {complete:false,source:"文献资料已查询记录",sourceTotal:null,filteredOut:0,updatedAt:null};
 type Head = {
@@ -164,12 +175,13 @@ export async function postgresPaperCatalog(pool:Pool,{initializeSchema=true}:{in
         let added=0;
         if (BigInt(stamp)>BigInt(h.floor)) {
           const unique = new Map(records.map(record=>[record.dsKey,record]));
-          const current = (await db.query<{ds_key:string;id:string;watermark:string}>(`
-            SELECT ds_key,id,watermark FROM paper_catalog_current WHERE ds_key=ANY($1::text[])`,[[...unique.keys()]])).rows;
+          const current = (await db.query<{ds_key:string;id:string;watermark:string;sourceOwned:boolean}>(`
+            SELECT c.ds_key,c.id,c.watermark,v.record ? 'assertionCatalogKind' AS "sourceOwned"
+            FROM paper_catalog_current c JOIN paper_catalog_versions v ON v.id=c.id WHERE c.ds_key=ANY($1::text[])`,[[...unique.keys()]])).rows;
           const byKey = new Map(current.map(row=>[row.ds_key,row]));
           for (const record of unique.values()) {
             const old=byKey.get(record.dsKey);
-            if (old && BigInt(old.watermark)>=BigInt(stamp)) continue;
+            if (old && (old.sourceOwned||BigInt(old.watermark)>=BigInt(stamp))) continue;
             await db.query(`INSERT INTO paper_catalog_current(ds_key,id,watermark) VALUES($1,$2,$3)
               ON CONFLICT(ds_key) DO UPDATE SET id=EXCLUDED.id,watermark=EXCLUDED.watermark`,[record.dsKey,record.id,stamp]);
             if (!old) added++;
@@ -183,7 +195,8 @@ export async function postgresPaperCatalog(pool:Pool,{initializeSchema=true}:{in
           [next,[...changes]]);
         if (changes.size || versions) await db.query(`UPDATE paper_catalog_head SET published_count=published_count+$1,
           version_count=version_count+$2,revision_token=$3,generation=$4,generation_token=$5,
-          catalog=CASE WHEN $1::bigint>0 THEN jsonb_set(catalog,'{complete}','false'::jsonb) ELSE catalog END WHERE singleton`,
+          catalog=CASE WHEN $1::bigint>0 AND catalog->>'source'<>'public.dataset_metadata'
+            THEN jsonb_set(catalog,'{complete}','false'::jsonb) ELSE catalog END WHERE singleton`,
           [added,versions,changes.size ? randomUUID() : h.revision_token,next,await advance(db,next)]);
       });
     },
@@ -192,9 +205,68 @@ export async function postgresPaperCatalog(pool:Pool,{initializeSchema=true}:{in
       if (new Set(records.map(r=>r.dsKey)).size !== records.length || !Number.isSafeInteger(info.sourceTotal) ||
         !Number.isSafeInteger(info.filteredOut) || info.filteredOut<0 || records.length+info.filteredOut!==info.sourceTotal)
         throw Error("全量目录的记录数、去重或证据校验未通过。");
-      return transaction(async db=>replacement(db,await head(db,true),{
-        records,published:records.map(r=>({dsKey:r.dsKey,id:r.id})),catalog:{...info,complete:true},
-      }));
+      return transaction(async db=>{
+        const locked=(await db.query<{locked:boolean}>("SELECT pg_try_advisory_xact_lock($1::bigint) AS locked",[catalogueSyncLock])).rows[0].locked;
+        if(!locked)throw Error("断言目录同步已在运行，未替换当前目录。");
+        return replacement(db,await head(db,true),{
+          records,published:records.map(r=>({dsKey:r.dsKey,id:r.id})),catalog:{...info,complete:true},
+        });
+      });
+    },
+    async publishAssertionMetadata(records:PaperRecord[],info:{metadataSha:string;updatedAt:string}) {
+      checkRecords(records);
+      if(!records.length||records.some(row=>!row.assertionCatalogKind||!row.dsKey.startsWith("doi:"))||
+        !/^[a-f0-9]{64}$/.test(info.metadataSha)||!Number.isFinite(Date.parse(info.updatedAt)))
+        throw Error("断言元数据发布缺少可核对的完整快照。");
+      return transaction(async db=>{
+        await db.query(`CREATE TEMP TABLE assertion_metadata_stage (
+          ds_key text COLLATE "C" PRIMARY KEY,id text COLLATE "C" NOT NULL UNIQUE,record jsonb NOT NULL) ON COMMIT DROP`);
+        for(let offset=0;offset<records.length;offset+=250) {
+          const rows=records.slice(offset,offset+250).map(record=>({ds_key:record.dsKey,id:record.id,record}));
+          await db.query(`INSERT INTO assertion_metadata_stage SELECT *
+            FROM jsonb_to_recordset($1::jsonb) AS data(ds_key text,id text,record jsonb)`,[JSON.stringify(rows)]);
+        }
+        const h=await head(db,true);
+        const {rows:[delta]}=await db.query<{changed:string;added:string;retired:string;conflict:boolean}>(`
+          SELECT count(*) FILTER (WHERE c.id IS DISTINCT FROM s.id) AS changed,
+            count(*) FILTER (WHERE c.id IS NULL) AS added,
+            (SELECT count(*) FROM paper_catalog_current existing JOIN paper_catalog_versions v ON v.id=existing.id
+              WHERE v.record ? 'assertionCatalogKind'
+                AND NOT EXISTS (SELECT 1 FROM assertion_metadata_stage n WHERE n.ds_key=existing.ds_key)) AS retired,
+            EXISTS (SELECT 1 FROM assertion_metadata_stage n JOIN paper_catalog_versions v ON v.id=n.id
+              WHERE (v.ds_key,v.record) IS DISTINCT FROM (n.ds_key,n.record)) AS conflict
+          FROM assertion_metadata_stage s LEFT JOIN paper_catalog_current c USING(ds_key)`);
+        if(delta.conflict)throw Error("断言元数据内容 ID 冲突，保留原目录。");
+        const changed=Number(delta.changed),added=Number(delta.added),retired=Number(delta.retired);
+        const preservedCurrent=Number(h.published_count)-records.length+added-retired;
+        if(!changed&&!retired&&h.catalog.source===assertionMetadataSource&&h.catalog.metadataSha===info.metadataSha&&
+          h.catalog.sourceTotal===records.length&&h.catalog.complete)
+          return {...visibleHead(h),state:"unchanged" as const,preservedCurrent,changed,added,retired};
+        const next=nextGeneration(h),watermark=(BigInt(h.clock)+1n).toString();
+        const versions=(await db.query(`INSERT INTO paper_catalog_versions(id,ds_key,record,last_changed_generation)
+          SELECT id,ds_key,record,$1 FROM assertion_metadata_stage ON CONFLICT(id) DO NOTHING`,[next])).rowCount??0;
+        await db.query(`WITH changed AS (
+          SELECT c.id AS old_id,s.id AS new_id FROM assertion_metadata_stage s LEFT JOIN paper_catalog_current c USING(ds_key)
+          WHERE c.id IS DISTINCT FROM s.id), retired AS (
+          SELECT existing.id FROM paper_catalog_current existing JOIN paper_catalog_versions v ON v.id=existing.id
+          WHERE v.record ? 'assertionCatalogKind'
+            AND NOT EXISTS (SELECT 1 FROM assertion_metadata_stage n WHERE n.ds_key=existing.ds_key))
+          UPDATE paper_catalog_versions SET last_changed_generation=$1
+          WHERE id IN (SELECT old_id FROM changed UNION SELECT new_id FROM changed UNION SELECT id FROM retired)`,[next]);
+        if(retired)await db.query(`DELETE FROM paper_catalog_current existing USING paper_catalog_versions v
+          WHERE v.id=existing.id AND v.record ? 'assertionCatalogKind'
+            AND NOT EXISTS (SELECT 1 FROM assertion_metadata_stage n WHERE n.ds_key=existing.ds_key)`);
+        await db.query(`INSERT INTO paper_catalog_current(ds_key,id,watermark)
+          SELECT s.ds_key,s.id,$1 FROM assertion_metadata_stage s LEFT JOIN paper_catalog_current c USING(ds_key)
+          WHERE c.id IS DISTINCT FROM s.id
+          ON CONFLICT(ds_key) DO UPDATE SET id=EXCLUDED.id,watermark=EXCLUDED.watermark`,[watermark]);
+        const catalog:CatalogStatus={complete:true,source:assertionMetadataSource,sourceTotal:records.length,
+          filteredOut:0,metadataSha:info.metadataSha,updatedAt:info.updatedAt};
+        const saved=(await db.query<Head>(`UPDATE paper_catalog_head SET clock=$1,floor=$1,catalog=$2::jsonb,
+          published_count=published_count+$3,version_count=version_count+$4,revision_token=$5,generation=$6,generation_token=$7
+          WHERE singleton RETURNING *`,[watermark,JSON.stringify(catalog),added-retired,versions,randomUUID(),next,await advance(db,next)])).rows[0];
+        return {...visibleHead(saved),state:"published" as const,preservedCurrent,changed,added,retired};
+      });
     },
     async initializeEmpty() {
       return transaction(async db=>{

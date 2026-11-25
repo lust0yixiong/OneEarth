@@ -15,7 +15,8 @@ export function SettingsPage({onBack,resetLayout}:{onBack:()=>void;resetLayout:(
   const { state,patch } = useWorkspace();
   const [dataAccessNavigation,setDataAccessNavigation] = useDataAccessNavigation();
   const revision=useCatalogRevision();
-  const catalogCounts=useMemo(()=>({products:products(assets).size,papers:products(assets.filter(a=>a.origins.includes("paper"))).size}),[revision]);
+  const productCount=useMemo(()=>products(assets).size,[revision]);
+  const paperFeed=state.paperFeed;
   const [executor,setExecutor] = useState(()=>readChatModel().executor);
   const [models,setModels] = useState(()=>{
     const active=readChatModel();
@@ -142,12 +143,14 @@ export function SettingsPage({onBack,resetLayout}:{onBack:()=>void;resetLayout:(
       </section>
       <section aria-labelledby="catalog-settings-heading"><h2 id="catalog-settings-heading"><Database size={19}/>数据目录与分布</h2>
         <dl className="settings-catalog-stats">
-          <div><dt>目录产品</dt><dd>{catalogCounts.products.toLocaleString()}<span>种</span></dd></div>
-          <div><dt>其中论文研究数据</dt><dd>{catalogCounts.papers.toLocaleString()}<span>个</span></dd></div>
+          <div><dt>浏览器已载入产品</dt><dd>{productCount.toLocaleString()}<span>种</span></dd></div>
+          <div><dt>文献资料已发布</dt><dd>{paperFeed && (!paperFeed.error || paperFeed.revision || paperFeed.updatedAt)
+            ? <>{paperFeed.total.toLocaleString()}<span>个数据集</span></> : "—"}</dd></div>
         </dl>
-        <small>统计当前已载入的目录，按数据集身份去重，不随地图筛选变化。</small>
-        {state.paperFeed?.loading && <small role="status">正在载入论文研究数据详情（{state.paperFeed.loaded.toLocaleString()} / {state.paperFeed.total.toLocaleString()}）</small>}
-        {state.paperFeed?.error && <small role="status">{state.paperFeed.error}</small>}
+        <small>文献资料总数来自发布目录，打开线索或资料时按需读取。</small>
+        {paperFeed?.revision && <small title={paperFeed.revision}>目录版本 {paperFeed.revision.slice(0,12)}</small>}
+        {paperFeed?.updatedAt && <small>最近发布 {new Date(paperFeed.updatedAt).toLocaleString()}</small>}
+        {paperFeed?.error && <small role="status">{paperFeed.error}{paperFeed.revision?" · 已保留上次读取的版本":""}</small>}
         {state.hainaFeed && <small>海纳地学专区接口：{state.hainaFeed.total.toLocaleString()} 条；最近同步 {state.hainaFeed.synced?new Date(state.hainaFeed.synced).toLocaleString():"尚未完成"}。</small>}
         {state.hainaFeed?.warning && <small role="status">{state.hainaFeed.warning}</small>}
         <p className="settings-distribution-note">网格分布以绿色深浅表示格内可定位数据集数；热力图和等值线使用同一份网格计数。全球覆盖与目录外包框等元数据范围另行关联，不计入格内精确数量。</p>

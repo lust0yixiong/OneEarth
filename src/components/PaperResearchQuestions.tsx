@@ -11,7 +11,7 @@ export function PaperResearchQuestions({assetId}:{assetId:string}) {
   const [loading,setLoading]=useState(false),[error,setError]=useState("");
   const request=useRef<AbortController|null>(null);
   useEffect(()=>()=>request.current?.abort(),[]);
-  if(record?.questionSource!=="postgres-readonly")return null;
+  if(record?.questionSource!=="postgres-readonly" || record.assertionCatalogKind==="metadata-only")return null;
   async function load() {
     if(loading || cursor===null)return;
     const controller=new AbortController();request.current=controller;

@@ -3,7 +3,7 @@ import {Bookmark,ExternalLink,Globe,HardDrive,ChevronDown,FileText,ArrowUpRight,
 import type {AccessRow} from "../domain/data-access";
 import {observationContent} from "../domain/data-access";
 import {assetById,assetIdentity,type Asset} from "../domain/datasets";
-import {paperId} from "../domain/paper-record";
+import {paperId,paperRecords} from "../domain/paper-record";
 import {PaperEvidenceCard} from "./PaperEvidenceCard";
 import {linkedPapers} from "../domain/answer-sources";
 import {datasetLayers,regionalForDataset} from "../domain/regional-cases";
@@ -67,10 +67,14 @@ export function EntityCards({rows,actions}:{rows:AccessRow[];actions:AccessActio
 function ClueDetail({row,actions,status,rainCoverage}:{row:AccessRow;actions:AccessActions;status:string;rainCoverage?:string}){
   const a=row.asset;
   const description=rainCoverage ? assetById.get(datasetLayers.rain)?.description ?? "可用年月以 OneEarth 发布目录为准。" : a.description;
-  const papers=row.relatedIds.filter(paperId),attached=linkedPapers(assetById.get(a.id));
+  const records=row.relatedIds.filter(paperId);
+  const papers=records.filter(id=>paperRecords.get(id)?.assertionCatalogKind!=="metadata-only");
+  const metadataOnly=records.length>0 && !papers.length;
+  const attached=linkedPapers(assetById.get(a.id));
   return <section className="access-clue-detail" aria-label={a.title+"的依据"}>
     {status?<p role="status">{status}</p>:<>
-      {!papers.length&&<section className="access-dataset-overview"><h3>数据集概览</h3><p>{description}</p><dl>
+      {!papers.length&&<section className="access-dataset-overview"><h3>数据集概览</h3><p>{description}</p>
+        {metadataOnly&&<small>已收录数据集元数据，暂无关联论文用法。</small>}<dl>
         <dt>来源</dt><dd>{a.source}</dd>
         {rainCoverage ? <><dt>OneEarth 降水图层</dt><dd>{rainCoverage}</dd></> :
           a.profile?.coverage&&<><dt>空间与时间</dt><dd>{a.profile.coverage}{a.profile.years&&" · "+a.profile.years.join("—")}</dd></>}

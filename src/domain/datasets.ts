@@ -358,10 +358,11 @@ function registerPaperRecords(records: PaperRecord[], includeInCatalog: boolean)
       continue;
     }
     const n = literatureDisplay(record.need);
+    const metadataOnly=record.assertionCatalogKind==="metadata-only";
     const asset: Asset = {
       id:record.id, caseId:record.id, datasetId:record.dsKey, needIndex:0,
       title:n.product, source:n.source, type:n.type, categories:[n.type], origins:["paper"],
-      status:n.status, description:n.detail, fit:"论文使用记录", why:n.detail,
+      status:metadataOnly?"数据集元数据":n.status, description:n.detail, fit:metadataOnly?"数据集元数据":"论文使用记录", why:n.detail,
       profile:n.profile, url:n.url, tabs:n.tabs, kind:"clue",
     };
     paperRecords.set(record.id,record);
@@ -401,14 +402,16 @@ function replacePublishedPaperRecords(records: PaperRecord[]) {
   else if (removed) catalogChanged();
 }
 
-export async function loadRemoteAssetIds(ids:string[]){
+export async function loadRemoteAssetIds(ids:string[],signal?:AbortSignal){
   const hainaIds=[...new Set(ids.filter(id=>/^haina:\d+$/.test(id)&&!assetById.has(id)))];
   if(hainaIds.length){const c=await loadHainaCatalog(new AbortController().signal);registerHaina(c.records,c.synced,c.endpoint);}
   const paperIds = [...new Set(ids.filter(id=>paperId(id) && (!assetById.has(id)||paperRecords.get(id)?.catalogSummary)))];
   for (let i=0;i<paperIds.length;i+=20) {
-    const res=await fetch("/api/paper-records?ids="+paperIds.slice(i,i+20).join(","));
+    const res=await fetch("/api/paper-records?ids="+paperIds.slice(i,i+20).join(","),{signal});
     if (!res.ok)throw Error("完整论文资料暂时无法读取，请重试。");
-    registerPapers(await res.json(),false);
+    const records=await res.json();
+    signal?.throwIfAborted();
+    registerPapers(records,false);
   }
   const missing=[...new Set(ids)].filter(id=>/^constellation:[a-f0-9]{64}$/.test(id)&&!assetById.has(id));
   for(let i=0;i<missing.length;i+=8){

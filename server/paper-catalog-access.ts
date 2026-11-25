@@ -69,6 +69,7 @@ export function paperCatalogAccess(source: PaperCatalogStorage | FixtureCache,
       signal?.throwIfAborted();
       const record = await get(id);
       if (!record) throw new PaperCatalogError(404);
+      if(record.assertionCatalogKind==="metadata-only")return {data:{dataset:null,papers:[]},cached:true};
       const reader = assertion();
       if (!reader) throw new PaperCatalogError(503,"论文原文连接暂未配置");
       const cached = evidenceCache.get(record.id);
@@ -89,6 +90,7 @@ export function paperCatalogAccess(source: PaperCatalogStorage | FixtureCache,
     async questions(id: unknown, cursor: unknown = "") {
       const record = await get(id);
       if (!record || typeof cursor !== "string" || cursor.length > 3000) throw new PaperCatalogError(400);
+      if(record.assertionCatalogKind==="metadata-only")return {items:[],nextCursor:null};
       const reader = assertion();
       if (!reader) throw new PaperCatalogError(503,"论文研究数据连接暂未配置。");
       try {return await reader.questions(record.dsKey,cursor);}

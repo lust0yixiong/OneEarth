@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AssertionDatasetRow } from "./assertion-postgres";
 import { normalizePaperSpace } from "./earthnano";
-import type { PaperRecord } from "../src/domain/paper-record";
+import type { AssertionCatalogKind, PaperRecord } from "../src/domain/paper-record";
 import { rectangle } from "../src/domain/geo-rectangle";
 import type { Coordinate, EvidenceTab, SourceProfile } from "../src/domain/types";
 
@@ -29,7 +29,8 @@ export function datasetWindow(raw:string|null,official:AssertionDatasetRow["offi
 }
 export function assertionDataset(row:AssertionDatasetRow):{record?:PaperRecord;issues:string[]} {
   const issues:string[]=[];
-  if(!row.usage_paper_id || !row.dataset_id)return {issues:["缺少可核对的数据集用法关联"]};
+  const hasUsage=!!(row.usage_paper_id?.trim()&&row.dataset_id?.trim());
+  const kind:AssertionCatalogKind=hasUsage?"metadata-with-usage":"metadata-only";
   const official=normalizePaperSpace({values:row.official.flatMap(meta=>values(meta.spatial).map(value=>({value})))});
   const raw=row.extent_geographic_bbox;
   const bbox=Array.isArray(raw) && raw.length===4 && raw.every(value=>typeof value==="number" && Number.isFinite(value)) ? raw as number[] : undefined;
@@ -43,21 +44,25 @@ export function assertionDataset(row:AssertionDatasetRow):{record?:PaperRecord;i
     {type:"MultiPolygon",coordinates:[...rectangle(bbox[0],bbox[1],180,bbox[3]).coordinates,...rectangle(-180,bbox[1],bbox[2],bbox[3]).coordinates]} : official.area;
   const window=datasetWindow(row.extent_temporalelement,row.official);
   if(row.extent_temporalelement && !window)issues.push("时间字段尚不能确认为数据覆盖时段");
-  const questions=row.questions.filter(question=>question.question && question.paperId && question.datasetId);
-  const tabs:EvidenceTab[]=[{kind:"table",label:"论文用法（本页）",columns:["论文","角色与用途","变量","研究背景","论文 ID","文内数据集 ID","论文 DOI"],
-    rows:[[row.paper_title||row.usage_paper_id,row.role_function||"",row.variables||"",row.study_context||"",row.usage_paper_id,row.dataset_id,row.paper_id===row.usage_paper_id?row.paper_doi||"":""]]},
-    {kind:"table",label:"数据集时空元数据",columns:["字段","来源值","说明"],rows:[
-      ["数据集标识",row.ds_key,"规范身份"],["数据集空间范围",JSON.stringify(raw),conflict?"与官方坐标冲突，未作为覆盖范围":"范围顺序：西、南、东、北"],
+  const questions=hasUsage?row.questions.filter(question=>question.question && question.paperId && question.datasetId):[];
+  const tabs:EvidenceTab[]=[{kind:"table",label:"数据集时空元数据",columns:["字段","来源值","说明"],rows:[
+      ["数据集标识",row.ds_key,"源库 DOI 身份"],["元数据来源","dataset_metadata","断言库源元数据记录"],
+      ["数据集标题",row.title?.trim()||row.ds_key,row.title?.trim()?"元数据标题":"未记录标题，显示原身份"],
+      ["发布方",row.publisher||"未提供","源库元数据"],
+      ["数据集空间范围",JSON.stringify(raw),conflict?"与官方坐标冲突，未作为覆盖范围":"范围顺序：西、南、东、北"],
       ["数据集覆盖时段",row.extent_temporalelement||"未提供",window?"数据集覆盖字段":"时段待核"],
       ["数据集版次",row.version||"未提供","不从论文发表年份推定数据年份"]]}];
+  if(hasUsage)tabs.unshift({kind:"table",label:"论文用法（本页）",columns:["论文","角色与用途","变量","研究背景","论文 ID","文内数据集 ID","论文 DOI"],
+    rows:[[row.paper_title||row.usage_paper_id!,row.role_function||"",row.variables||"",row.study_context||"",row.usage_paper_id!,row.dataset_id!,row.paper_id===row.usage_paper_id?row.paper_doi||"":""]]});
   if(questions.length)tabs.push({kind:"table",label:"关联论文研究问题（示例）",columns:["研究问题","论文","论文 ID","研究问题 ID","文内数据集 ID","论文 DOI"],
     rows:questions.map(question=>[question.question,question.paperTitle,question.paperId,question.rqId,question.datasetId])});
   const doi=row.ds_key.startsWith("doi:")?"https://doi.org/"+row.ds_key.slice(4):undefined;
   const title=row.title?.trim()||row.ds_key;
-  const detail=[row.abstract||"",row.role_function||"",questions[0]?.question||""].filter(Boolean).join("\n");
-  const data={dsKey:row.ds_key,papers:Math.max(1,Number(row.n_papers)||1),paperTitle:row.paper_title||row.usage_paper_id,studyContext:row.study_context||"",points:official.points,
+  const detail=[row.abstract||"",hasUsage?row.role_function||"":"",questions[0]?.question||""].filter(Boolean).join("\n");
+  const data={assertionCatalogKind:kind,dsKey:row.ds_key,papers:hasUsage?Math.max(1,Number(row.n_papers)||1):0,
+    paperTitle:hasUsage?row.paper_title||row.usage_paper_id!:"",studyContext:hasUsage?row.study_context||"":"",points:official.points,
     researchQuestions:questions,questionSource:"postgres-readonly" as const,
-    need:{name:"论文研究数据",product:title,datasetId:row.ds_key,type:"论文研究数据",source:"EarthNano 论文断言库",status:"有论文用法记录",detail,url:doi,tabs,
+    need:{name:"论文研究数据",product:title,datasetId:row.ds_key,type:"论文研究数据",source:"EarthNano 论文断言库",status:hasUsage?"有论文用法记录":"有数据集元数据",detail,url:doi,tabs,
       profile:{role:"data" as const,spatial:"coverage" as const,area,areaBasis:"bounding-box" as const,extent:world?"world" as const:undefined,
         coverage:[world?"数据集元数据标注全球范围":area?"数据集元数据范围 "+(valid&&!conflict?bbox!.join(", "):official.coverage):official.points.length?official.coverage:"数据集空间范围待核",
           window?"覆盖时段 "+row.extent_temporalelement:"时间覆盖待核"].join(" · "),
