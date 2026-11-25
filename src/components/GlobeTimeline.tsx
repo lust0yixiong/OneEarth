@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
-import { CalendarRange, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { useId, useMemo, useState } from "react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { Filters } from "../domain/types";
 import { windowFilters, windowLabel } from "../domain/time-window";
 import type { Observation } from "../domain/push-observations";
-import "../styles/globe-timeline.css";
+import {TimelinePickerButton,TimelinePickerPanel} from "./TimelinePicker";
 
 type Props = {
   onAskTime:()=>void;
@@ -23,6 +23,7 @@ export function GlobeTimeline({
   years,
   records,
 }: Props) {
+  const panelId = useId();
   const [open, setOpen] = useState(false);
   const [range, setRange] = useState<[string, string]>(["", ""]);
   const times = useMemo(() => [...new Set(records.map((r) => Date.parse(r.observedAt))
@@ -120,10 +121,7 @@ export function GlobeTimeline({
   const [first, last] = range.map(decode);
   return (
     <div className="globe-timeline" role="group" aria-label="观测时间轴">
-      <button className="time-toggle" aria-expanded={open} onClick={toggle}>
-        <CalendarRange size={14} />
-        时间轴 <b>{label}</b>
-      </button>
+      <TimelinePickerButton label={label} open={open} toggle={toggle} panelId={panelId}/>
       <button
         aria-label="上一时段"
         disabled={!hasInterval || (focused && start <= lo)}
@@ -180,7 +178,7 @@ export function GlobeTimeline({
         </button>
       )}
       {open && (
-        <div className="time-range-panel">
+        <TimelinePickerPanel id={panelId}>
           <strong>
             {mode === "scene"
               ? "采集时间 · UTC"
@@ -248,7 +246,7 @@ export function GlobeTimeline({
               </button>
             </>
           )}
-        </div>
+        </TimelinePickerPanel>
       )}
     </div>
   );

@@ -3134,14 +3134,6 @@ html[data-panel-interaction="move"] * {
 
 /* Haina forest embedding layer: dates stay in the shared timeline block,
    the legend replaces the count ramp, and provenance reuses the dataset inspector. */
-.forest-date-controls {min-width:0}
-.forest-date-pickers {display:flex;flex-wrap:wrap;align-items:center;gap:5px 10px;margin-bottom:4px;font-size:10px;color:#315944}
-.forest-date-pickers label {display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
-.forest-date-pickers input {max-width:130px;border:1px solid #c9d8d0;border-radius:5px;background:#fff;color:inherit;padding:2px 4px;font:inherit}
-.forest-date-pickers [role="status"] {color:#5c665f}
-.forest-timeline .forest-time-label {display:inline-flex;align-items:center;gap:6px;padding:3px;font-size:11px;color:inherit}
-.forest-timeline .forest-time-label b {font-weight:550;white-space:nowrap}
-.forest-timeline .time-track span {background:#3c7867}
 .forest-legend-bar {flex-wrap:wrap;gap:6px 12px !important}
 .forest-legend-bar > span {display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .forest-legend-title {font-weight:550;color:#315944}
