@@ -196,7 +196,7 @@ try {
   const shortPreview = mobile.locator(".data-inspector");
   const canvas = mobile.locator("canvas[data-painted]").first();
   await mobileDate.press("Escape");
-  for (const [width, height] of [[390, 650], [320, 568]]) {
+  for (const [width, height] of [[390, 650], [320, 568], [700, 600]]) {
     await mobile.setViewportSize({width,height});
     const layout = async () => Promise.all([mobileTimeline.boundingBox(), canvas.boundingBox(),
       shortPreview.evaluate(el => {
