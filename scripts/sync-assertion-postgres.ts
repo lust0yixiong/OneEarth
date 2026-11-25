@@ -2,7 +2,7 @@ import { mkdirSync,renameSync,rmSync,writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertionReader, assertionPgConfig } from "../server/assertion-postgres";
+import { assertionReader, assertionPgConfig, assertionCatalogSource } from "../server/assertion-postgres";
 import { assertionDataset } from "../server/assertion-dataset";
 import {postgresPaperCatalog,withPaperCatalogSync} from "../server/postgres-paper-catalog";
 import {productDatabase} from "../server/product-database";
@@ -55,7 +55,7 @@ async function main(){
       (opts.expectedCount!==undefined&&source.total!==opts.expectedCount)||(opts.expectedSha&&source.metadataSha!==opts.expectedSha))
       throw Error("源快照的元数据条数或身份 SHA-256 与校验条件不一致，已保留原目录。");
     const linkedDatasets=records.filter(record=>record.assertionCatalogKind==="metadata-with-usage").length;
-    return {records,summary:{...source,readMs:Date.now()-started,source:"public.dataset_metadata",linkedDatasets,metadataOnly:source.total-linkedDatasets,
+    return {records,summary:{...source,readMs:Date.now()-started,source:assertionCatalogSource,linkedDatasets,metadataOnly:source.total-linkedDatasets,
       namedDatasets:records.filter(record=>record.need.product!==record.dsKey).length,excluded:0,
       datasetsWithAreas:records.filter(record=>record.need.profile?.area).length,
       datasetsWithPoints:records.filter(record=>record.points.length).length,

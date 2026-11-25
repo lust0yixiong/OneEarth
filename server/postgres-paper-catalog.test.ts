@@ -189,7 +189,8 @@ test("real discovery PostgreSQL migrates v2, preserves publication order, and se
       CREATE TABLE ev_axis(ds_key text,dataset_id text,paper_id text,doc_id integer,paper_head text,role_function text,variables text,study_context text);
       CREATE TABLE rc_member(ds_key text,paper_id text,rq_id text,dataset_id text);
       CREATE TABLE rc_recipe(paper_id text,rq_id text,paper_title text,task_text text);
-      CREATE TABLE ds_meta(ds_key text,source text,spatial text,temporal text);
+      CREATE TABLE ds_meta(ds_key text,source text,spatial text,temporal text,title text,publisher text,
+        year integer,version text,resource_type text,landing text,description text);
       INSERT INTO dataset_metadata VALUES ('doi:pg-fixture','Fixture PostgreSQL dataset','v1','Fixture','description','[0,0,5,5]',
         '2020','[]','paper-one','10.0/paper');
       INSERT INTO ds_axis_meta VALUES('doi:pg-fixture',1);
@@ -197,29 +198,52 @@ test("real discovery PostgreSQL migrates v2, preserves publication order, and se
         ('name:out-of-scope','local-term','paper-one',2,'A paper','another usage','temperature','fixture');
       INSERT INTO dataset_metadata VALUES ('doi:standalone','Metadata with no documented use','v1','Fixture','description',
         NULL,NULL,'[]','unverified-paper','10.0/unverified');
+      INSERT INTO ds_meta(ds_key,source,title,version) VALUES
+        ('doi:pg-fixture','datacite','Weaker title','indexed v0'),('doi:standalone','datacite','Standalone','v1'),
+        ('doi:new-from-source','datacite','Additional source title','A'),('doi:new-from-source','publisher','Additional alternate title','B'),
+        ('doi:new-from-source','publisher','Additional alternate title','B');
+      INSERT INTO ds_axis_meta VALUES ('doi:new-from-source',1);
+      INSERT INTO ev_axis VALUES ('doi:new-from-source','local-use','paper-extra',3,'Usage without richer catalogue','observed','wind','fixture');
     `);
     const sourceEnv={
       ONEEARTH_ASSERTION_PG_HOST:work,ONEEARTH_ASSERTION_PG_PORT:"5432",ONEEARTH_ASSERTION_PG_USER:"paper_fixture",
       ONEEARTH_ASSERTION_PG_DATABASE:"assertion_fixture",
     };
     const sync=(args:string[]=[])=>cli(args,"postgres","scripts/sync-assertion-postgres.ts",sourceEnv);
-    const formalPg=sync(["--expected-count","2"]);
+    const formalPg=sync(["--expected-count","3"]);
     assert.equal(formalPg.readOnly,true);
     assert.equal(formalPg.state,"published");
-    assert.equal(formalPg.linkedDatasets,1);
+    assert.equal(formalPg.linkedDatasets,2);
+    assert.equal(formalPg.source,"public.ds_meta");
+    assert.equal(formalPg.sourceRows,5);
+    assert.equal(formalPg.enriched,2);
+    assert.equal(formalPg.dsMetaOnly,1);
     assert.equal(formalPg.metadataOnly,1);
     assert.equal(formalPg.preservedCurrent,1);
-    assert.equal(formalPg.versionCount,5);
-    assert.equal(formalPg.publishedCount,3);
+    assert.equal(formalPg.versionCount,6);
+    assert.equal(formalPg.publishedCount,4);
     const current=(await papers.page("",10)).records;
     assert.ok(current.some(record=>record.id===C.id));
     assert.ok(!current.some(record=>record.dsKey==="name:out-of-scope"));
+    const extra=current.find(record=>record.dsKey==="doi:new-from-source")!;
+    assert.equal(extra.assertionCatalogKind,"metadata-with-usage");
+    assert.equal(extra.need.tabs.find(tab=>tab.label==="断言源元数据（各来源原字段）")?.rows?.length,2);
     const quiet=current.find(record=>record.dsKey==="doi:standalone")!;
     assert.equal(quiet.assertionCatalogKind,"metadata-only");
     assert.equal(quiet.papers,0);
     assert.equal(quiet.paperTitle,"");
     const quietCatalog=paperCatalogAccess(papers,{assertion:()=>assert.fail("metadata-only triggered an upstream evidence call")});
-    assert.deepEqual((await quietCatalog.evidence(quiet.id)).data,{dataset:null,papers:[]});
+    const quietEvidence=(await quietCatalog.evidence(quiet.id)).data;
+    assert.equal(quietEvidence.dataset?.title,quiet.need.product);
+    assert.equal(quietEvidence.dataset?.version,"v1");
+    assert.deepEqual(quietEvidence.papers,[]);
+    const paperCatalog=paperCatalogAccess(papers,{assertion:()=>({questions:async()=>({items:[],nextCursor:null}),
+      evidence:async(_key,ids)=>({dataset:null,papers:ids.map(identity=>({...identity,title:"A real linked paper",
+        abstract:null,usage:"reported use",variables:null,context:null,quotes:[]}))})})});
+    const extraEvidence=(await paperCatalog.evidence(extra.id)).data;
+    assert.equal(extraEvidence.dataset?.title,extra.need.product);
+    assert.equal(extraEvidence.dataset?.version,"A");
+    assert.equal(extraEvidence.papers[0].paperId,"paper-extra");
     assert.deepEqual(await quietCatalog.questions(quiet.id),{items:[],nextCursor:null});
     const noop=sync();
     assert.equal(noop.state,"unchanged");
@@ -231,9 +255,9 @@ test("real discovery PostgreSQL migrates v2, preserves publication order, and se
 
     const beganBeforeUpdate=await papers.beginLookup();
     await upstream.query("UPDATE dataset_metadata SET version='v2' WHERE ds_key='doi:pg-fixture'");
-    await upstream.query("DELETE FROM dataset_metadata WHERE ds_key='doi:standalone'");
-    await upstream.query("INSERT INTO dataset_metadata VALUES ('doi:new-metadata','New metadata',NULL,'Fixture','description',NULL,NULL,'[]',NULL,NULL)");
-    assert.throws(()=>sync(["--expected-count","3"]),/条数或身份 SHA-256/);
+    await upstream.query("DELETE FROM ds_meta WHERE ds_key='doi:standalone'");
+    await upstream.query("INSERT INTO ds_meta(ds_key,source,title) VALUES ('doi:new-metadata','new source','New metadata')");
+    assert.throws(()=>sync(["--expected-count","4"]),/条数或身份 SHA-256/);
     assert.equal((await papers.status()).generation,formalPg.generation);
     assert.equal((await papers.getMany([quiet.id])).length,1);
     const updated=sync();

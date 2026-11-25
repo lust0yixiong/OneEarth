@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type pg from "pg";
 import { assertionPgConfig, assertionReader, type AssertionDatasetRow } from "../../server/assertion-postgres";
 import { assertionDataset, datasetWindow } from "../../server/assertion-dataset";
+import { paperCatalogAccess } from "../../server/paper-catalog-access";
 import { validPaperRecord } from "./paper-record";
 import { registerPapers } from "./datasets";
 import { emptyFilters, spatialEntries } from "./spatial";
@@ -33,7 +34,7 @@ test("PostgreSQL source reads enforce session and transaction read-only mode and
   client.query=async(sql:string)=>{statements.push(sql);if(sql.includes("current_setting"))return {rows:[{transaction_read_only:"off",default_transaction_read_only:"on"}]};return {rows:[]};};
   await assert.rejects(reader.snapshot(()=>{}),/只读/);
   assert.equal(statements.at(-1),"ROLLBACK");
-  assert.ok(!statements.some(sql=>sql.includes("FROM public.dataset_metadata")),"a failed read-only check prevents source access");
+  assert.ok(!statements.some(sql=>sql.includes("FROM public.ds_meta")),"a failed read-only check prevents source access");
 });
 
 test("dataset coverage, version and real research-question identifiers remain independent of study context",()=>{
@@ -104,10 +105,85 @@ test("a fixed source key without its metadata row aborts the read-only snapshot"
     statements.push(sql);
     if(sql.includes("current_setting"))return {rows:[{transaction_read_only:"on",default_transaction_read_only:"on"}]};
     if(sql.includes("txid_current_snapshot"))return {rows:[{checkedAt:new Date("2026-01-01T00:00:00Z"),snapshot:"1:1:"}]};
-    if(sql.includes("SELECT DISTINCT ds_key"))return {rows:[{ds_key:row.ds_key}]};
+    if(sql.includes("FROM public.ds_meta GROUP BY"))return {rows:[{ds_key:row.ds_key,source_rows:1}]};
     return {rows:[]};
   },release(){}};
   const reader=assertionReader({}, {connect:async()=>client,end:async()=>{}} as unknown as Pick<pg.Pool,"connect"|"end">);
   await assert.rejects(reader.snapshot(()=>assert.fail("an incomplete page must not be accepted")),/分页/);
   assert.equal(statements.at(-1),"ROLLBACK");
+});
+
+test("ds_meta-only records retain conflicting source descriptions without inventing coverage or usage",()=>{
+  const spatial=(lon:number)=>JSON.stringify([{raw_kind:"geoLocations",points:[[45,lon]]}]);
+  const collected=(year:string)=>JSON.stringify([{date_type:"Collected",begin:year,end:year}]);
+  const sourceA={source:"repository-a",title:"Original metadata title",version:"V1",publisher:"Research archive",
+    year:2025,landing:"https://example.org/catalogue",spatial:spatial(110),temporal:collected("2022")};
+  const sourceB={source:"repository-b",title:"Alternate wording",version:"V2",publisher:"Another index",
+    year:2026,landing:"https://example.org/archive?signature=private",spatial:spatial(111),temporal:collected("2023")};
+  const raw={...row,rich_metadata:false,title:null,abstract:null,version:null,publisher:null,usage_paper_id:null,dataset_id:null,
+    extent_geographic_bbox:null,extent_temporalelement:null,official:[sourceB,sourceA,sourceB]};
+  const result=assertionDataset(raw);
+  const record=result.record!;
+  assert.ok(validPaperRecord(record));
+  assert.equal(record.assertionCatalogKind,"metadata-only");
+  assert.equal(record.need.product,sourceA.title);
+  assert.deepEqual(record.points,[]);
+  assert.equal(record.need.profile?.utcWindow,undefined);
+  assert.ok(result.issues.some(issue=>issue.includes("时间覆盖声明不一致")));
+  assert.ok(result.issues.some(issue=>issue.includes("空间范围不一致")));
+  const notes=record.need.tabs.find(tab=>tab.label==="断言源元数据（各来源原字段）")!;
+  assert.deepEqual(notes.rows?.map(cells=>[cells[0],cells[3]]),[["repository-a","V1"],["repository-b","V2"]]);
+  assert.doesNotMatch(JSON.stringify(notes),/signature=private/);
+  assert.equal(assertionDataset({...raw,official:[sourceA,sourceB]}).record?.id,record.id);
+  const timing=assertionDataset({...raw,official:[sourceA]}).record!;
+  assert.deepEqual(timing.need.profile?.years,[2022,2022]);
+  assert.deepEqual(timing.points,[[110,45]]);
+  const noTitle=assertionDataset({...raw,official:[{...sourceA,title:null,temporal:JSON.stringify([{date_type:"Issued",begin:"2025"}])}]}).record!;
+  assert.equal(noTitle.need.product,row.ds_key);
+  assert.equal(noTitle.need.profile?.utcWindow,undefined);
+});
+
+test("published richer metadata still takes its title, version and scope from dataset_metadata",()=>{
+  const alternative={source:"source-index",title:"Different indexed title",version:"2024-copy",
+    spatial:null,temporal:JSON.stringify([{date_type:"Issued",begin:"2024"}])};
+  const rich=assertionDataset({...row,rich_metadata:true,official:[alternative]}).record!;
+  const old=assertionDataset({...row,official:[{source:"source-index",spatial:null,temporal:alternative.temporal}]}).record!;
+  assert.equal(rich.id,old.id);
+  assert.equal(rich.need.product,row.title);
+  assert.deepEqual(rich.need.profile?.years,[2013,2021]);
+});
+
+
+test("published ds_meta evidence returns stored metadata and reads papers only for real usage",async()=>{
+  const metadata={source:"original-archive",title:"Dataset at its repository",publisher:"Public archive",version:"v3",
+    resourceType:"Dataset",description:"Repository summary.",spatial:null,temporal:null};
+  const raw={...row,rich_metadata:false,official:[metadata]};
+  const linked=assertionDataset(raw).record!;
+  const quiet=assertionDataset({...raw,usage_paper_id:null,dataset_id:null}).record!;
+  const records=new Map([[linked.id,linked],[quiet.id,quiet]]);
+  let reads=0;
+  const catalog=paperCatalogAccess({
+    async getMany(ids){return ids.flatMap(id=>records.get(id)||[]);},
+    async page(){assert.fail("direct lookup must not page the catalog");},
+    async beginLookup(){assert.fail("direct lookup must not search");},
+    async publishLookup(){assert.fail("direct lookup must not publish");},
+  },{
+    assertion:()=>({
+      async evidence(dsKey,identities){
+        reads++;
+        assert.equal(dsKey,linked.dsKey);
+        assert.deepEqual(identities,[{paperId:"paper-1",datasetId:"D1"}]);
+        return {dataset:null,papers:[{paperId:"paper-1",datasetId:"D1",title:"Scientific study",abstract:null,usage:null,variables:null,context:null,quotes:[]}]};
+      },
+      async questions(){assert.fail("quick preview must not read questions");},
+    }),
+  });
+  const stored={title:metadata.title,description:metadata.description,publisher:metadata.publisher,version:metadata.version,
+    resourceType:metadata.resourceType,spatialResolution:null,temporalResolution:null};
+  assert.deepEqual((await catalog.evidence(quiet.id)).data,{dataset:stored,papers:[]});
+  assert.equal(reads,0);
+  const evidence=(await catalog.evidence(linked.id)).data;
+  assert.deepEqual(evidence.dataset,stored);
+  assert.deepEqual(evidence.papers.map(paper=>paper.paperId),["paper-1"]);
+  assert.equal(reads,1);
 });

@@ -2,9 +2,10 @@ import {randomUUID} from "node:crypto";
 import type {Pool,PoolClient} from "pg";
 import {validPaperRecord,type PaperRecord} from "../src/domain/paper-record";
 import type {PaperMapEntry,PaperProjectionHead,PaperProjectionResult} from "./paper-projection-contract";
+import {assertionCatalogSource} from "./assertion-postgres";
 
 export type CatalogStatus = {complete:boolean;source:string;sourceTotal:number|null;filteredOut:number;updatedAt:string|null;metadataSha?:string};
-const assertionMetadataSource="public.dataset_metadata";
+const previousAssertionMetadataSource="public.dataset_metadata";
 const catalogueSyncLock=7142533;
 export async function withPaperCatalogSync<T>(pool:Pool,work:()=>Promise<T>):
   Promise<{acquired:true;value:T}|{acquired:false}> {
@@ -195,9 +196,10 @@ export async function postgresPaperCatalog(pool:Pool,{initializeSchema=true}:{in
           [next,[...changes]]);
         if (changes.size || versions) await db.query(`UPDATE paper_catalog_head SET published_count=published_count+$1,
           version_count=version_count+$2,revision_token=$3,generation=$4,generation_token=$5,
-          catalog=CASE WHEN $1::bigint>0 AND catalog->>'source'<>'public.dataset_metadata'
+          catalog=CASE WHEN $1::bigint>0 AND catalog->>'source' NOT IN ($6,$7)
             THEN jsonb_set(catalog,'{complete}','false'::jsonb) ELSE catalog END WHERE singleton`,
-          [added,versions,changes.size ? randomUUID() : h.revision_token,next,await advance(db,next)]);
+          [added,versions,changes.size ? randomUUID() : h.revision_token,next,await advance(db,next),
+            previousAssertionMetadataSource,assertionCatalogSource]);
       });
     },
     async replaceCatalog(records:PaperRecord[],info:Omit<CatalogStatus,"complete">) {
@@ -239,7 +241,7 @@ export async function postgresPaperCatalog(pool:Pool,{initializeSchema=true}:{in
         if(delta.conflict)throw Error("断言元数据内容 ID 冲突，保留原目录。");
         const changed=Number(delta.changed),added=Number(delta.added),retired=Number(delta.retired);
         const preservedCurrent=Number(h.published_count)-records.length+added-retired;
-        if(!changed&&!retired&&h.catalog.source===assertionMetadataSource&&h.catalog.metadataSha===info.metadataSha&&
+        if(!changed&&!retired&&h.catalog.source===assertionCatalogSource&&h.catalog.metadataSha===info.metadataSha&&
           h.catalog.sourceTotal===records.length&&h.catalog.complete)
           return {...visibleHead(h),state:"unchanged" as const,preservedCurrent,changed,added,retired};
         const next=nextGeneration(h),watermark=(BigInt(h.clock)+1n).toString();
@@ -260,7 +262,7 @@ export async function postgresPaperCatalog(pool:Pool,{initializeSchema=true}:{in
           SELECT s.ds_key,s.id,$1 FROM assertion_metadata_stage s LEFT JOIN paper_catalog_current c USING(ds_key)
           WHERE c.id IS DISTINCT FROM s.id
           ON CONFLICT(ds_key) DO UPDATE SET id=EXCLUDED.id,watermark=EXCLUDED.watermark`,[watermark]);
-        const catalog:CatalogStatus={complete:true,source:assertionMetadataSource,sourceTotal:records.length,
+        const catalog:CatalogStatus={complete:true,source:assertionCatalogSource,sourceTotal:records.length,
           filteredOut:0,metadataSha:info.metadataSha,updatedAt:info.updatedAt};
         const saved=(await db.query<Head>(`UPDATE paper_catalog_head SET clock=$1,floor=$1,catalog=$2::jsonb,
           published_count=published_count+$3,version_count=version_count+$4,revision_token=$5,generation=$6,generation_token=$7

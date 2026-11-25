@@ -1,6 +1,6 @@
 import {literatureDisplay} from "../src/domain/literature-label";
 import {randomUUID} from "node:crypto";
-import {paperCatalogSummary, paperId, paperMapSummary, type PaperDatasetEvidence} from "../src/domain/paper-record";
+import {paperCatalogSummary, paperId, paperMapSummary, type PaperDatasetEvidence, type PaperRecord} from "../src/domain/paper-record";
 import {configuredAssertionReader} from "./assertion-postgres";
 import {searchPapers, type paperCache} from "./earthnano";
 import {PaperCatalogUninitialized,type PaperCatalogStorage} from "./postgres-paper-catalog";
@@ -10,6 +10,29 @@ export class PaperCatalogError extends Error {
 }
 
 type FixtureCache = Pick<ReturnType<typeof paperCache>,"get"|"page"|"dataVersion"|"publicationRevision"|"saveBatch">;
+
+function storedDatasetMetadata(record:PaperRecord):PaperDatasetEvidence["dataset"] {
+  if(!record.assertionCatalogKind)return null;
+  const rows=record.need.tabs.find(tab=>tab.kind==="table"&&tab.label==="数据集时空元数据")?.rows;
+  if(!rows?.length)return null;
+  const fields=new Map(rows.map(([name,value])=>[name,value]));
+  const sources=fields.get("元数据来源")==="ds_meta"?record.need.tabs.find(tab=>tab.label==="断言源元数据（各来源原字段）"):undefined;
+  function text(value:unknown){
+    return typeof value==="string"&&value.trim()&&value!=="未提供"?value:null;
+  }
+  const titleColumn=sources?.columns?.indexOf("标题")??-1;
+  const representative=sources?.rows?.find(row=>text(row[titleColumn]))??sources?.rows?.[0];
+  function sourceField(name:string){
+    const index=sources?.columns?.indexOf(name)??-1;
+    return text(representative?.[index]);
+  }
+  return {
+    title:record.need.product,
+    description:sourceField("数据描述（有界摘录）")??(record.assertionCatalogKind==="metadata-only"?record.need.detail||null:null),
+    publisher:text(fields.get("发布方")),version:text(fields.get("数据集版次")),resourceType:sourceField("资源类型"),
+    spatialResolution:null,temporalResolution:null,
+  };
+}
 
 export function paperCatalogAccess(source: PaperCatalogStorage | FixtureCache,
   {lookup = searchPapers, assertion = configuredAssertionReader}: {
@@ -69,7 +92,8 @@ export function paperCatalogAccess(source: PaperCatalogStorage | FixtureCache,
       signal?.throwIfAborted();
       const record = await get(id);
       if (!record) throw new PaperCatalogError(404);
-      if(record.assertionCatalogKind==="metadata-only")return {data:{dataset:null,papers:[]},cached:true};
+      const stored=storedDatasetMetadata(record);
+      if(record.assertionCatalogKind==="metadata-only")return {data:{dataset:stored,papers:[]},cached:true};
       const reader = assertion();
       if (!reader) throw new PaperCatalogError(503,"论文原文连接暂未配置");
       const cached = evidenceCache.get(record.id);
@@ -77,7 +101,8 @@ export function paperCatalogAccess(source: PaperCatalogStorage | FixtureCache,
       const identities = (record.need.tabs.find(t => t.label === "论文用法（本页）")?.rows || [])
         .flatMap(row => typeof row[4] === "string" && typeof row[5] === "string" ? [{paperId:row[4],datasetId:row[5]}] : []);
       try {
-        const data = await reader.evidence(record.dsKey,identities);
+        const fetched = await reader.evidence(record.dsKey,identities);
+        const data = fetched.dataset || !stored ? fetched : {...fetched,dataset:stored};
         signal?.throwIfAborted();
         evidenceCache.set(record.id,{time:Date.now(),data});
         if (evidenceCache.size > 128) evidenceCache.delete(evidenceCache.keys().next().value!);
