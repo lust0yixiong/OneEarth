@@ -192,7 +192,39 @@ try {
   ]);
   assert.ok(dockedPanel.y + dockedPanel.height <= preview.y, "停靠时日期弹层不覆盖资料速览");
   if (evidence) await mobile.screenshot({path:join(evidence,"mobile-docked-date-picker.png")});
-  await mobilePanel.getByLabel("森林图层日期", { exact: true }).press("Escape");
+  const mobileDate = mobilePanel.getByLabel("森林图层日期", { exact: true });
+  const shortPreview = mobile.locator(".data-inspector");
+  const canvas = mobile.locator("canvas[data-painted]").first();
+  await mobileDate.press("Escape");
+  for (const [width, height] of [[390, 650], [320, 568]]) {
+    await mobile.setViewportSize({width,height});
+    const layout = async () => Promise.all([mobileTimeline.boundingBox(), canvas.boundingBox(),
+      shortPreview.evaluate(el => {
+        const box=el.getBoundingClientRect();
+        return {x:box.x,y:box.y,width:box.width,height:box.height,scroll:el.scrollTop};
+      }),
+    ]);
+    const initial = await layout();
+    await geometry(mobilePicker, width);
+    await shortPreview.waitFor({state:"hidden"});
+    assert.equal(await shortPreview.count(), 1, "速览仍挂载");
+    assert.deepEqual(await layout(), initial, "临时收起速览保留原布局和滚动位置");
+    assert.equal(await mobileDate.evaluate(el => document.activeElement === el), true);
+    if (evidence) await mobile.screenshot({path:join(evidence,`dock-${width}x${height}-date.png`)});
+    if (width === 390) {
+      await mobile.setViewportSize({width,height:844});
+      await shortPreview.waitFor({state:"visible"});
+      await mobileDate.waitFor();
+      await mobile.setViewportSize({width,height});
+      await shortPreview.waitFor({state:"hidden"});
+    }
+    await mobileDate.press("Escape");
+    await shortPreview.waitFor({state:"visible"});
+    assert.deepEqual(await layout(), initial);
+    assert.equal(await mobilePicker.evaluate(el => document.activeElement === el), true);
+    if (evidence) await mobile.screenshot({path:join(evidence,`dock-${width}x${height}-restored.png`)});
+    console.log(`PASS ${width}×${height} dock switches without layout movement and restores viewport and focus`);
+  }
   await mobile.getByRole("button", {name:"关闭数据速览",exact:true}).click();
   await mobile.setViewportSize({ width: 320, height: 720 });
   await geometry(mobilePicker, 320);

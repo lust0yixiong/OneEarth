@@ -169,6 +169,7 @@
 }
 @media (max-width: 600px) {
   .forest-timeline > button { min-inline-size: 30px; min-block-size: 30px; }
+  .main-workspace:has(> .map-tools-dock .forest-timeline[data-preview-covered]) > .data-inspector { visibility: hidden; }
 }
 @media (max-width: 360px) {
   .forest-timeline :is(.time-caption, .forest-time-caption) { display: none; }

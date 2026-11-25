@@ -1,4 +1,4 @@
-import {useEffect,useId,useRef,useState} from "react";
+import {useEffect,useId,useLayoutEffect,useRef,useState} from "react";
 import {ChevronLeft,ChevronRight,Pause,Play} from "lucide-react";
 import {isForestDate,type HainaForestManifest} from "../domain/regional-cases";
 import {TimelinePickerButton,TimelinePickerPanel} from "./TimelinePicker";
@@ -12,6 +12,7 @@ export function ForestTimeline({manifest,date,playing,choose,toggle}:{
   const input=useRef<HTMLInputElement>(null);
   const panelId=useId();
   const [open,setOpen]=useState(false);
+  const [previewCovered,setPreviewCovered]=useState(false);
   const [draft,setDraft]=useState<{kind:"date"|"month";value:string}>();
   const frames=manifest.frames,total=frames.length;
   const end=frames.at(-1)!.date,start=frames[0].date;
@@ -32,6 +33,24 @@ export function ForestTimeline({manifest,date,playing,choose,toggle}:{
     return ()=>document.removeEventListener("pointerdown",dismiss);
   },[open]);
 
+  useLayoutEffect(()=>{
+    if(!open)return;
+    const dock=root.current?.closest(".map-tools-dock");
+    const workspace=dock?.parentElement;
+    const preview=workspace?.querySelector(":scope > .data-inspector");
+    const panel=document.getElementById(panelId);
+    if(!workspace || !preview || !panel)return;
+
+    const measure=()=>{
+      const a=panel.getBoundingClientRect(), b=preview.getBoundingClientRect();
+      setPreviewCovered(a.left<b.right && a.right>b.left && a.top<b.bottom && a.bottom>b.top);
+    };
+    measure();
+    const resize=new ResizeObserver(measure);
+    for(const element of [workspace,preview,panel])resize.observe(element);
+    return ()=>resize.disconnect();
+  },[open,panelId]);
+
   function closePicker(){
     setOpen(false);
     opener.current?.focus({preventScroll:true});
@@ -46,7 +65,8 @@ export function ForestTimeline({manifest,date,playing,choose,toggle}:{
     closePicker();
   }
 
-  return <div ref={root} className="globe-timeline forest-timeline" role="group" aria-label="森林嵌入时间轴">
+  return <div ref={root} className="globe-timeline forest-timeline" role="group" aria-label="森林嵌入时间轴"
+    data-preview-covered={open && previewCovered ? "true" : undefined}>
     <TimelinePickerButton buttonRef={opener} className="forest-time-label" open={open} panelId={panelId}
       label={date} accessibleLabel={"选择森林日期，当前 "+date} toggle={()=>{
         if(open){closePicker();return;}
