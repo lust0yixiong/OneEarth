@@ -13,6 +13,22 @@ const query:AccessQuery={section:"clues",query:"",type:"",source:"",page:0,limit
 const publication:AccessCatalogues={paper:{state:"ready",revision:"controlled-a",total:60000,checkedAt:"2026-11-25T00:00:00Z"},haina:{state:"unavailable"}};
 function asset(i:number,origin="public"):Asset{return {id:"catalogue-load-"+i,datasetId:"doi:10.9999/synthetic-"+i,caseId:"synthetic",needIndex:0,title:"Synthetic "+String(i).padStart(5,"0"),type:"Dataset",categories:["Dataset"],status:"Catalogue only",fit:"Catalogue",why:"",source:origin,origins:[origin],url:"https://example.org/"+i,description:"temperature region "+i,profile:{role:"data",spatial:"coverage",coverage:"Synthetic",access:"Public",limitation:""},kind:"dataset",tabs:[]};}
 
+test("a shared DOI finds the same dataset under each source even when the public row uses a local alias",()=>{
+ const index=dataAccessIndex(":memory:");
+ try {
+  const doi="10.9999/shared-dataset";
+  const indexed={...asset(1,"haina"),datasetId:"doi:"+doi};
+  const publicRow={...asset(2),datasetId:"public:local-alias",url:"https://doi.org/"+doi};
+  index.replace([indexed,publicRow]);
+  for(const source of ["","haina","public"]){
+   const result=index.search({...query,query:doi,source});
+   assert.equal(result.total,1);
+   assert.equal(result.rows[0].key,"doi:"+doi);
+   assert.deepEqual(result.rows[0].relatedIds.slice().sort(),[indexed.id,publicRow.id].sort());
+  }
+ } finally {index.close();}
+});
+
 test("60k background WAL replacement serves one whole prior generation until commit and survives restart",async()=>{
  const dir=await mkdtemp(path.join(tmpdir(),"oneearth-access-60k-")),file=path.join(dir,"index.sqlite");
  let index=dataAccessIndex(file);

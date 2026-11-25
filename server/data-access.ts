@@ -45,11 +45,13 @@ export function dataAccessIndex(file:string){
         const mappable=!!r||!!paper?.points.length||!!a.profile?.area||a.profile?.extent==="world"||(!paper&&canMapAsset(a));
         const entry:Entry={asset,identity:assetIdentity(a),observation:r,papers:paper?.papers||0,mappable,
           evidenceKinds:[...(paper?.assertionCatalogKind?["数据集元数据"]:[]),...((paper?paper.assertionCatalogKind!=="metadata-only"&&paper.papers>0:a.paperSource||a.paperSources?.length)?["论文用法"]:[]),...(a.origins.includes("public")?["发布方目录"]:[])]};
-        const body=[a.title,a.description,a.source,a.datasetId,a.canonicalId,a.version,a.holding?.channelName,a.profile?.coverage,...a.categories,...entry.evidenceKinds,r?.satellite,r?.collection,r?.sourceName].filter(Boolean).join(" ");
+        const datasetKey=accessDatasetKey(a);
+        const doi=datasetKey.startsWith("doi:")?datasetKey:undefined;
+        const body=[a.title,a.description,a.source,a.datasetId,a.canonicalId,doi,a.version,a.holding?.channelName,a.profile?.coverage,...a.categories,...entry.evidenceKinds,r?.satellite,r?.collection,r?.sourceName].filter(Boolean).join(" ");
         const payload=JSON.stringify(entry),signature=createHash("sha256").update(payload).update("\n"+body).digest("hex");
         const prior=old.get(a.id);old.delete(a.id);if(prior?.signature===signature)return;
         const years=a.profile?.years;
-        const inserted=put.run(a.id,accessDatasetKey(a),a.title,Number(membership.entities),Number(membership.clues),Number(membership.timely),JSON.stringify(a.categories),JSON.stringify(a.origins),
+        const inserted=put.run(a.id,datasetKey,a.title,Number(membership.entities),Number(membership.clues),Number(membership.timely),JSON.stringify(a.categories),JSON.stringify(a.origins),
           Number(hasLocalMaterial(a)),Number(mappable),Number(a.holding?.access==="restricted"||a.profile?.spatial==="restricted"||a.profile?.role==="request"),
           years?.[0]??null,years?.[1]??null,r?.observedAt??null,r?.receivedAt??null,payload,signature);
         if(prior)removeText.run(prior.rowid);
