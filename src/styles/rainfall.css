@@ -21,6 +21,24 @@
 .rain-panel summary{cursor:pointer}
 .map-footer:has(.rain-panel){align-items:flex-end;pointer-events:none}
 .map-footer:has(.rain-panel)>*,.map-footer:has(.rain-panel) .grid-toolbar{pointer-events:auto}
+@media (max-width: 760px) {
+  .app.chat-collapsed .map-footer:has(> .rain-panel) {
+    /* Keep precipitation controls clear of the 42px Chat tab. */
+    right: 50px;
+  }
+  .app.chat-collapsed .rain-panel {
+    /* Leave room for the map header and bottom controls on short screens. */
+    max-height: calc(100cqh - 128px);
+    overflow-y: auto;
+  }
+  .app.chat-collapsed .rain-head > div {
+    flex: 1;
+    min-width: 0;
+  }
+  .app.chat-collapsed .rain-head > button {
+    flex: none;
+  }
+}
 @media(max-width:680px){.rain-panel{padding:8px 10px;gap:4px}.rain-column{grid-template-rows:repeat(18,2.5px)}}
 .rain-status{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .rain-status button{color:#925b32;text-decoration:underline}
