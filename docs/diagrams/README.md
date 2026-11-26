@@ -2,7 +2,13 @@
 
 ## 公开逻辑主图
 
-[OneEarth 横版逻辑架构图](oneearth-public-architecture.png)为 [README](../../README.md#当前工作台) 主图。图以 rc.10 形成的逻辑关系为基础。网关与运行时 API 两框对应现行同一工作台后端进程内的模块，实际监听与进程归并见[现行进程拓扑](../架构与接口现状.md#现行进程拓扑)。灰紫色虚框和连线标出预留的数据处理智能体及拟议的 A2A 委托。
+[OneEarth 横版逻辑架构图](oneearth-public-architecture.png)为 [README](../../README.md#当前工作台) 主图。图以 rc.10 形成的逻辑关系为基础。网关与运行时 API 两框对应现行同一工作台后端进程内的模块，实际监听与进程归并见[现行进程拓扑](../架构与接口现状.md#现行进程拓扑)。灰紫色虚框与标有 A2A 的连线分别标出预留的数据处理智能体服务和统一表征数据服务，与运行时的拟议调用关系见[预留 A2A 服务](../架构与接口现状.md#预留-a2a-服务)。
+
+修改主图可编辑[生成脚本](render-public-architecture.py)。在仓库根目录运行下列命令生成 SVG，再用 Chromium 按 SVG 原始画布大小导出 PNG，更新 README 引用的主图。
+
+```sh
+python3 docs/diagrams/render-public-architecture.py /tmp/oneearth-public-architecture.svg
+```
 
 <a id="在运实况"></a>
 
