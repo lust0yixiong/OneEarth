@@ -4,6 +4,7 @@ import {validBrowserWorkspaceReceipt,type BrowserWorkspaceReceipt,type Workspace
 
 import {workspaceToolCallId,workspaceToolReceiptPath} from "./native-workspace-tool";
 import {samePublishedRaster} from "./published-raster-observation";
+import {archivedNativeSummaries} from "./native-summary-client";
 import {workspaceObservationTarget} from "./workspace-published-layer";
 
 export async function cancelChatRequest(id:string,signal:AbortSignal) {
@@ -64,7 +65,7 @@ export async function loadResearchRecord(id:string,signal?:AbortSignal):Promise<
 }
 
 
-/** Only the saved stages and invocation summaries feed the answer's process panel. */
+/** Project the saved stages, public reasoning summaries and invocation summaries. */
 export function readArchivedChatTrace(record:ResearchRecord,identity:{id:string;conversationId:string;turnId:string},text:string):RunTrace|undefined {
   if(!matchesTaskIdentity(record,identity) || record.result.message!==text)return;
   const trace=record.result.runTrace;
@@ -76,7 +77,9 @@ export function readArchivedChatTrace(record:ResearchRecord,identity:{id:string;
       (call.kind==="Skill" || call.kind==="MCP" || call.kind==="tool") &&
       (call.status==="done" || call.status==="partial" || call.status==="failed")
       ? [{id:call.id,kind:call.kind,name:call.name,status:call.status,input:""}] : []);
-  return stages.length || calls.length ? {started:trace.started,stages,calls} : undefined;
+  const providerReasoning=archivedNativeSummaries(identity.id,trace.providerReasoning);
+  if(stages.length || calls.length || providerReasoning.length)
+    return {started:trace.started,stages,calls,...(providerReasoning.length ? {providerReasoning} : {})};
 }
 
 export function readWorkspaceReceipt(receipt:WorkspaceReceipt|undefined,taskId:string,conversationId:string,turnId:string) {

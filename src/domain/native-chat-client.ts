@@ -11,7 +11,8 @@ import {matchesWorkspaceToolCall,nativeWorkspaceTool,nativeWorkspaceToolName,rea
 import {workspaceObservationTarget} from "./workspace-published-layer";
 import type {WorkspaceReceipt} from "./turn-context";
 import {matchesTaskIdentity, readTaskLifecycle, type TaskLifecycle} from "./task-lifecycle-client";
-import type {DiscoveryResponse} from "./types";
+import type {DiscoveryResponse,ProviderReasoningSnapshot} from "./types";
+import {nativeSummaryReader} from "./native-summary-client";
 
 export type ChatRun = {threadId: string; runId: string; turnId: string};
 type CompletedChat = {response: DiscoveryResponse; interrupt?: OneEarthAgUiInterruptRecord; record?: ResearchRecord; workspaceCall?:ToolCall};
@@ -29,6 +30,7 @@ const publicStepProgress:Record<NativeAgUiStep,PublicStepProgress> = {
 type ChatProgress = {
   onAccepted: () => void;
   onDraft: (text: string) => void;
+  onSummary: (snapshot: ProviderReasoningSnapshot) => void;
   onStep: (step:PublicStepProgress & {stage:string}) => void;
   onLifecycle: (lifecycle: TaskLifecycle) => void;
 };
@@ -83,7 +85,14 @@ export async function submitNativeChat<T extends object>(
       return response;
     },
   });
+  const readSummary=nativeSummaryReader(runId);
   const subscriber: AgentSubscriber = {
+    // Read the whole event sequence so an intervening raw or foreign event breaks a partial group.
+    onEvent: ({event})=>{
+      if(!started || sealed || abortController.signal.aborted)return;
+      const summary=readSummary(event);
+      if(summary)progress.onSummary(summary);
+    },
     onRunStartedEvent: ({event}) => {
       // OneEarth binds this HTTP response to a single run.
       if(startSeen){

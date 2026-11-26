@@ -334,7 +334,13 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     if(s.researchRegion)regions.set(s.researchRegion.messageId,s.researchRegion.region);
     return regions;
   },[s.messages,s.researchRegion]);
+  const liveProcessOpen=useRef(new Map<string,boolean>());
+  useEffect(()=>{
+    const preferences=liveProcessOpen.current;
+    return ()=>preferences.clear();
+  },[s.sessionId]);
   const renderedMessages=useMemo(()=>chatMessages.map((m) => {
+    const initiallyOpenProcess=m.runTrace?.providerReasoning?.length ? liveProcessOpen.current.get(m.id) : undefined;
     const parent=m.replyTo && questions.get(m.id);
     const resumedBy=m.nativeInterrupt?.resumedBy;
     const replyTerminal=resumedBy ? claimedReplyTerminals.get(resumedBy) : undefined;
@@ -414,14 +420,14 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   }}>这条问题未收到回答，重新提问</button>
               )}
               {m.role==="assistant" && m.questionCheck && <>
-                {m.runTrace && <RunDetails trace={m.runTrace}/>}
+                {m.runTrace && <RunDetails initiallyOpen={initiallyOpenProcess} trace={m.runTrace}/>}
                 <QuestionCheck check={nativeCheck?.questionCheck ?? m.questionCheck}
                   pending={!verifiedInterrupts.has(s.sessionId+"/"+m.id)}
                   closed={checkClosed} terminal={nativeCheck?.status==="resolved" ? replyTerminal : undefined}
                   onChoose={(choice,edited)=>confirmQuestion(m.id,choice,edited)}/>
               </>}
               {m.role==="assistant" && !m.questionCheck && <AnswerBody message={m} archived={historyIds.has(m.id)} animate={!historyIds.has(m.id) && Date.now()-m.time<3000} onReady={answerReady}
-                clarificationAction={m.nativeInterrupt && m.nativeInterrupt.status!=="pending" ?
+                initiallyOpenProcess={initiallyOpenProcess} clarificationAction={m.nativeInterrupt && m.nativeInterrupt.status!=="pending" ?
                   <p className="answer-reply-context" role="status">
                     {m.nativeInterrupt.status==="resolved" ? "此追问已回答" : m.nativeInterrupt.status==="cancelled" ? "此追问已取消" : "此追问已不可回答"}
                     {m.nativeInterrupt.status==="resolved" && replyTerminal && (
@@ -519,7 +525,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
       <div className="live-search pending" role="status">
         {question && <button type="button" className="activity-link" onClick={()=>locateQuestion(question.id)}
           aria-controls={"message-"+question.id}>{chat.phase==="research" ? "研究" : "回复"} · {question.text}</button>}
-        <RunDetails working trace={chat.trace} stage={chat.stage} runs={chat.searches}
+        <RunDetails working trace={chat.trace} onOpenChange={open=>liveProcessOpen.current.set(chat.id,open)} stage={chat.stage} runs={chat.searches}
           openFinding={id=>void loadRemoteAssetIds([id]).then(()=>inspectAsset(id,chat.scope.filters,chat.scope.selection)).catch(()=>patch({error:"暂时无法打开这条线索。"}))}/>
         {chat.accepted && <button type="button" className="activity-link" disabled={chat.cancelling}
           onClick={()=>void cancelChat(chat.id)}>{chat.cancelling?"正在取消本轮":"取消本轮"}</button>}

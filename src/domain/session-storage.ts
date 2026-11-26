@@ -1,4 +1,5 @@
 import {mergeTaskLifecycle} from "./task-lifecycle-client";
+import {mergeNativeRunProcess} from "./native-summary-client";
 import {workspaceReceiptAdvances} from "./published-raster-observation";
 import type { Message,RunTrace } from "./types";
 import type { WorkspaceSnapshot } from "./store";
@@ -75,11 +76,12 @@ function mergeInterrupt(previous:Message,incoming:Message):Message["nativeInterr
 
 function withArchivedTrace(message:Message,source:Message|undefined) {
   if(!source?.runTrace || !canAttachTrace(message,source) || source.failed || source.role!=="assistant")return message;
-  return {...message,runTrace:source.runTrace};
+  const runTrace=mergeNativeRunProcess(message.id,message.runTrace,source.runTrace);
+  return runTrace===message.runTrace ? message : {...message,runTrace};
 }
 
 function canAttachTrace(message:Message,source:{id:string;replyTo?:string;text:string}) {
-  return message.role==="assistant" && !message.failed && !message.runTrace &&
+  return message.role==="assistant" && !message.failed &&
     message.taskLifecycle?.runtimePhase?.phase==="complete" &&
     message.id===source.id && message.replyTo===source.replyTo && message.text===source.text;
 }
@@ -195,7 +197,9 @@ export async function attachArchivedRunTrace(session:string,id:string,turnId:str
   existing.onsuccess=()=>{
     const previous:Message|undefined=existing.result?.message;
     if(!previous || !canAttachTrace(previous,{id,replyTo:turnId,text}))return;
-    updated={...previous,runTrace:trace};
+    const runTrace=mergeNativeRunProcess(id,previous.runTrace,trace);
+    if(runTrace===previous.runTrace)return;
+    updated={...previous,runTrace};
     records.put({session,id,message:updated});
   };
   await completed(tx);

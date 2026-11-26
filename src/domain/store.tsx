@@ -24,6 +24,7 @@ import { readPaperCatalogStatus, type PaperCatalogStatus } from "./paper-catalog
 import { randomId } from "./id";
 import type {ResumeEntry} from "@ag-ui/core";
 import { ChatResponseError, type ChatPhase } from "./chat-response";
+import {mergeNativeRunProcess,needsArchivedRunProcess,savedNativeSummaries} from "./native-summary-client";
 import {loadNativeWorkspaceMessages,readClaimedNativeTurn,readNativeInterrupt,recoverNativeChat,submitNativeChat,type ChatRun} from "./native-chat-client";
 import {readWorkspaceToolRecord,workspaceActionFields} from "./native-workspace-tool";
 import {nativeAgUiPath,readOneEarthAgUiInterruptRecord,type OneEarthAgUiInterruptRecord,type OneEarthAgUiResumePayload,type OneEarthQuestionCheckResumePayload} from "./native-ag-ui";
@@ -35,7 +36,7 @@ import {checkedScenes} from "./product-distribution";
 import {validWindow,windowFilters} from "./time-window";
 import { observationBatchCamera, observationById, pushId, type PushFeed } from "./push-observations";
 import {makeQuestionDecision} from "./question-confirmation";
-import type {ClarificationReply, QuestionDecision} from "./types";
+import type {ClarificationReply, ProviderReasoningSnapshot, QuestionDecision} from "./types";
 import {validAccessSection,initialAccessSection} from "./data-access";
 import { registerHaina, registerObservations, registerPapers, loadRemoteAssetIds } from "./datasets";
 import {loadHainaCatalog,type HainaCatalogStatus} from "./haina-catalog-client";
@@ -516,7 +517,7 @@ function restoreGlobeState(state:State, workspace:Partial<WorkspaceSnapshot>) {
   }
 }
 const sessionFailure = "浏览器未能保存会话。请检查本地存储空间或权限，保留此标签页以便重试。";
-function archivedChatMessages(saved:ResearchRecord):Message[] {
+function archivedChatMessages(saved:ResearchRecord,runTrace?:Message["runTrace"]):Message[] {
   const reply=saved.result;
   const nativeInterrupt=readOneEarthAgUiInterruptRecord(saved.interrupt,saved.id);
   const questionCheck=nativeInterrupt?.kind==="question-check" ? nativeInterrupt.questionCheck : reply.questionCheck;
@@ -543,7 +544,7 @@ function archivedChatMessages(saved:ResearchRecord):Message[] {
       },historicalReply:true} : {}),
       workspacePending:reply.workspacePending,researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
       conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
-      answerNotes:reply.answerNotes,runTrace:reply.runTrace,researchRegion:reply.researchRegion,
+      answerNotes:reply.answerNotes,runTrace,researchRegion:reply.researchRegion,
       gridCoverage:reply.gridCoverage,
       ...(reply.clarification || clarificationPrompt ? {clarification:true} : {}),
       clarificationPrompt,
@@ -609,7 +610,9 @@ async function loadInitialSession(): Promise<State> {
         if(!cachedResearch){
           const stored=await readSession(saved.conversationId);
           state.clarificationReply=stored?.workspace.clarificationReply ?? null;
-          const messages=archivedChatMessages(saved);
+          const providerReasoning=readArchivedChatTrace(saved,saved,reply.message)?.providerReasoning;
+          const runTrace=reply.runTrace && {...reply.runTrace,providerReasoning};
+          const messages=archivedChatMessages(saved,runTrace);
           state.sessionId=saved.conversationId;
           state.messages=mergeMessages(stored?.messages||[],messages);
           await writeSession(state.sessionId,saved.question,captureWorkspace(state),state.messages);
@@ -1655,7 +1658,8 @@ function useWorkspaceValue(initialState: State) {
     if(response.hainaRecords?.length&&response.hainaCatalog)
       registerHaina(response.hainaRecords,response.hainaCatalog.synced,response.hainaCatalog.endpoint,false);
     if(recovered.interrupt)markInterrupt(child.threadId,child.runId,recovered.interrupt.status==="pending");
-    const messages=archivedChatMessages({...record,taskLifecycle:taskLifecycle??record.taskLifecycle});
+    const trace=readArchivedChatTrace(record,{id:child.runId,conversationId:child.threadId,turnId:child.turnId},response.message);
+    const messages=archivedChatMessages({...record,taskLifecycle:taskLifecycle??record.taskLifecycle},trace);
     for(const message of messages){
       if(signal.aborted || latest.current.sessionId!==parent.threadId)return false;
       await add(message.role,message.text,message);
@@ -1722,12 +1726,13 @@ function useWorkspaceValue(initialState: State) {
       const delivery: ChatDelivery = saved ?? {id: randomId(), attempt};
       const session = current.sessionId;
       const run = {threadId:session,runId:delivery.id,turnId:attempt.userMessageId};
-      const priorReasoning=saved && current.messages.find(message=>message.id===saved.id)?.runTrace?.providerReasoning;
+      const priorReasoning=saved ? savedNativeSummaries(run.runId,current.messages.find(message=>
+        message.id===run.runId && message.replyTo===run.turnId)?.runTrace) : [];
       const clarificationAttempt=isClarificationAttempt(attempt);
       const entry = {controller,transport,finishCancellation,progress:{id:delivery.id,userMessageId:attempt.userMessageId,
         scope:{filters:attempt.context.filters,selection:attempt.context.selection},accepted:false,
         stage:saved ? "正在读取原任务状态" : "正在提交问题",phase:"foreground" as const,
-        trace:{started:Date.now(),stages:[],calls:[],...(priorReasoning?{providerReasoning:priorReasoning}:{})},
+        trace:{started:Date.now(),stages:[],calls:[],...(priorReasoning.length?{providerReasoning:priorReasoning}:{})},
         searches:[]} as ActiveChat};
       requests.current.set(delivery.id,entry);
       const isCurrent = () => !controller.signal.aborted && latest.current.sessionId === session
@@ -1819,6 +1824,11 @@ function useWorkspaceValue(initialState: State) {
           onDraft:(draftText:string)=>{
             if(isCurrent())updateProgress({draftText});
           },
+          onSummary:(snapshot:ProviderReasoningSnapshot)=>{
+            if(!isCurrent() || entry.progress.cancelling)return;
+            const trace=entry.progress.trace;
+            updateProgress({trace:{...trace,providerReasoning:[...(trace.providerReasoning ?? []),snapshot]}});
+          },
           onStep:({stage,phase,runtimePhase}:{stage:string;phase:ChatPhase;runtimePhase:NonNullable<TaskLifecycle["runtimePhase"]>})=>{
             const prior=entry.progress.taskLifecycle?.runtimePhase?.phase;
             if(!isCurrent() || entry.progress.cancelling || prior==="cancel-pending" ||
@@ -1890,7 +1900,9 @@ function useWorkspaceValue(initialState: State) {
         await acceptedReplyWrite;
         if (!isCurrent()) return;
         const {response,interrupt,record}=result;
-        const runTrace=record && readArchivedChatTrace(record,{id:run.runId,conversationId:run.threadId,turnId:run.turnId},response.message);
+        const archivedTrace=record && readArchivedChatTrace(record,{id:run.runId,conversationId:run.threadId,turnId:run.turnId},response.message);
+        const liveTrace=entry.progress.trace.providerReasoning?.length ? entry.progress.trace : undefined;
+        const runTrace=mergeNativeRunProcess(run.runId,liveTrace,archivedTrace);
         const r={...response,runTrace};
         canonicalResponse=r;
         hydrateCompletedProcess=!!liveResult && "response" in liveResult && !record;
@@ -1930,7 +1942,7 @@ function useWorkspaceValue(initialState: State) {
           if(!isCurrent() || (local && !local.failed))return;
           const saved:ResearchRecord=record ? {...record,result:r} : {id:run.runId,conversationId:session,turnId:run.turnId,
             question:q,created:Date.now(),updated:Date.now(),result:r};
-          const [,{time:_time,...archived}]=archivedChatMessages(saved);
+          const [,{time:_time,...archived}]=archivedChatMessages(saved,r.runTrace);
           await complete(r.message,{...archived,historicalReply:true,taskLifecycle:entry.progress.taskLifecycle});
           return;
         }
@@ -2531,7 +2543,7 @@ function useWorkspaceValue(initialState: State) {
         const parent={threadId,runId:message.id,turnId:message.replyTo};
         refreshing.add(message.id);
         void readNativeInterrupt(parent,controller.signal,interrupt.kind,record=>{
-          if(!message.runTrace && message.taskLifecycle?.runtimePhase?.phase==="complete")
+          if(needsArchivedRunProcess(message.id,message.runTrace) && message.taskLifecycle?.runtimePhase?.phase==="complete")
             void hydrateRunProcess(parent,message.text,record);
         }).then(async claim=>{
           if(controller.signal.aborted || latest.current.sessionId!==threadId)return;
@@ -2545,7 +2557,7 @@ function useWorkspaceValue(initialState: State) {
     // Pending cards already read their archives to revalidate the reply action.
     const last=latest.current.messages.filter(message=>message.role==="assistant" && message.chatMessage &&
       !message.failed && message.taskLifecycle?.runtimePhase?.phase==="complete").at(-1);
-    if(last?.replyTo && !last.runTrace && researchRecordId.test(last.id) && !refreshing.has(last.id))
+    if(last?.replyTo && needsArchivedRunProcess(last.id,last.runTrace) && researchRecordId.test(last.id) && !refreshing.has(last.id))
       void hydrateRunProcess({runId:last.id,threadId,turnId:last.replyTo},last.text);
     window.addEventListener("online",refreshInterrupts);
     return ()=>{

@@ -128,13 +128,13 @@ function ProviderReasoning({snapshots}:{snapshots:ProviderReasoningSnapshot[]}) 
     </div>;
   });
 }
-export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,working=false,failed=false,openFinding}:{trace?:RunTrace;stage?:string;runs?:SearchRun[];working?:boolean;failed?:boolean;openFinding?:(id:string)=>void}) {
+export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,working=false,failed=false,openFinding,initiallyOpen,onOpenChange}:{trace?:RunTrace;stage?:string;runs?:SearchRun[];working?:boolean;failed?:boolean;openFinding?:(id:string)=>void;initiallyOpen?:boolean;onOpenChange?:(open:boolean)=>void}) {
   const trace=useMemo(()=>literatureDisplay(rawTrace),[rawTrace]);
   const reported=useMemo(()=>literatureDisplay(rawReported),[rawReported]);
   const reasoning=useMemo(()=>mergeProviderReasoning(undefined,rawTrace?.providerReasoning) ?? [],[rawTrace?.providerReasoning]);
   const stage=rawStage && literatureText(rawStage);
   const runs=reported ?? trace?.searches ?? [];
-  const [open,setOpen]=useState(working),[now,setNow]=useState(Date.now);
+  const [open,setOpen]=useState(initiallyOpen ?? working),[now,setNow]=useState(Date.now);
   useEffect(()=>{if(working){const timer=setInterval(()=>setNow(Date.now()),1000);return ()=>clearInterval(timer);}},[working]);
   const calls:ToolCall[]=[...(trace?.calls || []),...runs.map((r,i)=>({
     id:"search-"+i,kind:"tool" as const,name:r.engine+(r.cacheStoredAt?"（本地缓存）":""),input:r.query,status:r.status,error:r.error,
@@ -150,7 +150,11 @@ export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,worki
     </div>)}
     {working && <p className="oe-findings-note">继续核对中，完整回答将汇总各来源的适用性和依据。</p>}
   </section> : null;
-  return <>{working && findings}<details className="oe-run" open={open} onToggle={e=>setOpen(e.currentTarget.open)}>
+  return <>{working && findings}<details className="oe-run" open={open} onToggle={e=>{
+    const expanded=e.currentTarget.open;
+    setOpen(expanded);
+    onOpenChange?.(expanded);
+  }}>
     <summary><Clock3 size={14}/><span>{working?"Working for "+Math.max(0,Math.floor((now-(trace?.started||now))/1000))+"秒":"思考过程"}</span><ChevronDown size={13}/></summary>
     {!working && findings}
     {!!reasoning.length && <ProviderReasoning snapshots={reasoning}/>}
