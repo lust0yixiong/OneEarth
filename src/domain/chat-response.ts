@@ -8,7 +8,8 @@ export class ChatResponseError extends Error {
 export type ChatPhase = "foreground" | "research";
 export async function readChatResponse(response:Response,onStage:(text:string,searches?:SearchRun[],trace?:RunTrace,phase?:ChatPhase)=>void,onRegion?:(region:ResearchRegion|null)=>void,
   initialReasoning?:ProviderReasoningSnapshot[],retiredReasoning=new Set<string>(),
-  onLifecycle?:(facts:TaskLifecycle,seq?:number)=>void):Promise<DiscoveryResponse> {
+  onLifecycle?:(facts:TaskLifecycle,seq?:number)=>void,
+  resume?:{taskId:string;after:number;stage?:string;trace?:RunTrace;checkpoint:(after:number)=>Promise<void>}):Promise<DiscoveryResponse> {
   let reasoning=initialReasoning;
   if(!response.headers.get("content-type")?.includes("application/x-ndjson")){
     const data=await response.json();
@@ -20,8 +21,13 @@ export async function readChatResponse(response:Response,onStage:(text:string,se
     return reasoning ? {...data,runTrace:trace} : data;
   }
   const reader=response.body!.pipeThrough(new TextDecoderStream()).getReader();
-  let pending="",stageText="";
-  let trace:RunTrace|undefined;
+  let pending="",stageText=resume?.stage??"",after=resume?.after??0;
+  let trace=resume?.trace,persisted=after;
+  async function flush(){
+    if(!resume || after<=persisted)return;
+    persisted=after;
+    await resume.checkpoint(after);
+  }
   try {
     while(true){
       const {value,done}=await reader.read();
@@ -30,8 +36,11 @@ export async function readChatResponse(response:Response,onStage:(text:string,se
       for(const line of lines){
         if(!line.trim())continue;
         const event=JSON.parse(line);
+        if(!event || typeof event!=="object" || Array.isArray(event))continue;
+        const seq=Number.isSafeInteger(event.seq) && event.seq>0 ? Number(event.seq) : undefined;
+        if(resume && (event.taskId!==resume.taskId || seq===undefined || seq<=after))continue;
         const facts=readTaskLifecycle(event);
-        if(facts)onLifecycle?.(facts,Number.isSafeInteger(event.seq)?event.seq:undefined);
+        if(facts)onLifecycle?.(facts,seq);
         if(Object.hasOwn(event,"researchRegion") && (event.researchRegion===null || validResearchRegion(event.researchRegion)))onRegion?.(event.researchRegion);
         if(event.runTrace)trace=event.runTrace;
         if(!trace && typeof event.traceStarted==="number")trace={started:event.traceStarted,stages:[],calls:[]};
@@ -58,14 +67,21 @@ export async function readChatResponse(response:Response,onStage:(text:string,se
         if(event.error)throw new ChatResponseError(event.error,event.code,trace);
         const phase = event.chatPhase === "research" || event.queued === true ? "research"
           : event.chatPhase === "foreground" ? "foreground" : undefined;
-        if(event.stage || event.call || event.finding || event.runTrace || phase || reasoningChanged)
+        if(event.stage || event.call || event.finding || event.runTrace || event.searches || phase || reasoningChanged
+          || resume && typeof event.traceStarted==="number")
           onStage(stageText,event.searches,trace,phase);
         if(event.result){
           reasoning=mergeProviderReasoning(reasoning,event.result.runTrace?.providerReasoning,retiredReasoning);
-          return reasoning ? {...event.result,runTrace:traceWithProviderReasoning(event.result.runTrace ?? trace,reasoning)} : event.result;
+          const finalTrace=traceWithProviderReasoning(event.result.runTrace ?? trace,reasoning);
+          return reasoning || resume && finalTrace ? {...event.result,runTrace:finalTrace} : event.result;
         }
+        if(resume && event.taskId===resume.taskId && seq!==undefined)after=seq;
       }
+      await flush();
       if(done)throw Error("连接在回复完成前中断，请重试。");
     }
-  } finally {reader.releaseLock();}
+  } finally {
+    // A terminal frame stays replayable until the final answer is saved.
+    try{await flush();}finally{reader.releaseLock();}
+  }
 }

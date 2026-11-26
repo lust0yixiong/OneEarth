@@ -9,7 +9,7 @@ import {availableChatOperations, chatCandidateBatch, chatCandidateItems, chatCan
 import {validWorkspaceOperationKind, workspaceCandidateOperationAllowed} from "./workspace-operations";
 import {projectWorkspaceView, workspaceActionState, type WorkspaceSurfaceReading, type WorkspacePanelReading} from "./workspace-view-projection";
 import {authorizesWorkspaceViewAction, workspaceViewActionAllowed, type WorkspaceViewPublication} from "./workspace-view-context";
-import { answeredClarificationIds, messageClarificationPrompt, discoveryClarificationResult, loadResearchRecord, openTaskEvents, chatMessagesPath, researchRecordId, cancelChatRequest, readWorkspaceReceipt, reportWorkspaceReceipt, requestWorkspaceRecovery, isClarificationAttempt } from "./runtime-client";
+import { answeredClarificationIds, messageClarificationPrompt, discoveryClarificationResult, loadResearchRecord, openTaskEvents, submitChatTask, chatMessagesPath, researchRecordId, cancelChatRequest, readWorkspaceReceipt, reportWorkspaceReceipt, requestWorkspaceRecovery, isClarificationAttempt } from "./runtime-client";
 import {clarificationAnswerText,validClarificationPrompt,type ClarificationAnswer} from "./clarification";
 import {datasetScope,mergeScope,scopedQuestionContext,scopeDetail,scopeLabel,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
@@ -37,7 +37,7 @@ import type {ClarificationReply, QuestionDecision} from "./types";
 import {validAccessSection,initialAccessSection} from "./data-access";
 import { registerHaina, registerObservations, registerPapers, loadRemoteAssetIds } from "./datasets";
 import {loadHainaCatalog,type HainaCatalogStatus} from "./haina-catalog-client";
-import { type ChatDelivery, claimWorkspaceEffect, saveChatDelivery, unfinishedChatDeliveries, removeChatDelivery, legacySession, mergeMessages, readFavorites, readSession, readSessionMessage, sessionMessages, sessionSummaries, writeFavorite, writeSession } from "./session-storage";
+import { type ChatDelivery, claimWorkspaceEffect, saveChatDelivery, checkpointChatDelivery, unfinishedChatDeliveries, removeChatDelivery, legacySession, mergeMessages, readFavorites, readSession, readSessionMessage, sessionMessages, sessionSummaries, writeFavorite, writeSession } from "./session-storage";
 import { sampleCamera } from "./earth-search";
 import { catalogResults, type SearchState } from "./results";
 import { catalogBatch } from "./batch-context";
@@ -1641,12 +1641,15 @@ function useWorkspaceValue(initialState: State) {
       const controller = new AbortController();
       const delivery: ChatDelivery = saved || {id: randomId(), attempt, body: JSON.stringify(payload), route:"chat"};
       const session = current.sessionId;
+      const savedAfter=delivery.acceptedAfter;
+      let accepted=typeof savedAfter==="number" && Number.isSafeInteger(savedAfter) && savedAfter>=0;
+      let after=0;
       const priorReasoning=saved && current.messages.find(message=>message.id===saved.id)?.runTrace?.providerReasoning;
       const retiredReasoning=new Set<string>(); // Preserve evictions on a stream reconnect for this task.
       const legacy = delivery.route !== "chat";
       const clarificationAttempt=isClarificationAttempt(attempt);
       const entry = {controller,finishCancellation,progress:{id:delivery.id,userMessageId:attempt.userMessageId,
-        scope:{filters:attempt.context.filters,selection:attempt.context.selection},
+        scope:{filters:attempt.context.filters,selection:attempt.context.selection},accepted,
         stage:saved ? "正在接回本轮回答" : "正在提交问题",phase:legacy ? "research" as const : "foreground" as const,
         trace:{started:Date.now(),stages:[],calls:[],...(priorReasoning?{providerReasoning:priorReasoning}:{})},
         searches:[]} as ActiveChat};
@@ -1742,18 +1745,40 @@ function useWorkspaceValue(initialState: State) {
           .join(" · ") || "全球视图";
       publishChatProgress();
       if (!saved) patch({error:null,chatOpen:true});
-      let lifecycleSequence=0;
+      let lifecycleSequence=0,appliedStage="";
       try {
         if (!saved) {
           payload.deepseekTools = await loadDeepSeekTools(controller.signal);
           delivery.body = JSON.stringify(payload);
         }
         if (!saved) await saveChatDelivery(session, delivery).catch(() => patch({sessionError:sessionFailure}));
-        const receive = async () => {
-          const response = await openTaskEvents(delivery.id, delivery.body, controller.signal, legacy, ()=>{
-            if (isCurrent()) updateProgress({accepted:true});
+        async function checkpoint(seq:number){
+          if(!isCurrent())return;
+          if(!accepted){
+            accepted=true;
+            updateProgress({accepted:true});
+          }
+          after=seq;
+          if((delivery.acceptedAfter??-1)>=seq)return;
+          delivery.acceptedAfter=seq;
+          await checkpointChatDelivery(session,delivery.id,seq).catch(()=>{
+            if(isCurrent())patch({sessionError:sessionFailure});
           });
+        }
+        const receive = async (verifyFirst=false) => {
+          let response=accepted || verifyFirst
+            ? await openTaskEvents(delivery.id,after,controller.signal) : undefined;
+          if(!response || !accepted && response.status===404){
+            const rejected=await submitChatTask(delivery.id,delivery.body,controller.signal,legacy);
+            if(rejected)return readChatResponse(rejected,()=>{});
+            await checkpoint(0);
+            response=await openTaskEvents(delivery.id,after,controller.signal);
+          }
+          if(!response.ok || !response.headers.get("content-type")?.includes("application/x-ndjson"))
+            throw Error("暂时无法接回原任务事件。");
+          if(!accepted)await checkpoint(0);
           return readChatResponse(response, (stage, searches, trace, phase) => {
+            if(stage)appliedStage=stage;
             if (isCurrent()) updateProgress({...(stage ? {stage} : phase==="research" ? {stage:"研究已进入队列"} : {}),
               ...(searches ? {searches} : {}),...(trace ? {trace} : {}),...(phase ? {phase} : {})});
           },receiveRegion,entry.progress.trace.providerReasoning,retiredReasoning,(facts,seq)=>{
@@ -1761,14 +1786,15 @@ function useWorkspaceValue(initialState: State) {
             if(seq!==undefined)lifecycleSequence=seq;
             const merged=mergeTaskLifecycle(entry.progress.taskLifecycle,facts);
             if(merged!==entry.progress.taskLifecycle)updateProgress({taskLifecycle:merged});
-          });
+          },{taskId:delivery.id,after,stage:appliedStage,
+            trace:after?entry.progress.trace:undefined,checkpoint});
         };
         let r: DiscoveryResponse;
-        try { r = await receive(); }
+        try { r = await receive(!!saved); }
         catch (error) {
           if (!isCurrent() || error instanceof ChatResponseError) throw error;
           updateProgress({stage:"正在重新连接本轮回答"});
-          r = await receive();
+          r = await receive(true);
         }
         if (!isCurrent()) return;
         if(entry.progress.taskLifecycle?.runtimePhase?.phase==="cancelled"){

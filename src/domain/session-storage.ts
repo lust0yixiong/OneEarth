@@ -175,6 +175,7 @@ export async function writeFavorite(id: string, selected: boolean) {
 // key so simultaneous tabs cannot overwrite each other's requests.
 export interface ChatDelivery {
   id: string;
+  acceptedAfter?: number;
   route?: "chat";
   attempt: import("./types").DiscoveryAttempt;
   body: string;
@@ -183,6 +184,17 @@ export async function saveChatDelivery(session: string, delivery: ChatDelivery) 
   const db = await database();
   const tx = db.transaction("workspaces", "readwrite");
   tx.objectStore("workspaces").put(delivery, [session, delivery.id]);
+  await completed(tx);
+}
+export async function checkpointChatDelivery(session:string,id:string,after:number) {
+  const db=await database(),tx=db.transaction("workspaces","readwrite"),records=tx.objectStore("workspaces");
+  const key=[session,id],read=records.get(key);
+  read.onsuccess=()=>{
+    const previous:ChatDelivery|undefined=read.result;
+    // A stale tab cannot move the cursor back or restore a finished delivery.
+    if(previous && (previous.acceptedAfter??-1)<after)
+      records.put({...previous,acceptedAfter:after},key);
+  };
   await completed(tx);
 }
 export async function unfinishedChatDeliveries(session: string): Promise<ChatDelivery[]> {

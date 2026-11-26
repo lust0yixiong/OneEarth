@@ -33,7 +33,8 @@ try{
  if(old)await p.route('**/api/chat',route=>route.fulfill({json:reply}));
  else {
    await p.route('**/api/chat/messages',route=>route.fulfill({status:202,json:{id:route.request().postDataJSON().id,status:'queued'}}));
-   await p.route('**/api/tasks/*/events',route=>route.fulfill({contentType:'application/x-ndjson',body:JSON.stringify({result:reply})+'\n'}));
+   await p.route(url=>/^\/api\/tasks\/[^/]+\/events$/.test(url.pathname),route=>route.fulfill({contentType:'application/x-ndjson',
+     body:JSON.stringify({taskId:new URL(route.request().url()).pathname.split('/').at(-2),seq:1,result:reply})+'\n'}));
  }
  let failing=false;
  await p.route(webUrl,r=>r.fulfill({contentType:'text/html; charset=utf-8',body:'<!doctype html><meta charset=utf-8><article>数据目录按观测时间组织，样例有独立的版本标识。</article>'}));

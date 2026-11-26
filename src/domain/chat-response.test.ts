@@ -183,3 +183,36 @@ test("lifecycle-only events and a terminal cancellation carry ordered facts sepa
     {seq:3,facts:{runtimePhase:{phase:"cancelled"},remoteStops:[{discoveryTaskId:"a",state:"pending"}]}},
   ]);
 });
+
+test("the resume cursor covers ordinary events and preserves accumulated trace through terminal delivery",async()=>{
+  const taskId="task-a",call={id:"prior",name:"地图资料核对",kind:"tool",status:"done",input:""} as const;
+  const pages:number[]=[],stages:string[]=[];
+  const trace:RunTrace={started:1,stages:["先前阶段"],calls:[call]};
+  const result=await readChatResponse(reasoningResponse([
+    {taskId,seq:136,stage:"重复阶段"},
+    {taskId:"different-task",seq:900,stage:"跨任务阶段"},
+    {taskId,seq:0,stage:"无效序号"},
+    {taskId,seq:137,stage:"续接阶段"},
+    {taskId,seq:138,result:{message:"原轮完整结果"}},
+  ]),(stage)=>stages.push(stage),undefined,undefined,undefined,undefined,
+    {taskId,after:136,stage:"先前阶段",trace,checkpoint:async after=>{pages.push(after);}});
+  assert.deepEqual(pages,[137],"terminal result remains replayable until its message is committed");
+  assert.deepEqual(stages,["续接阶段"]);
+  assert.deepEqual(result.runTrace?.stages,["先前阶段","续接阶段"]);
+  assert.deepEqual(result.runTrace?.calls,[call]);
+});
+
+test("unfinished NDJSON records only fully applied, task-bound event frames",async()=>{
+  const taskId="task-a";
+  const checkpoints:number[]=[];
+  const response=new Response(
+    JSON.stringify({taskId,seq:136,stage:"完整阶段"})+"\n"+
+    JSON.stringify({seq:999,stage:"无绑定事件不得显示"})+"\n"+'{"taskId":"task-a","seq":137,',
+    {headers:{"content-type":"application/x-ndjson"}},
+  );
+  const stages:string[]=[];
+  await assert.rejects(readChatResponse(response,stage=>stages.push(stage),undefined,undefined,undefined,undefined,
+    {taskId,after:130,checkpoint:async after=>{checkpoints.push(after);}}),/回复完成前中断/);
+  assert.deepEqual(checkpoints,[136]);
+  assert.deepEqual(stages,["完整阶段"]);
+});

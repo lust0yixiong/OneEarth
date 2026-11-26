@@ -4,15 +4,21 @@ import {validBrowserWorkspaceReceipt,type BrowserWorkspaceReceipt,type Workspace
 import {createClarificationPrompt,validClarificationPrompt} from "./clarification";
 
 export const chatMessagesPath = "/api/chat/messages";
-export async function openTaskEvents(id: string, body: string, signal: AbortSignal, legacy = false, onAccepted?:()=>void) {
-  const input: unknown = JSON.parse(body);
-  const created = await fetch(legacy ? "/api/tasks" : chatMessagesPath, {
-    method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id, input}), signal,
+export async function submitChatTask(id:string,body:string,signal:AbortSignal,legacy=false) {
+  const created=await fetch(legacy ? "/api/tasks" : chatMessagesPath,{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id,input:JSON.parse(body)}),signal,
   });
-  if (!created.ok) return chatTransportResponse(created);
-  onAccepted?.();
-  const events=await fetch("/api/tasks/" + encodeURIComponent(id) + "/events", {signal, cache:"no-store"});
-  return chatTransportResponse(events);
+  if(created.status===202){
+    const receipt=await created.json();
+    if(receipt?.id===id)return;
+  }
+  if(created.ok)throw Error("暂未核实本轮是否受理。");
+  return chatTransportResponse(created);
+}
+
+export async function openTaskEvents(id:string,after:number,signal:AbortSignal) {
+  const response=await fetch("/api/tasks/"+encodeURIComponent(id)+"/events?after="+after,{signal,cache:"no-store"});
+  return chatTransportResponse(response);
 }
 
 function chatTransportResponse(response:Response) {
