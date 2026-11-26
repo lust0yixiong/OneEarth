@@ -6,6 +6,7 @@ import type {AnswerReference,Message} from "../domain/types";
 import {doiFor} from "../domain/answer-sources";
 export function AnswerFooter({message:m,question,refs,open}:{message:Message;question:string;refs:AnswerReference[];open:()=>void}) {
   const [busy,setBusy]=useState(false),[error,setError]=useState("");
+  const completionLabel=m.taskLifecycle?.runtimePhase?.phase==="cancelled" ? "已取消" : "完成";
   const name=(question || "OneEarth").slice(0,52).replace(/[\\/:*?"<>|]/g,"")+" · 研究记录.pdf";
   const notes=m.answerNotes;
   const referenceLines=refs.map(ref=>ref.title+" · "+(ref.kind==="web"?ref.url:doiFor(ref.id)||ref.source));
@@ -29,7 +30,11 @@ export function AnswerFooter({message:m,question,refs,open}:{message:Message;que
     {error && <small role="alert">{error}</small>}
     <div className="oe-meta">
       {!!refs.length && <button className="oe-sources-all" onClick={open}><ListChecks size={13} aria-hidden="true"/>来源与依据 <span>{refs.length}</span></button>}
-      <button className="oe-record" title="导出为 PDF" disabled={busy} onClick={download}><Download size={13}/>{busy?"正在导出…":"导出研究记录"}</button><CopyButton text={[record.answer,record.limitation,...referenceLines.map((s,i)=>(i+1)+". "+s)].filter(Boolean).join("\n\n")} label="复制回答"/><time dateTime={new Date(m.time).toISOString()} title={new Date(m.time).toLocaleString("zh-CN")}>{new Date(m.time).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"})} 完成</time>
+      <button className="oe-record" title="导出为 PDF" disabled={busy} onClick={download}><Download size={13}/>{busy?"正在导出…":"导出研究记录"}</button>
+      <CopyButton text={[record.answer,record.limitation,...referenceLines.map((s,i)=>(i+1)+". "+s)].filter(Boolean).join("\n\n")} label="复制回答"/>
+      <time dateTime={new Date(m.time).toISOString()} title={new Date(m.time).toLocaleString("zh-CN")}>
+        {new Date(m.time).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"})} {completionLabel}
+      </time>
     </div>
   </footer>;
 }
