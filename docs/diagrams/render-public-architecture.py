@@ -1,182 +1,185 @@
-from pathlib import Path
-from html import escape
+"""Render the public OneEarth architecture diagram as a self-contained SVG."""
 import base64
+from html import escape
+from pathlib import Path
 import sys
 
-out = Path(sys.argv[1])
-W, H = 2420, 1470
+
+WIDTH, HEIGHT = 1800, 1142
+PAGE = "#f1f6f3"
+WHITE = "#ffffff"
+INK = "#162d27"
+MUTED = "#486058"
+BORDER = "#d9e5de"
+RUNTIME_FILL = "#eff7f3"
+PLAN_FILL = "#f7f5fa"
+PLAN_BORDER = "#ded6eb"
+COLORS = {
+    "request": "#285a73",
+    "executor": "#655098",
+    "data": "#2a6e5f",
+    "planned": "#645381",
+    "egress": "#985220",
+}
+
+svg = [
+    f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" '
+    f'viewBox="0 0 {WIDTH} {HEIGHT}" role="img" aria-labelledby="title desc">',
+    '<title id="title">OneEarth 公开逻辑架构</title>',
+    '<desc id="desc">工作台、运行时、业务服务与来源。实线表示现行链路，虚线表示规划链路。</desc>',
+    '<style>text{font-family:"PingFang SC","Hiragino Sans GB",'
+    '"Noto Sans CJK SC",Arial,sans-serif}</style>',
+    "<defs>",
+]
+for name, color in COLORS.items():
+    svg.append(
+        f'<marker id="{name}" markerUnits="userSpaceOnUse" viewBox="0 0 12 12" '
+        f'markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto-start-reverse">'
+        f'<path d="M1 1 L11 6 L1 11 Z" fill="{color}"/></marker>'
+    )
+svg.append("</defs>")
+
+
+def rect(x, y, width, height, fill=WHITE, border=BORDER, radius=16, dashed=False, id_=None):
+    box_id = f' id="{id_}"' if id_ else ""
+    stroke = f' stroke="{border}" stroke-width="1.5"' if border else ""
+    dash = ' stroke-dasharray="7 5"' if dashed else ""
+    svg.append(
+        f'<rect{box_id} x="{x}" y="{y}" width="{width}" height="{height}" '
+        f'rx="{radius}" fill="{fill}"{stroke}{dash}/>'
+    )
+
+
+def text(x, y, value, size=22, color=INK, weight=400, anchor="start"):
+    svg.append(
+        f'<text x="{x}" y="{y}" font-size="{size}" fill="{color}" '
+        f'font-weight="{weight}" text-anchor="{anchor}">{escape(value)}</text>'
+    )
+
+
+def rule(x1, x2, y):
+    svg.append(f'<path d="M{x1} {y} H{x2}" stroke="{BORDER}" stroke-width="1.5"/>')
+
+
+def arrow(id_, path, color="request", *, planned=False, bidirectional=False):
+    end = f' marker-end="url(#{color})"'
+    start = f' marker-start="url(#{color})"' if bidirectional else ""
+    dash = ' stroke-dasharray="8 6"' if planned else ""
+    svg.append(
+        f'<path id="{id_}" d="{path}" fill="none" stroke="{COLORS[color]}" '
+        f'stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"{dash}{start}{end}/>'
+    )
+
+
+def card(id_, x, y, width, height, title, lines=(), *, fill=WHITE, border=BORDER,
+         title_size=28, body_size=22, planned=False):
+    rect(x, y, width, height, fill, border, dashed=planned, id_=id_)
+    text(x + 22, y + 38, title, title_size, weight=700)
+    for index, line in enumerate(lines):
+        text(x + 22, y + 72 + 30 * index, line, body_size, MUTED)
+
+
+def edge_label(x, y, value, color="request", size=19, anchor="middle"):
+    text(x, y, value, size, COLORS[color], 600, anchor)
+
+
+# Page header and shared notation.
+rect(0, 0, WIDTH, HEIGHT, PAGE, None, 0)
 brand = Path(__file__).resolve().parents[2] / "public/brand/OneEarth-lockup-light-transparent@1x.png"
-logo=base64.b64encode(brand.read_bytes()).decode()
-blue="#266074"
-muted="#46616d"
-purple="#6246a5"
-green="#3b6b60"
-orange="#a4592f"
-navy="#20333c"
-proposed="#616080"
-svg=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">',
-'<defs><linearGradient id="page" x2="0" y2="1"><stop stop-color="#f0f6f7"/><stop offset="1" stop-color="#f9fbfc"/></linearGradient>',
-'<filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="4" stdDeviation="6" flood-opacity=".08"/></filter>']
-for ident,color in [('blue',blue),('green',green),('purple',purple),('orange',orange),('proposed',proposed)]:
-    svg.append(f'<marker id="{ident}" viewBox="0 0 10 10" markerWidth="9" markerHeight="9" refX="9" refY="5" orient="auto-start-reverse"><path fill="{color}" d="M 0 0 L 10 5 L 0 10 z"/></marker>')
-svg+=['</defs>','<style>text{font-family: "PingFang SC","Hiragino Sans GB",Arial,sans-serif}.mono{font-family:Menlo,monospace}.small{font-size:20px}.tag{font-size:19px;font-weight:600;letter-spacing:1px}</style>']
+logo = base64.b64encode(brand.read_bytes()).decode()
+svg.append(
+    f'<image x="59" y="35" width="154" height="54" preserveAspectRatio="xMinYMid meet" '
+    f'href="data:image/png;base64,{logo}"/>'
+)
+text(235, 76, "公开逻辑架构", 46, weight=720)
+rect(1486, 35, 256, 47, "#e5efe9", None, 12)
+text(1614, 66, "在运基线 · v0.2.0-rc.10", 20, "#30584b", 650, "middle")
+rule(58, 1742, 107)
+for x, heading in [(64, "用户交互"), (410, "运行时"), (1002, "业务服务"), (1486, "来源与存储")]:
+    text(x, 151, heading, 20, MUTED, 650)
 
-def rect(x,y,w,h,fill="#fff",border=None,r=18,shadow=False,dashed=False):
-    stroke=f' stroke="{border}" stroke-width="1.5"' if border else ""
-    if dashed: stroke+=' stroke-dasharray="10 7"'
-    effect=' filter="url(#shadow)"' if shadow else ''
-    svg.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{r}" fill="{fill}"{stroke}{effect}/>')
+rect(410, 183, 436, 552, RUNTIME_FILL, "#c4dbd0", 18, id_="runtime-active")
+text(437, 221, "OneEarth 运行时", 30, weight=710)
 
-def text(x,y,value,size=24,color=navy,weight=400,cls="",anchor="start"):
-    svg.append(f'<text x="{x}" y="{y}" font-size="{size}" fill="{color}" font-weight="{weight}" class="{cls}" text-anchor="{anchor}">{escape(value)}</text>')
+card("workbench", 64, 249, 255, 185, "工作台")
+text(86, 322, "网页界面（React）", 22, MUTED)
+rule(86, 296, 343)
+text(86, 380, "同源入口（Express）", 22, MUTED)
 
-def line(x,y,w,color="#e3edf0"):
-    svg.append(f'<path d="M {x} {y} h {w}" stroke="{color}" stroke-width="2"/>')
+card("runtime-api", 447, 241, 375, 125, "运行时 API",
+     ("受理 Chat，按配置选择执行器", "判断与回复，研究任务入库"), body_size=21)
+card("research-worker", 447, 435, 375, 113, "研究 worker",
+     ("从 PostgreSQL 领取任务", "委托发现并归档研究证据"), body_size=20)
+card("executor-adapters", 447, 622, 375, 95, "执行器适配层",
+     (r"可选执行器  Codex CLI \ Claude Code",), fill="#f1edf8", border="#ddd2ee", body_size=19)
 
-def badge(x,y,w,label,ink=blue,fill="#e6f2f4"):
-    rect(x,y,w,32,fill,None,8)
-    text(x+12,y+23,label,18,ink,650)
+card("discovery", 1002, 246, 333, 278, "数据发现智能体服务", title_size=27)
+text(1024, 331, "检索目录、定位来源", 22, MUTED)
+text(1024, 365, "规划取证、回传材料", 22, MUTED)
+rule(1024, 1313, 389)
+text(1024, 430, "目录查询与研究委托", 22, COLORS["request"], 650)
+text(1024, 468, "保留原任务与来源", 21, MUTED)
 
-def arrow(path,kind,reverse=False,dashed=False,element_id=None):
-    color={"blue":blue,"purple":purple,"green":green,"orange":orange,"proposed":proposed}[kind]
-    attrs=f' marker-end="url(#{kind})"'
-    if reverse: attrs+=f' marker-start="url(#{kind})"'
-    if dashed: attrs+=' stroke-dasharray="10 7"'
-    if element_id: attrs+=f' id="{element_id}"'
-    svg.append(f'<path d="{path}" fill="none" stroke="{color}" stroke-width="3.7" stroke-linecap="round" stroke-linejoin="round"{attrs}/>')
+card("professional-sources", 1486, 262, 250, 130, "专业资料来源",
+     ("论文断言、海纳、STAC",), title_size=26, body_size=20)
+card("spatial", 1002, 892, 333, 147, "时空数据服务",
+     ("覆盖范围与修订", "地图图层与发布投影"))
+card("storage", 1486, 892, 250, 147, "持久存储",
+     ("PostgreSQL / PostGIS", "Garage / S3"), title_size=26, body_size=20)
 
-rect(0,0,W,H,"url(#page)",None,0)
-svg.append(f'<image x="72" y="54" width="180" height="63" preserveAspectRatio="xMidYMid meet" href="data:image/png;base64,{logo}"/>')
-text(274,104,"公开逻辑架构",46,navy,720)
-text(76,157,"同源工作台、独立发现与运行时工具执行，预留数据处理和统一表征委托",27,muted)
-rect(1971,68,372,73,"#e6eff1",None,16)
-text(1995,99,"v0.2.0-rc.10",25,navy,680,"mono")
-text(1995,126,"在运基线 · 含设计预留",18,blue,560)
-line(74,185,2272,"#cadde2")
-for x,n in [(75,"访问侧"),(390,"同源入口"),(780,"运行时"),(1445,"业务服务"),(1940,"来源与存储")]:
-    text(x,222,n,20,blue,700,"tag")
+card("data-processing", 1002, 554, 333, 115, "数据处理智能体服务（预留）",
+     ("受理处理委托并回传结果",), fill=PLAN_FILL, border=PLAN_BORDER, title_size=22, body_size=20, planned=True)
+card("unified-representation", 1002, 715, 333, 116, "统一表征数据服务（预留）",
+     ("返回表征数据、来源与版本",), fill=PLAN_FILL, border=PLAN_BORDER, title_size=23, body_size=20, planned=True)
+card("tool-service", 447, 815, 375, 126, "独立工具服务（规划）",
+     ("供运行时及其他获授权的调用方使用", "执行工具并返回状态和结果"), fill=PLAN_FILL, border=PLAN_BORDER,
+     title_size=27, body_size=18, planned=True)
+card("network-sources", 1486, 720, 250, 119, "公开网络供应商与原站",
+     ("搜索、网页与 PDF 来源",), fill="#fffbf5", border="#e8d8c6", title_size=22, body_size=19)
 
-rect(75,352,245,244,border="#d7e5e9",shadow=True)
-text(97,396,"研究者浏览器",28,navy,680)
-line(97,412,197)
-text(97,446,"本机与指定局域网",21)
-text(97,481,"Chat、订阅、历史记录",19,muted)
-text(97,514,"地图与数据目录",19,muted)
-badge(97,540,184,"业务同源")
+arrow("workbench-runtime", "M322 303 H443")
+edge_label(383, 287, "工作台请求")
+arrow("research-task-handoff", "M637 369 V431")
+edge_label(654, 409, "入库后领取", anchor="start")
+arrow("api-executor-call", "M479 368 V380 Q479 394 465 394 H442 Q428 394 428 408 V651 Q428 665 442 665 H443", "executor")
+arrow("worker-executor-call", "M637 550 V618", "executor")
+edge_label(655, 592, "模型调用", "executor", anchor="start")
 
-rect(385,328,297,289,border="#d7e5e9",shadow=True)
-text(410,373,"工作台网关",29,navy,680)
-badge(410,391,222,"Express / React")
-text(410,455,"工作台和业务接口同源",20,navy,550)
-text(410,486,"本机与受限局域网入口",20,navy,550)
-line(410,510,246)
-text(410,545,"Host / Origin 校验",21)
-text(410,578,"局域网按直连网段限制",19,muted)
+arrow("discovery-tool-callback", "M997 279 H826", "executor", bidirectional=True)
+edge_label(911, 265, "发现取证回调", "executor")
+arrow("discovery-catalogue", "M826 343 H997")
+edge_label(911, 329, "A2A 目录查询")
+arrow("discovery-research", "M826 480 H997", bidirectional=True)
+edge_label(911, 466, "A2A 研究委托")
+arrow("discovery-sources", "M1339 320 H1482", "data")
+edge_label(1410, 306, "读取资料", "data")
 
-rect(775,250,543,639,"#e9f3f5","#c5dce1",22)
-text(802,293,"OneEarth 运行时",31,navy,680)
-text(802,320,"业务 API 与研究 worker 分进程运行",19,muted)
-rect(800,342,493,123,"#fff","#d5e7eb",13)
-text(822,375,"运行时 API",25,navy,680)
-text(822,402,"统一任务、材料和目录入口",18,muted)
-text(822,428,"覆盖业务查询 → 时空服务",18,green,560)
-text(822,452,"内部工具受理及持久回执",18,muted)
-rect(800,512,493,120,"#fff","#d5e7eb",13)
-text(822,550,"研究 worker",26,navy,680)
-text(822,582,"领取任务、请求发现、汇总证据",19,muted)
-text(822,608,"恢复轮次、归档研究和稳定引用",19,muted)
-rect(800,677,493,179,"#f3eff9","#e0d1ef",13)
-text(822,718,"工具执行队列与适配层",25,purple,680)
-text(822,755,"API 进程内独立有界队列",20,muted)
-text(822,788,"Search、Fetch、原站及 PDF",20,muted)
-text(822,822,"绑定原 Task、消息与调用编号",19,purple,550)
-arrow("M 1048 468 V 506","blue",dashed=True)
-arrow("M 1295 434 H 1306 V 755 H 1295","purple",dashed=True)
+arrow("spatial-catalogue-sync", "M1339 930 H1376 Q1392 930 1392 914 V483 Q1392 467 1376 467 H1339", "data")
+edge_label(1410, 552, "同步发布", "data", size=17, anchor="start")
+edge_label(1410, 576, "投影", "data", size=17, anchor="start")
+arrow("spatial-storage", "M1339 982 H1482", "data")
+edge_label(1410, 968, "索引与对象", "data")
+arrow("runtime-spatial-coverage", "M443 343 H393 Q377 343 377 359 V952 Q377 968 393 968 H998", "data")
+edge_label(913, 956, "查询覆盖范围", "data")
+arrow("workbench-map-resources", "M191 438 V1062 Q191 1078 207 1078 H1130 Q1146 1078 1146 1062 V1043", "data")
+edge_label(681, 1066, "获取已发布地图与图层", "data")
 
-rect(1440,260,377,317,border="#d7e5e9",shadow=True)
-text(1465,303,"数据发现智能体服务",29,navy,680)
-badge(1465,320,218,"A2A · 已上线")
-text(1465,388,"独立 DeepSeek 规划模型",21)
-text(1465,422,"决定检索词、URL、读法与采纳",20,muted)
-text(1465,454,"保留目录、原发现任务和材料",20,muted)
-line(1465,477,326)
-text(1465,516,"按同一委托收工具回执",20,purple,560)
-text(1465,548,"论文、海纳与逐景目录走业务查询",17,muted)
+arrow("data-processing-a2a", "M850 568 H905 Q921 568 921 584 V601 Q921 617 937 617 H998",
+      "planned", planned=True, bidirectional=True)
+edge_label(963, 603, "A2A", "planned")
+arrow("unified-representation-a2a", "M850 638 H871 Q887 638 887 654 V754 Q887 770 903 770 H998",
+      "planned", planned=True, bidirectional=True)
+edge_label(951, 756, "A2A", "planned")
+arrow("independent-tool-service", "M637 739 V811", "planned", planned=True)
+edge_label(657, 783, "A2A / MCP / API", "planned", anchor="start")
+rect(1384, 859, 16, 14, PAGE, None, 0)
+arrow("tool-service-egress", "M826 866 H1421 Q1437 866 1437 850 V793 Q1437 777 1453 777 H1482",
+      "egress", planned=True)
+edge_label(1189, 854, "工具服务出站（规划）", "egress")
 
-rect(1440,621,377,141,"#f6f5fa","#8b87aa",18,dashed=True)
-text(1465,662,"数据处理智能体服务",28,navy,680)
-badge(1465,676,82,"预留",proposed,"#eae7f2")
-text(1465,738,"拟议 A2A 受理处理并回传结果",20,proposed,550)
+rule(58, 1742, 1098)
+text(64, 1127, "实线为现行链路，虚线为规划链路", 19, MUTED, 550)
+text(1736, 1127, "单箭头标发起或交接方向 · 双箭头另标回传", 19, MUTED, 500, "end")
 
-rect(1440,788,377,141,"#f6f5fa","#8b87aa",18,dashed=True)
-text(1465,833,"统一表征数据服务（预留）",28,navy,680)
-text(1465,872,"查询或获取统一表征数据",20,proposed,550)
-text(1465,902,"返回数据、来源与版本",20,proposed,550)
-
-spatial=1000
-rect(1440,spatial,377,231,border="#d7e5e9",shadow=True)
-text(1465,spatial+44,"时空数据服务",29,navy,680)
-badge(1465,spatial+59,160,"内部服务")
-text(1465,spatial+117,"覆盖业务查询",18,green,560)
-text(1465,spatial+148,"签发权威范围、提供图层产物",19,muted)
-text(1465,spatial+178,"后台同步发现方发布投影",18,muted)
-text(1465,spatial+206,"覆盖查询使用本地 PostGIS 索引",18,muted)
-
-rect(1940,260,403,156,border="#d7e5e9",shadow=True)
-text(1965,307,"专业资料来源",28,navy,680)
-text(1965,348,"论文断言只读、海纳与 STAC",22,muted)
-text(1965,378,"发现服务按业务契约查取",19,muted)
-rect(1940,458,403,168,"#fcf7f0","#ebd8c7",18,True)
-text(1965,504,"公开网络供应商与原站",26,navy,680)
-text(1965,548,"Bing、DataCite、DeepSeek",20,muted)
-text(1965,580,"原站、PDF、公开归档索引",20,muted)
-
-storage=1010
-rect(1940,storage,403,222,border="#d7e5e9",shadow=True)
-text(1965,storage+44,"Primary 持久存储",27,navy,680)
-text(1965,storage+82,"PostgreSQL / PostGIS",21,muted)
-text(1965,storage+116,"运行时、发现、时空各持有本域库",18,muted)
-text(1965,storage+152,"Garage / S3",21,muted)
-text(1965,storage+185,"图层与对象均在回环边界内",19,muted)
-
-arrow("M 321 476 H 381","blue")
-arrow("M 685 468 H 713 Q 731 468 731 450 V 413 Q 731 402 746 402 H 797","blue")
-arrow("M 1296 544 H 1436","blue",True)
-rect(1320,481,107,55,"#f4f8fa",None,6)
-text(1372,498,"A2A",16,blue,680,"mono","middle")
-text(1372,515,"目录 Message",14,blue,570,"","middle")
-text(1372,531,"研究 Task",14,blue,570,"","middle")
-arrow("M 1436 389 H 1297","purple",True)
-rect(1321,343,99,32,"#f4f8fa",None,6)
-text(1371,365,"工具回执",17,purple,620,"","middle")
-arrow("M 1819 353 H 1935","green")
-arrow(f"M 1819 {spatial+135} H 1935","green")
-
-arrow("M 1296 589 H 1340 Q 1357 589 1357 607 V 672 Q 1357 689 1374 689 H 1436","proposed",True,True)
-text(1368,639,"拟议 A2A",15,proposed,680)
-text(1368,662,"委托／结果",14,proposed,620)
-arrow("M 1319 618 Q 1330 618 1330 638 V 812 Q 1330 830 1348 830 H 1436","proposed",True,True,"unified-representation-a2a")
-text(1349,796,"拟议 A2A",16,proposed,680)
-text(1349,817,"委托／结果",16,proposed,620)
-
-arrow("M 1848 955 V 578 Q 1848 558 1829 558 H 1821","green",dashed=True)
-svg.append('<path d="M 1818 1021 H 1830 Q 1848 1021 1848 1008 V 982" fill="none" stroke="#3b6b60" stroke-width="3.7" stroke-dasharray="10 7"/>')
-text(1871,633,"目录",17,green,600,"","middle")
-text(1871,655,"同步",17,green,600,"","middle")
-arrow("M 1296 850 H 1371 Q 1388 850 1388 867 V 951 Q 1388 969 1406 969 H 1876 Q 1895 969 1895 950 V 554 Q 1895 535 1913 535 H 1937","orange")
-rect(1494,948,277,42,"#f9f2e9",None,8)
-text(1515,976,"运行时适配层实际出站",20,orange,650)
-arrow("M 796 432 H 761 V 1075 Q 761 1096 782 1096 H 1436","green")
-rect(863,1075,262,42,"#eff5f5",None,8)
-text(884,1103,"时空覆盖范围与修订",20,green,600)
-arrow("M 551 621 V 1260 Q 551 1278 569 1278 H 1597 Q 1615 1278 1615 1260 V 1235","green",dashed=True)
-rect(779,1257,336,43,"#eff5f5",None,8)
-text(802,1286,"已发布地图与图层资源",20,green,600)
-
-footer=1315
-line(74,footer,2272,"#cddfe3")
-text(76,footer+49,"一次公开网络研究",24,navy,675)
-text(296,footer+49,"发现选择来源  →  运行时核准并执行  →  发现按原 Task 取回回执  →  运行时归档依据",23,muted)
-text(76,footer+102,"灰紫色虚框和连线表示未来委托。现行网络工具调用、目录查询与图层传输均有各自路径。",22,blue)
 svg.append("</svg>")
-out.write_text("\n".join(svg),encoding="utf-8")
+Path(sys.argv[1]).write_text("\n".join(svg), encoding="utf-8")

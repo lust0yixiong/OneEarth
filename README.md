@@ -15,9 +15,9 @@ Mac mini 常驻版本为 **v0.2.0-rc.10**，设置页显示版本。工作台支
 
 常驻工作台后端在同一进程内承载面向用户的 5474 和本机回环兼容口 5477，研究 worker、发现服务和时空服务各自独立。[现行进程拓扑](docs/架构与接口现状.md#现行进程拓扑)
 
-[![OneEarth 横版逻辑架构图，含数据发现智能体服务、数据处理智能体服务和统一表征数据服务（预留），点击查看大图](docs/diagrams/oneearth-public-architecture.png)](docs/diagrams/oneearth-public-architecture.png)
+[![OneEarth 横版逻辑架构图，含预留的数据处理、统一表征数据服务及规划中的独立工具服务，点击查看大图](docs/diagrams/oneearth-public-architecture.png)](docs/diagrams/oneearth-public-architecture.png)
 
-横版图描绘 rc.10 形成的逻辑分工。图中网关与运行时 API 两框对应现行工作台后端同一进程里的入口和处理模块。预留的数据处理智能体服务和统一表征数据服务各自通过标有 A2A 的虚线连接 OneEarth 运行时。[逻辑图说明](docs/架构与接口现状.md#公开逻辑架构) · [预留 A2A 服务](docs/架构与接口现状.md#预留-a2a-服务) · [rc.10 首发图注](docs/架构与接口现状.md#rc10-图注) · [图索引](docs/diagrams/README.md)
+横版图将网页界面和同源服务端入口归在工作台内。服务端入口与运行时 API 由同一个工作台后端进程承载。实线为现行链路，虚线为规划链路。独立工具服务规划支持 A2A、MCP 和 API 调用，橘色虚线标出其公开网络出站路径。[主图连线说明](docs/架构与接口现状.md#主图连线说明) · [独立工具服务](docs/架构与接口现状.md#独立工具服务) · [rc.10 首发图注](docs/架构与接口现状.md#rc10-图注) · [图索引](docs/diagrams/README.md)
 
 ## 从这里开始
 
