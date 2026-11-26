@@ -303,6 +303,7 @@ export interface Message {
   taskLifecycle?: import("./task-lifecycle-client").TaskLifecycle;
   browserTurnFrame?: import("./turn-context").BrowserTurnFrame;
   workspaceEffect?: import("./turn-context").WorkspaceEffect;
+  verifiedWorkspaceCall?: import("@ag-ui/core").ToolCall;
   workspaceReceipt?: import("./turn-context").WorkspaceReceipt | import("./turn-context").BrowserWorkspaceReceipt;
   clarificationReply?: ClarificationReply;
   clarificationAnswer?: import("./clarification").ClarificationAnswer;

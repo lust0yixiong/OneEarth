@@ -1,8 +1,10 @@
 import {readTaskLifecycle,type TaskLifecycle} from "./task-lifecycle-client";
 import type {DiscoveryAttempt,DiscoveryResponse,Message} from "./types";
-import {validBrowserWorkspaceReceipt,type BrowserWorkspaceReceipt,type WorkspaceReceipt,type WorkspaceRecoveryInput} from "./turn-context";
+import {validBrowserWorkspaceReceipt,type BrowserWorkspaceReceipt,type WorkspaceReceipt} from "./turn-context";
 
-export const chatMessagesPath = "/api/chat/messages";
+import {workspaceToolCallId,workspaceToolReceiptPath} from "./native-workspace-tool";
+import {samePublishedRaster} from "./published-raster-observation";
+import {workspaceObservationTarget} from "./workspace-published-layer";
 
 export async function cancelChatRequest(id:string,signal:AbortSignal) {
   const response=await fetch("/api/tasks/"+encodeURIComponent(id),{method:"DELETE",signal,redirect:"error"});
@@ -44,6 +46,7 @@ export interface ResearchRecord {
   updated:number;
   result:DiscoveryResponse;
   interrupt?:unknown;
+  workspaceTool?:unknown;
   workspaceReceipt?:WorkspaceReceipt;
   taskLifecycle?:TaskLifecycle;
 }
@@ -71,19 +74,19 @@ export function readWorkspaceReceipt(receipt:WorkspaceReceipt|undefined,taskId:s
   return validBrowserWorkspaceReceipt(wire) ? receipt : undefined;
 }
 
-export async function reportWorkspaceReceipt(id:string,receipt:BrowserWorkspaceReceipt) {
-  const res=await fetch(chatMessagesPath+"/"+encodeURIComponent(id)+"/workspace-receipt",{
-    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(receipt),signal:AbortSignal.timeout(8000),
-  });
-  const saved=res.ok ? await res.json().catch(()=>undefined) : undefined;
-  return {settled:res.ok || res.status===400 || res.status===404 || res.status===409,
-    receipt:readWorkspaceReceipt(saved,id,receipt.conversationId,receipt.turnId)};
+export function readRecordWorkspaceReceipt(record:ResearchRecord) {
+  const receipt=readWorkspaceReceipt(record.workspaceReceipt,record.id,record.conversationId,record.turnId);
+  if(receipt?.observation && !samePublishedRaster(receipt.observation,workspaceObservationTarget(record.result)))return;
+  return receipt;
 }
 
-export async function requestWorkspaceRecovery(id:string,input:WorkspaceRecoveryInput,signal:AbortSignal) {
-  const res=await fetch(chatMessagesPath+"/"+encodeURIComponent(id)+"/workspace-recovery",{
-    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(input),signal,
+export async function reportWorkspaceReceipt(id:string,receipt:BrowserWorkspaceReceipt) {
+  const res=await fetch(workspaceToolReceiptPath(id,workspaceToolCallId(id)),{
+    method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(receipt),
+    cache:"no-store",redirect:"error",signal:AbortSignal.timeout(8000),
   });
-  if(!res.ok)return;
-  return readWorkspaceReceipt(await res.json(),id,input.conversationId,input.turnId);
+  const saved=res.ok ? await res.json().catch(()=>undefined) : undefined;
+  const verified=readWorkspaceReceipt(saved,id,receipt.conversationId,receipt.turnId);
+  return {settled:res.ok || res.status===400 || res.status===404 || res.status===409,
+    receipt:verified?.observation && !samePublishedRaster(verified.observation,receipt.observation) ? undefined : verified};
 }

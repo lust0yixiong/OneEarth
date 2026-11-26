@@ -1,15 +1,20 @@
 import {HttpAgent, type AgentSubscriber} from "@ag-ui/client";
-import type {ResumeEntry} from "@ag-ui/core";
+import type {Message as AgUiMessage,ResumeEntry,ToolCall} from "@ag-ui/core";
 import {ChatResponseError} from "./chat-response";
 import {nativeAgUiPath, nativeAgUiProtocolVersion, oneEarthAgUiVersion, readOneEarthAgUiInterruptRecord, readOneEarthAgUiResult,
   type OneEarthAgUiForwardedProps, type OneEarthAgUiInterruptRecord} from "./native-ag-ui";
-import {loadResearchRecord,researchRecordId,type ResearchRecord} from "./runtime-client";
+import {loadResearchRecord,readRecordWorkspaceReceipt,researchRecordId,type ResearchRecord} from "./runtime-client";
+import {matchesWorkspaceToolCall,nativeWorkspaceTool,nativeWorkspaceToolName,readPendingWorkspaceTools,readWorkspaceToolRecord,
+  unverifiedWorkspaceToolResult,workspaceToolCall,workspaceToolCallId,workspaceToolCallsPath,workspaceToolResult} from "./native-workspace-tool";
+import {workspaceObservationTarget} from "./workspace-published-layer";
+import type {WorkspaceReceipt} from "./turn-context";
 import {matchesTaskIdentity, readTaskLifecycle, type TaskLifecycle} from "./task-lifecycle-client";
 import type {DiscoveryResponse} from "./types";
 
 export type ChatRun = {threadId: string; runId: string; turnId: string};
-type CompletedChat = {response: DiscoveryResponse; interrupt?: OneEarthAgUiInterruptRecord; record?: ResearchRecord};
+type CompletedChat = {response: DiscoveryResponse; interrupt?: OneEarthAgUiInterruptRecord; record?: ResearchRecord; workspaceCall?:ToolCall};
 type ResumeConflict = {conflict: true; locationId?: string};
+type WorkspaceConflict = {workspaceConflict:true; pendingRuns:string[]};
 type ChatProgress = {
   onAccepted: () => void;
   onDraft: (text: string) => void;
@@ -22,31 +27,44 @@ const taskStates = new Set(["queued", "running", "complete", "failed", "cancelle
 
 export async function submitNativeChat<T extends object>(
   {threadId, runId, turnId}: ChatRun, question: string, submission: T,
-  abortController: AbortController, progress: ChatProgress, resume?: ResumeEntry,
-): Promise<CompletedChat | ResumeConflict | undefined> {
+  abortController: AbortController, progress: ChatProgress, resume?: ResumeEntry, toolMessages:AgUiMessage[]=[],
+): Promise<CompletedChat | ResumeConflict | WorkspaceConflict | undefined> {
   const forwardedProps: OneEarthAgUiForwardedProps<T> = {oneearth: {version: oneEarthAgUiVersion, submission}};
   const url = new URL(nativeAgUiPath, location.origin).href;
   let posted = false;
   let httpStatus: number | undefined;
   let conflictLocation: string | undefined;
+  let workspaceConflict: WorkspaceConflict | undefined;
   let started = false;
   let assistant = false;
   let textEnded = false;
   let draft = "";
+  let tool: {id:string;args:string;ended:boolean}|undefined;
+  let invalidTool=false;
   let result: CompletedChat | undefined;
   let failure: ChatResponseError | undefined;
   const agent = new HttpAgent({
-    url, threadId, initialMessages: [{id: turnId, role: "user", content: question}],
+    url, threadId, initialMessages: [...toolMessages,{id: turnId, role: "user", content: question}],
     fetch: async (target, options) => {
       if (posted || target !== url || options?.method !== "POST")
         throw Error("本轮只允许一次原生 Chat 提交。");
       posted = true;
       const response = await fetch(target, {...options, redirect: "error", cache: "no-store"});
       httpStatus = response.status;
-      const locationHeader=response.headers.get("Location");
-      if (resume && httpStatus===409 && locationHeader) {
-        const match=/^\/api\/tasks\/([^/?#]+)$/u.exec(locationHeader);
-        if(match && researchRecordId.test(match[1])) conflictLocation=match[1];
+      if(httpStatus===409){
+        const detail=await response.clone().json().catch(()=>undefined);
+        if(detail?.code==="WORKSPACE_TOOL_RESULTS_REQUIRED"){
+          const pendingRuns=(Array.isArray(detail.pendingToolCallIds) ? detail.pendingToolCallIds.slice(0,64) : [])
+            .flatMap((id:unknown)=>{
+              if(typeof id!=="string")return [];
+              const run=id.slice("workspace:".length);
+              return researchRecordId.test(run) && id===workspaceToolCallId(run) ? [run] : [];
+            });
+          workspaceConflict={workspaceConflict:true,pendingRuns};
+        }else if(resume){
+          const match=/^\/api\/tasks\/([^/?#]+)$/u.exec(response.headers.get("Location")??"");
+          if(match && researchRecordId.test(match[1])) conflictLocation=match[1];
+        }
       }
       return response;
     },
@@ -76,6 +94,32 @@ export async function submitNativeChat<T extends object>(
     onTextMessageEndEvent: ({event}) => {
       if (started && assistant && event.messageId === runId) textEnded = true;
     },
+    onToolCallStartEvent: ({event})=>{
+      if(!started || !assistant || tool || event.parentMessageId!==runId ||
+        event.toolCallId!==workspaceToolCallId(runId) || event.toolCallName!==nativeWorkspaceToolName){
+        invalidTool=true;
+        return;
+      }
+      tool={id:event.toolCallId,args:"",ended:false};
+    },
+    onToolCallArgsEvent: ({event})=>{
+      if(!tool || tool.ended || tool.id!==event.toolCallId || tool.args.length+event.delta.length>32768){
+        invalidTool=true;
+        return;
+      }
+      tool.args+=event.delta;
+    },
+    onToolCallEndEvent: ({event})=>{
+      if(!tool || tool.ended || tool.id!==event.toolCallId){
+        invalidTool=true;
+        return;
+      }
+      tool.ended=true;
+    },
+    onToolCallResultEvent: ()=>{
+      // This tool has no browser result on the original response stream.
+      invalidTool=true;
+    },
     onRunFinishedEvent: terminal => {
       if (!started || terminal.event.threadId !== threadId || terminal.event.runId !== runId) return;
       if (terminal.outcome === "cancelled") failure = new ChatResponseError("本地任务已取消。", "cancelled");
@@ -97,14 +141,22 @@ export async function submitNativeChat<T extends object>(
       }
       if (terminal.outcome !== "success") return;
       const response = readOneEarthAgUiResult(terminal.result, runId);
-      if (textEnded && response?.message === draft) result = {response};
+      if(!textEnded || !response || response.message!==draft)return;
+      const outcome=terminal.event.outcome;
+      const offered=outcome?.type==="success" ? outcome.pendingToolCallIds : undefined;
+      const expected=workspaceToolCall(runId,response);
+      const actual:ToolCall|undefined=tool?.ended
+        ? {id:tool.id,type:"function",function:{name:nativeWorkspaceToolName,arguments:tool.args}} : undefined;
+      const workspaceCall=!invalidTool && offered?.length===1 && offered[0]===expected?.id &&
+        actual && expected && matchesWorkspaceToolCall(actual,expected) ? expected : undefined;
+      result={response,workspaceCall};
     },
     onRunErrorEvent: ({event}) => {
       if (started) failure = new ChatResponseError(event.message, event.code);
     },
   };
   try {
-    await agent.runAgent({runId, forwardedProps, abortController, ...(resume ? {resume:[resume]} : {})}, subscriber);
+    await agent.runAgent({runId, forwardedProps, abortController, tools:[nativeWorkspaceTool], ...(resume ? {resume:[resume]} : {})}, subscriber);
   } catch {
     // A transport or verifier failure can still leave a durable run to recover.
     result = undefined;
@@ -112,6 +164,7 @@ export async function submitNativeChat<T extends object>(
   abortController.signal.throwIfAborted();
   if (failure) throw failure;
   if (result) return result;
+  if (workspaceConflict) return workspaceConflict;
   if (resume && httpStatus===409) return {conflict:true,locationId:conflictLocation};
   if (httpStatus !== undefined && refusedStatuses.has(httpStatus))
     throw new ChatResponseError("运行时未受理本轮请求。", "submission_rejected");
@@ -152,6 +205,37 @@ async function readNativeArchive(run:ChatRun,signal:AbortSignal):Promise<Complet
     (interrupt?.kind==="question-check" && interrupt.questionCheck.originalQuestion!==record.question))
     throw Error("原任务的追问记录无效。");
   return {response:record.result,interrupt,record};
+}
+
+export async function loadNativeWorkspaceMessages(threadId:string,anchors:(string|undefined)[],signal:AbortSignal) {
+  for(const candidate of new Set(anchors)){
+    if(!candidate || !researchRecordId.test(candidate))continue;
+    const response=await fetch(workspaceToolCallsPath(threadId,candidate),{
+      cache:"no-store",redirect:"error",signal:AbortSignal.any([signal,AbortSignal.timeout(5000)]),
+    });
+    // A history entry from before AG-UI is not an inventory anchor.
+    if(response.status===404)continue;
+    if(!response.ok)throw Error("原工作台回执目录暂不可读。");
+    const pending=readPendingWorkspaceTools(await response.json(),threadId,candidate);
+    if(!pending || pending.length>64)throw Error("原工作台回执目录无效。");
+    const receipts:{id:string;receipt:WorkspaceReceipt}[]=[];
+    const pairs=await Promise.all(pending.map(async ({runId,toolCallId}):Promise<AgUiMessage[]>=>{
+      const task=await readNativeTask(runId,signal);
+      if(task?.id!==runId || task.conversationId!==threadId || task.status!=="complete" ||
+        typeof task.turnId!=="string" || !researchRecordId.test(task.turnId))
+        throw Error("原工作台调用不属于当前会话。");
+      const archive=(await readNativeArchive({runId,threadId,turnId:task.turnId},signal))?.record;
+      const tool=archive && readWorkspaceToolRecord(archive.workspaceTool,runId,archive.result);
+      if(!archive || !tool || tool.call.id!==toolCallId)throw Error("原工作台工具调用暂不可核对。");
+      const target=workspaceObservationTarget(archive.result);
+      const receipt=readRecordWorkspaceReceipt(archive);
+      if(receipt)receipts.push({id:runId,receipt});
+      const result=tool.result ?? (receipt && workspaceToolResult(receipt,!!target)) ?? unverifiedWorkspaceToolResult(runId);
+      return [{id:runId,role:"assistant",content:archive.result.message,toolCalls:[tool.call]},result];
+    }));
+    return {anchor:candidate,messages:pairs.flat(),receipts};
+  }
+  return {anchor:undefined,messages:[],receipts:[]};
 }
 
 export async function readNativeInterrupt(run:ChatRun,signal:AbortSignal,expectedKind?:OneEarthAgUiInterruptRecord["kind"]) {
