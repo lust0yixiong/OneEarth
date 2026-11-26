@@ -12,6 +12,7 @@ import { recoverObservationResearchRecord } from "./runtime-observation-research
 import { runtimeWebToolStore } from "./runtime-web-tool-store";
 import { runtimeWebToolChannel } from "./runtime-web-tool-router";
 import { agUiWorkbench } from "./ag-ui-workbench";
+import { agUiWorkspaceInventory } from "./ag-ui-workspace-inventory";
 import { nativeAgUiPath } from "../src/domain/native-ag-ui";
 import { prepareRuntimeChat } from "./runtime-chat-turn";
 import { runtimeServices } from "./runtime-services";
@@ -65,14 +66,18 @@ export async function createRuntimeApi(state: string) {
     business.use(queries.router);
     business.use("/api/results", snapshots.router);
     business.use(["/api/paper-records", nativeAgUiPath], express.json({limit:"256kb"}));
+    business.put("/api/tasks/:taskId/tool-calls/:toolCallId/receipt", express.json({limit:"16kb"}));
     business.use("/api/paper-records", runtimePaperRoutes());
     business.use(observationMaterialsRoutes());
     const chat = await agUiWorkbench(business, tasks, (id,input) =>
       prepareRuntimeChat(services, id, input, tasks.chat.latestCompleted, {publicAnswer:true}));
     stopWork.push(() => chat.close());
+    agUiWorkspaceInventory(business, tasks, tasks.chat.agUiPendingWorkspaceCalls,
+      async id => typeof await tasks.chat.agUiFingerprint(id) === "string");
     taskStatusRoutes(business, "/api/tasks", tasks,
       {researchRecords:true,chatIdentity:true,
         readInterrupt:id=>tasks.chat.agUiInterrupt(id),
+        readWorkspaceTool:id=>tasks.chat.agUiWorkspaceRecord(id),
         recoverRecord:async task=>(await recoverObservationRecord(tasks,task))??recoverObservationResearchRecord(tasks,task),
         onCancelled:id=>chat.cancel(id)});
     business.use(badRequest);

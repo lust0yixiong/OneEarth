@@ -1,3 +1,5 @@
+import {nativeWorkspaceReceiptRoutes} from "./ag-ui-workspace";
+import {AgUiWorkspacePendingError} from "./postgres-ag-ui-workspace";
 import {bindAgUiResume} from "./ag-ui-interrupt";
 import {validateTurnStructure} from "./runtime-input";
 import {authorizedFlashApi} from "./flash-api";
@@ -18,7 +20,7 @@ import {workspaceReply} from "./runtime-chat-channel";
 /** Native producer: standard frames are persisted directly by the original
  * acceptance/finish transactions, never reconstructed from NDJSON events. */
 export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresChatMessages},prepare:(id:string,input:unknown)=>Promise<ChatPreparation>){
- const {chat}=tasks;await chat.acquire();let stopping=false;
+ const {chat}=tasks;await chat.acquire();nativeWorkspaceReceiptRoutes(app,chat);let stopping=false;
  const active=new Map<string,{controller:AbortController;done:Promise<void>}>();
  function start(id:string,prepared:Exclude<ChatPreparation,{error:string}>,allowPublic:boolean){
   const controller=new AbortController(),signal=AbortSignal.any([controller.signal,AbortSignal.timeout(125000)]),timings:ExecutorTiming[]=[];
@@ -71,12 +73,13 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
     const same=await chat.agUiFingerprint(id)===fingerprint;
     res.status(409).set("Location","/api/tasks/"+id).json({error:same?"该运行已受理，请只读原状态与归档。":"该运行编号已用于另一份提交。",code:same?"RUN_ALREADY_ACCEPTED":"RUN_ID_CONFLICT"});return;
    }
+   const pendingWorkspaceToolCallIds=await chat.checkAgUiWorkspace(decoded.body.conversationId,decoded.body.previousTaskId,decoded.workspaceReplies);
    const body=await bindAgUiResume(tasks,decoded.body,resume);
    const prepared=resume?.status==="cancelled"?{kind:"research" as const}:await prepare(id,body);
    if(resume?.status==="cancelled"){const issue=await validateTurnStructure(tasks,body);if(issue)throw new AgUiInputError(issue);}
 
    if("error" in prepared){res.status(resume?409:400).json({error:prepared.error});return;}
-   const admitted=await chat.admit(id,body,4,{threadId:body.conversationId,turnId:body.turnId,fingerprint,...(resume?{resume}:{})});
+   const admitted=await chat.admit(id,body,4,{threadId:body.conversationId,turnId:body.turnId,fingerprint,workspaceTool:decoded.workspaceTool,workspaceReplies:decoded.workspaceReplies,pendingWorkspaceToolCallIds,previousTaskId:decoded.body.previousTaskId,...(resume?{resume}:{})});
    if(!admitted){res.status(429).set("Retry-After","2").json({error:"前台正在处理其他运行。"});return;}
    if(!admitted.started){res.status(409).set("Location","/api/tasks/"+id).json({error:"该运行已受理，请只读原状态与归档。",code:"RUN_ALREADY_ACCEPTED"});return;}
    if(resume?.status==="cancelled")await tasks.finish(id,"cancelled",{error:"研究者明确放弃原追问。",code:"cancelled"});
@@ -84,6 +87,7 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
    await stream(id,res);
   }catch(error){
    if(res.headersSent){res.destroy();return;}
+   if(error instanceof AgUiWorkspacePendingError){res.status(409).json({error:error.message,code:"WORKSPACE_TOOL_RESULTS_REQUIRED",pendingToolCallIds:error.pendingToolCallIds});return;}
    if(error instanceof AgUiInputError){res.status(error.status).json({error:error.message});return;}
    if(error instanceof TaskConflict){res.status(409).json({error:error.message});return;}
    res.status(503).json({error:"运行未能持久受理。"});

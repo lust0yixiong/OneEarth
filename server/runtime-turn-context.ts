@@ -1,3 +1,4 @@
+import type {ToolMessage} from "@ag-ui/core";
 import type {TaskStore,Task} from "./task-store";
 import {taskIdPattern} from "./task-store";
 import type {RuntimeTurnInput} from "./runtime-turn-handoff";
@@ -12,14 +13,14 @@ import type {ConversationProjection} from "./conversation-history";
 
 type ResearchState="not-requested"|"planned"|"running"|"waiting-input"|"complete"|"partial"|"failed"|"cancelled"|"unknown";
 type ResearchExecution={status:"queued"|"running"|"complete"|"failed"|"cancelled";bindings:{taskId:string;messageId:string;state:string;operation:"discover"|"read"}[]};
-type ContextStore=TaskStore&{workspaceReceipt?:(id:string)=>Promise<WorkspaceReceipt|undefined>;researchExecution?:(id:string)=>Promise<ResearchExecution|undefined>};
+type ContextStore=TaskStore&{chat?:{agUiWorkspaceResults?:(runId:string,threadId:string)=>Promise<{taskId:string;message:ToolMessage}[]>};workspaceReceipt?:(id:string)=>Promise<WorkspaceReceipt|undefined>;researchExecution?:(id:string)=>Promise<ResearchExecution|undefined>};
 type ContextRecord={taskId:string;turnId?:string;submittedAt?:number;question:string;taskState:string;assistantText?:string;
   failure?:{source:"server-terminal";code?:string;message:string};
   conditions:{origin:"user-message"|"browser-view"|"authoritative-scope"|"model-summary";taskId:string;value:unknown}[];
   execution:{research:ResearchState;plannedAction?:string;bindings?:ResearchExecution["bindings"];tools:{id:string;state:string;title:string}[];workspace:RuntimeWorkspaceState};
   batch?:ResultBatch;referenceKeys?:string[];observationFacts?:"separate-authority"};
 export type RuntimeTurnContext={version:1;current:{taskId:string;turnId:string;conversationId:string;question:string};
-  history:ContextRecord[];conversation?:ConversationProjection;unavailableRelations:{taskId:string;reason:"unavailable"|"foreign-conversation"|"turn-mismatch"|"limit"}[];
+  history:ContextRecord[];workspaceToolResults?:{source:"native-admission-frozen-result";taskId:string;message:ToolMessage}[];conversation?:ConversationProjection;unavailableRelations:{taskId:string;reason:"unavailable"|"foreign-conversation"|"turn-mismatch"|"limit"}[];
   frozenView?:WorkspaceViewContext;browserObservations?:RuntimeTurnInput["context"]["browserTurnFrame"];
   recentOutcome?:{source:"same-conversation-server-task";taskId:string;turnId?:string;submittedAt:number;question:string;
     taskState:string;research:ResearchState;hasResultBatch:boolean};
@@ -124,11 +125,12 @@ export async function runtimeTurnContext(tasks:ContextStore,taskId:string,body:R
     source:"same-conversation-server-task",taskId:recent.task.id,turnId:recent.record.turnId,submittedAt:recent.task.created,
     question:recent.record.question,taskState:recent.record.taskState,research:recent.record.execution.research,hasResultBatch:!!recent.record.batch,
   }:undefined;
-  return modelSafeValue({version:1,current:{taskId,turnId:body.turnId,conversationId:body.conversationId,question:body.query},
+  const workspaceToolResults=await tasks.chat?.agUiWorkspaceResults?.(taskId,body.conversationId);
+  return modelSafeValue({version:1,...(workspaceToolResults?.length?{workspaceToolResults:workspaceToolResults.map(row=>({...row,source:"native-admission-frozen-result" as const}))}:{}),current:{taskId,turnId:body.turnId,conversationId:body.conversationId,question:body.query},
     ...(recentOutcome?{recentOutcome}:{}),
     history:[...loaded.values()].map(value=>value.record),unavailableRelations:unavailable.slice(0,12),
     ...(body.context.workspaceView?{frozenView:structuredClone(body.context.workspaceView)}:{}),...(frame?{browserObservations:structuredClone(frame)}:{}),visibleBatch:visible,
-    rule:"current是本轮原话；history的用户原话、浏览条件、模型归纳和真实执行分别标出处。assistantText仅是以前的答复，不能当执行回执。frozenView/browserObservations是本次提交时浏览器描述而非检索/读取许可；capturedAt缺失则采集时点未知。workspace.operation是原服务器目标，receipt是原操作的历史回执，atSubmission是本次提交的同资料状态；applied只证明提交变更，只有匹配目标的observation.rendered才报告该次已呈现，loading/失败/未知不得称显示成功；旧rendered不代表当前仍看旧目标。拒因或recovery说明不授权重试、夺回视图或扩大范围。时序按服务端任务的submittedAt。recentOutcome若存在是浏览器引用且服务端核实的较新尝试；previousTaskId可能是较早成功答复。visibleBatch只说明当前还在浏览哪份结果，其原查询/条件不随浏览或回执变化。较新尝试失败且无批次时，明确说明没有新结果、另把旧批归到较早的查询；unknown或unbound如实说明。"} as RuntimeTurnContext);
+    rule:"workspaceToolResults是本轮受理时从原任务固化的前端工具结果，不是新资料、当前持续显示或操作授权；unverified与error不表示成功，迟到成像另见历史实际receipt，不能自动重放原动作。current是本轮原话；history的用户原话、浏览条件、模型归纳和真实执行分别标出处。assistantText仅是以前的答复，不能当执行回执。frozenView/browserObservations是本次提交时浏览器描述而非检索/读取许可；capturedAt缺失则采集时点未知。workspace.operation是原服务器目标，receipt是原操作的历史回执，atSubmission是本次提交的同资料状态；applied只证明提交变更，只有匹配目标的observation.rendered才报告该次已呈现，loading/失败/未知不得称显示成功；旧rendered不代表当前仍看旧目标。拒因或recovery说明不授权重试、夺回视图或扩大范围。时序按服务端任务的submittedAt。recentOutcome若存在是浏览器引用且服务端核实的较新尝试；previousTaskId可能是较早成功答复。visibleBatch只说明当前还在浏览哪份结果，其原查询/条件不随浏览或回执变化。较新尝试失败且无批次时，明确说明没有新结果、另把旧批归到较早的查询；unknown或unbound如实说明。"} as RuntimeTurnContext);
 }
 
 /** Invalid claims lose action/read hints, while the original browser frame stays descriptive. */

@@ -1,3 +1,4 @@
+import {readAgUiWorkspaceRecord,pendingAgUiWorkspaceCalls,bindAgUiWorkspaceReplies,agUiWorkspaceResults,type AgUiWorkspaceReply} from "./postgres-ag-ui-workspace";
 import {readAgUiInterrupt,pendingAgUiInterrupt} from "./postgres-ag-ui-interrupt";
 import {agUiSchema,admitAgUi,appendAgUiText,finishAgUi,type AgUiAdmission} from "./ag-ui-persistence";
 import {createHash} from "node:crypto";
@@ -132,10 +133,11 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
     async workspaceReceipt(id:string) {
       return workspaceReceiptView(await getReceipt(pool,id));
     },
-    async recordWorkspaceReceipt(id:string,input:BrowserWorkspaceReceipt) {
+    async recordWorkspaceReceipt(id:string,input:BrowserWorkspaceReceipt,nativeToolCallId?:string) {
       return transaction(async db=>{
         const saved=await lockWorkspaceReply(db,id);
         if(!saved||!sameReceiptIdentity(id,saved.body,saved.result,input))return;
+        if(nativeToolCallId&&(await readAgUiWorkspaceRecord(db,id))?.call.id!==nativeToolCallId)return;
         const observation=input.observation,now=Date.now();
         if(observation){
           const target=workspaceObservationTarget(saved.result);
@@ -231,6 +233,11 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
         return {task: view(saved), started: true};
       });
     },
+    agUiWorkspaceRecord:(id:string)=>readAgUiWorkspaceRecord(pool,id),
+    async agUiWorkspaceCall(id:string){return (await readAgUiWorkspaceRecord(pool,id))?.call;},
+    agUiPendingWorkspaceCalls:(threadId:string)=>pendingAgUiWorkspaceCalls(pool,threadId),
+    checkAgUiWorkspace:(threadId:string,previousTaskId:string|undefined,replies:AgUiWorkspaceReply[])=>bindAgUiWorkspaceReplies(pool,threadId,previousTaskId,replies),
+    agUiWorkspaceResults:(runId:string,threadId:string)=>agUiWorkspaceResults(pool,runId,threadId),
     async agUiFingerprint(id:string){return (await pool.query<{fingerprint:string}>("SELECT fingerprint FROM runtime_agui_runs WHERE id=$1",[id])).rows[0]?.fingerprint;},
     agUiInterrupt:(id:string)=>readAgUiInterrupt(pool,id),
     agUiPending:(threadId:string)=>pendingAgUiInterrupt(pool,threadId),
