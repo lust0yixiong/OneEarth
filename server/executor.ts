@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {resolvedChatModel, type ChatModel} from "../src/domain/chat-model";
+import {nativeCodexSummaryModel, resolvedChatModel, type ChatModel} from "../src/domain/chat-model";
 import {assertModelContextSafe,modelSafeText} from "./model-context-safety";
 import https from "node:https";
 import {providerReasoningRelay,publicFlashResponses} from "./provider-reasoning-relay";
@@ -14,6 +14,7 @@ import {runtimeModelCapacity,runtimeLeaseMs} from "./runtime-model-capacity";
 import {modelExecutionContext} from "./model-execution-context";
 import {authorizedFlashApi,runFlashApi} from "./flash-api";
 import type {ProviderReasoningSink} from "./provider-reasoning";
+import {CodexSummaryOutput} from "./codex-summary-output";
 
 export interface ExecutorOptions {
   publicText?:{onDelta:(delta:string)=>void};
@@ -97,6 +98,9 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
       await isolateProviderCli(dir,args,env);
     }
     if(config.provider && config.provider!=="native" && !config.model)throw Error("请选择模型服务提供的模型。");
+    const summaryOutput=options?.providerReasoning&&!options.webSearch&&nativeCodexSummaryModel(config)
+      ? new CodexSummaryOutput(options.providerReasoning) : undefined;
+    if(summaryOutput)args.push("--json","-c",'model_reasoning_summary="auto"');
     if(config.model) args.push("--model",config.model);
     if(config.executor==="codex") args.push("-");
     return await new Promise<string>((resolve,reject)=>{
@@ -112,7 +116,11 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
         clearTimeout(deadline);
         signal.removeEventListener("abort",finishCancelledExit);
         if(startupError && !signal.aborted)reject(startupError);
-        else if(code===0 && !signal.aborted)resolve(out.trim());
+        else if(code===0 && !signal.aborted&&!outputLimited){
+          const answer=summaryOutput?.finish()??out.trim();
+          if(summaryOutput&&!answer)reject(Error("Codex 未返回完整的答复事件。"));
+          else resolve(answer);
+        }
         else reject(new ExecutorFailure(executorDiagnostic({exitCode:code,signal:killed,elapsedMs:Date.now()-launched,
           stdout:out,stderr:errors,aborted:signal.aborted,outputLimited,timedOut,spawnFailed})));
       };
@@ -125,7 +133,13 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
         finish(exit.code,exit.signal);
       }
       child.stdin.on("error",()=>{});
-      child.stdout.on("data",chunk=>{timing.firstStdoutMs??=Date.now()-timing.startedAt;timing.outputBytes+=Buffer.byteLength(chunk);out+=chunk;if(out.length>150000){outputLimited=true;child.kill("SIGKILL");}});
+      child.stdout.on("data",(chunk:Buffer)=>{
+        if(outputLimited||signal.aborted)return;
+        timing.firstStdoutMs??=Date.now()-timing.startedAt;
+        timing.outputBytes+=chunk.length;
+        if(!summaryOutput)out+=chunk;
+        if(summaryOutput?!summaryOutput.feed(chunk):out.length>150000){outputLimited=true;child.kill("SIGKILL");}
+      });
       child.stderr.on("data",chunk=>{errors=(errors+chunk).slice(-4096);});
       child.on("error",()=>{if(!child.pid)finish(null,null,!signal.aborted);});
       child.once("exit",(code,killed)=>{

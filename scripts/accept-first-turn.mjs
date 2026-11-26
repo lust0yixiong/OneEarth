@@ -61,12 +61,28 @@ try {
     const {state,record} = await readNativeChatRecord(base,input);
     const result = record?.result;
     const trace = result?.runTrace;
+    const references = result?.answerNotes?.references || [];
+    const usedPaperTitles = new Set();
+    const evidencedPapers = [];
+    for (const [index, reference] of references.entries()) {
+      if (reference.kind !== "asset" || reference.sourceChannel !== "assertion") continue;
+      for (const excerpt of result.conversationAssertionEvidence || []) {
+        if (excerpt.assetId !== reference.id || excerpt.stage !== "assertion-excerpt" || !excerpt.quote?.trim()) continue;
+        if (/\b(?:references|bibliography|literature cited)\b|参考文献/iu.test(excerpt.block || "")) continue;
+        const paperTitle = excerpt.label?.match(/^原文\s*·\s*(\S.*)$/u)?.[1];
+        const paperKey = paperTitle?.normalize("NFKC").toLowerCase();
+        if (!paperKey || usedPaperTitles.has(paperKey)) continue;
+        usedPaperTitles.add(paperKey);
+        evidencedPapers.push({assetId:reference.id, paperId:excerpt.paperId, paperTitle, referenceNumber:index+1});
+      }
+    }
     const evidence = {
       id, elapsedMs:Date.now()-started, status:state.status, executor:result?.modelExecutor,
       channelCalls:(trace?.calls??[]).filter(call=>call.status!=="running").map(({name,status,id})=>({name,status,id})),
       finishedAt:state.updated, createdAt:state.created, startedAt:trace?.started,
-      referenceCount:result?.answerNotes?.references?.length || 0,
-      paperIds:result?.answerNotes?.references?.filter(ref=>ref.kind==="asset"&&ref.sourceChannel==="assertion").map(ref=>ref.id) || [],
+      referenceCount:references.length,
+      paperIds:references.filter(ref=>ref.kind==="asset"&&ref.sourceChannel==="assertion").map(ref=>ref.id),
+      evidencedPapers,
       timings:trace?.timings?.map(t=>({kind:t.kind,model:t.model,executor:t.executor,elapsedMs:t.elapsedMs,firstStdoutMs:t.firstStdoutMs})),
     };
     notes.turns.push(evidence);
@@ -77,18 +93,25 @@ try {
     return evidence;
   }
   const first = await ask(initial,1);
+  await page.locator("#message-"+first.id+"[data-runtime-phase=complete]").waitFor({timeout:30000});
   await page.screenshot({path:output+"/first-turn.png"});
   assert.ok(first.channelCalls.some(c=>c.name==="独立数据发现服务" && c.status==="done"));
   assert.ok(first.referenceCount>=2,"首次回答至少引用两份来源");
-  if(first.paperIds.length < 2) throw Error("此次首答没有至少两篇带稳定引用的论文，需选另一真实样本。");
+  const target = first.evidencedPapers[1];
+  assert.ok(target,"首次回答应保存至少两篇不同论文的引用与原文依据。");
   const followStarted = Date.now();
-  await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(process.env.ONEEARTH_FOLLOWUP_QUESTION || "第二篇论文用了什么数据？请只用刚才已读到的内容。");
+  await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(process.env.ONEEARTH_FOLLOWUP_QUESTION ||
+    "请只用刚才已保存的第"+target.referenceNumber+"条来源，说明《"+target.paperTitle+"》使用了什么数据，并附同一原出处。不要补查。");
   await page.getByLabel("发送消息",{exact:true}).click();
   await page.waitForFunction(() => document.querySelectorAll(".message.assistant").length > 1 || document.querySelector(".chat-error"),{},{timeout:300000});
   const follow = await collect(2,followStarted);
+  await page.locator("#message-"+follow.id+"[data-runtime-phase=complete]").waitFor({timeout:30000});
   await page.screenshot({path:output+"/follow-up.png"});
+  assert.equal(submissions.length,2,"首问、刷新和追问共两次原生运行提交");
+  assert.equal(submissions[1].threadId,submissions[0].threadId,"追问保留原会话");
+  assert.equal(submissions[1].forwardedProps.oneearth.submission.previousTaskId,first.id,"追问直接关联原首问");
   assert.equal(follow.channelCalls.filter(c=>c.name==="独立数据发现服务").length,0,"追问没有新发现调用");
-  assert.ok(follow.paperIds.includes(first.paperIds[1]),"追问仍引用同一论文");
+  assert.ok(follow.paperIds.includes(target.assetId),"追问仍引用同一有正文依据的来源");
   assert.deepEqual(requests,[],"浏览器没有访问 5174");
 } finally {
   await browser.close();

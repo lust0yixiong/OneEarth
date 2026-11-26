@@ -313,13 +313,17 @@ export async function readClaimedNativeTurn(parent:ChatRun,claim:OneEarthAgUiInt
 export async function recoverNativeChat(
   run:ChatRun, signal:AbortSignal, progress:Pick<ChatProgress,"onAccepted"|"onLifecycle">,
 ):Promise<CompletedChat> {
-  const until=Date.now()+60_000;
+  const unavailableTimeout=60_000;
+  let until=Date.now()+unavailableTimeout;
   const identity=identityOf(run);
   let delay=350;
   do {
     signal.throwIfAborted();
     const task=await readNativeTask(run.runId,signal);
     if(matchesTaskIdentity(task,identity) && taskStates.has(task.status)){
+      // Only missing or inconsistent results time out. A confirmed active
+      // research run can outlast the recovery window after a page reload.
+      if(task.status==="queued" || task.status==="running")until=Date.now()+unavailableTimeout;
       progress.onAccepted();
       const facts=readTaskLifecycle(task);
       if(facts)progress.onLifecycle(facts);

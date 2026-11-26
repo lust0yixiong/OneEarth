@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Database, Globe, SlidersHorizontal } from "lucide-react";
-import { readChatModel, rememberedModel, rememberedService, saveChatModel, validChatModel, type ChatModel } from "../domain/chat-model";
+import { nativeCodexSummaryModel, readChatModel, rememberedModel, rememberedService, saveChatModel, validChatModel, type ChatModel } from "../domain/chat-model";
 import { useWorkspace } from "../domain/store";
 import { useWindTheme } from "../domain/wind-theme";
 import { assets } from "../domain/datasets";
@@ -27,6 +27,7 @@ export function SettingsPage({onBack,resetLayout}:{onBack:()=>void;resetLayout:(
   const [apiKey,setApiKey]=useState("");
   const [keyBusy,setKeyBusy]=useState(false);
   const config:ChatModel={executor,provider,model:models[executor].trim(),...(provider==="custom"?{endpoint:endpoint.trim()}: {})};
+  const summaryLabel = (model: string) => nativeCodexSummaryModel({...config, model}) ? " · 思考摘要" : "";
   function switchService(nextExecutor:ChatModel["executor"],nextProvider:typeof provider){
     clearTest();setApiKey("");setChoices([]);setCustom(false);
     const saved=rememberedService(nextExecutor,nextProvider);
@@ -118,8 +119,8 @@ export function SettingsPage({onBack,resetLayout}:{onBack:()=>void;resetLayout:(
             if(e.target.value!=="@custom")setModels({...models,[executor]:e.target.value});
           }}>
             <option value="">{provider==="native"?(executor==="codex"?"OneEarth 默认 · GPT-6-Luna":"使用执行器默认模型"):"选择模型"}</option>
-            {choices.map(m=><option key={m.id} value={m.id}>{m.label===m.id ? m.id : m.label+" · "+m.id}</option>)}
-            {models[executor] && !choices.some(m=>m.id===models[executor]) && <option value={models[executor]}>{models[executor]}（当前配置）</option>}
+            {choices.map(m=><option key={m.id} value={m.id}>{m.label===m.id ? m.id : m.label+" · "+m.id}{summaryLabel(m.id)}</option>)}
+            {models[executor] && !choices.some(m=>m.id===models[executor]) && <option value={models[executor]}>{models[executor]}（当前配置）{summaryLabel(models[executor])}</option>}
             <option value="@custom">自定义模型名称…</option>
           </select></label>
           {custom && <label>自定义模型名称<input value={models[executor]} maxLength={100} onChange={e=>{clearTest();setModels({...models,[executor]:e.target.value});}}/></label>}
