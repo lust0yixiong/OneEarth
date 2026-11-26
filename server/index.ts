@@ -7,7 +7,7 @@ import {lightning} from "./lightning";
 import {administrativeOrientation} from "./admin-orientation";
 import { createModelService } from "./model-service";
 import { mkdirSync } from "node:fs";
-import { accessGuard, workbenchLan } from "./access";
+import { accessGuard, ipv4LoopbackOnly, workbenchLan } from "./access";
 import { staticAssets } from "./static-assets";
 import { listModels } from "./model-list";
 import { randomUUID } from "node:crypto";
@@ -21,6 +21,7 @@ import { spatialProxy } from "./spatial-proxy";
 import { hainaPublicLayerRoute, hainaViirsRoute, hainaXuannvCoverageRoute } from "./haina-public-layer-routes";
 import { createRuntimeApi } from "./runtime-api-service";
 import { serveHttp } from "./http-lifecycle";
+import { webToolPath } from "./web-tool-contract";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,33 +51,23 @@ const lanInterface=process.env.ONEEARTH_LAN_INTERFACE;
 if(lanInterface&&host!=="127.0.0.1")throw Error("局域网入口要求 ONEEARTH_HOST=127.0.0.1。");
 const lan=workbenchLan(lanInterface);
 const port = Number(process.env.PORT || 5274);
-const runtimePort = Number(process.env.ONEEARTH_RUNTIME_PORT || port+3);
-const merged = process.env.ONEEARTH_ROLE !== "web";
 const vite = process.env.NODE_ENV === "production" ? undefined : await import("vite").then(({createServer}) =>
   createServer({root,server:{middlewareMode:true},appType:"spa"}));
-const runtime = await (merged ? createRuntimeApi(stateDir) : Promise.resolve(undefined)).catch(async error => {
+const runtime = await createRuntimeApi(stateDir).catch(async error => {
   await vite?.close();
   throw error;
 });
 const modelSettings = createModelService();
 const runModelTest = createModelExecutor(modelSettings.configureService);
-app.use(accessGuard(process.env.ONEEARTH_ALLOWED_HOSTS,lan));
-app.use("/internal", (_req,res)=>res.status(404).json({error:"未找到对应接口。"}));
-app.use("/api/simulation-grid", simulationGrid(path.join(dataDir,"grid-data")));
 app.disable("x-powered-by");
+app.all(webToolPath, ipv4LoopbackOnly, accessGuard(), runtime.internal);
+app.use("/internal", (_req,res)=>res.status(404).json({error:"未找到对应接口。"}));
+app.use(accessGuard(process.env.ONEEARTH_ALLOWED_HOSTS,lan));
+app.use("/api/simulation-grid", simulationGrid(path.join(dataDir,"grid-data")));
 app.use("/api/orientation",administrativeOrientation(process.env.ONEEARTH_ADMIN_BOUNDARY_DIR || path.join(root,".local","admin-boundaries"),
   {baseUrl:process.env.ONEEARTH_ADMIN_BOUNDARIES_URL}));
 const configuredPushSources = Object.keys(parseSources(process.env.ONEEARTH_PUSH_SOURCES)).length;
-if (runtime) {
-  app.use(runtime.business);
-} else {
-  // Explicit gateway-only diagnostics preserve the previous split role.
-  const runtimeUrl = process.env.ONEEARTH_RUNTIME_URL || "http://127.0.0.1:"+runtimePort;
-  app.post("/api/paper-records/search",spatialProxy(runtimeUrl,{timeout:40000}));
-  app.use(["/api/chat/messages","/api/tasks","/api/results","/api/paper-records","/api/data-access","/api/coverage","/api/spatial",
-    "/api/research-record","/api/catalog","/api/haina/catalog","/api/observation-materials"], spatialProxy(runtimeUrl));
-  app.use("/api/constellations",spatialProxy(runtimeUrl,{timeout:40000,authorization:true}));
-}
+app.use(runtime.business);
 const geo = spatialProxy(process.env.ONEEARTH_SPATIAL_URL || "http://127.0.0.1:5276");
 app.use(["/precip-data","/visualizations/haina/1846764","/visualizations/haina/1846639"],geo);
 app.get([hainaPublicLayerRoute,hainaViirsRoute,hainaXuannvCoverageRoute], geo);
@@ -175,10 +166,9 @@ app.use(
 );
 if(lanInterface&&!lan)console.warn("OneEarth LAN: 指定网络接口当前没有唯一可用的私有 IPv4 地址。");
 await serveHttp([
-  ...(runtime?[{app:runtime.compatibility,host:"127.0.0.1",port:runtimePort,label:"OneEarth runtime compatibility"}]:[]),
   {app,host,port,label:"OneEarth workbench"},
   ...(lan?[{app,host:lan.address,port,label:"OneEarth LAN",optional:true}]:[]),
 ], {
-  async stopAccepting() { await Promise.all([runtime?.stopAccepting(),vite?.close()]); },
-  async close() { await runtime?.close(); },
+  async stopAccepting() { await Promise.all([runtime.stopAccepting(),vite?.close()]); },
+  close: runtime.close,
 });

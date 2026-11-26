@@ -19,6 +19,10 @@
 
 `message.parts` 携带一个带 `kind=oneearth.discovery.request.v1` 的数据 part。它描述本次目的、证据缺口、已确认范围、引用或已取得材料，以及本轮 DeepSeek Search 和 DeepSeek Fetch 两个开关。发现服务用自己的配置选择规划模型并管理查找计划。公开网络的实际执行经过下述运行时适配层。既有 Bing、DuckDuckGo 和 DataCite 可发公开查询。机构和项目权限、具体材料能否外发由各自权限边界约束。
 
+### 受理回执恢复
+
+传输中断而未取得 Task ID 时，worker 按原消息编号和请求指纹从发现端的 `GET /internal/discovery-delegations/{messageId}` 查询受理记录。该接口只允许本机 IPv4 回环服务请求，使用独立服务凭据及 `X-OneEarth-Request-Fingerprint`。观测类消息另带 `X-OneEarth-Delegation-Family: observation`。找到时返回原 `taskId`，请求指纹冲突返回 409。服务端明确返回 `DELEGATION_NOT_FOUND` 与 `idempotentReplay: true` 时，原请求、消息身份和原授权仍有效才可原样再送。无法核定是否受理时保留原执行记录。此查询只返回受理身份。
+
 ### 发现渠道范围
 
 发现服务从当前用户原问题、已确认问题和可信续查上下文解析来源范围，再启动相应渠道。问「海纳内部有哪些这类数据」即限定海纳。先前引用的论文或网页可帮助理解对象，不能授权新一次查询这些渠道。网页继续提交原问题和既有上下文字段。
@@ -118,7 +122,7 @@
 
 运行时在发出委托前建立能力记录，通过委托的内部字段 `runtimeWebToolGrant` 传递本轮临时凭据。收到有效 A2A 受理后绑定实际 Task。补查及确认续行使用本次消息自己的授权。凭据不进入规划输入、公开任务事件或研究引用。
 
-工具入口为运行时回环上的 `POST /internal/discovery-web-tool/v1`。发现服务使用 `Authorization: Bearer <runtimeWebToolGrant>`，发送 JSON `{taskId,messageId,callId,operation}`。例如一笔关键词查找的 `operation` 是 `{"kind":"search","provider":"Bing","query":"NASA IMERG Final Run"}`。取回正文时，`operation` 使用 `kind:"fetch"`，带提供方、所选 `url` 和来源标识 `hit`。原生搜索使用 `kind:"native-search"` 和 `queries`，仅凭运行时已授权的原生执行器配置运行。
+工具入口与工作台共用端口，常驻地址为 `127.0.0.1:5474` 上的 `POST /internal/discovery-web-tool/v1`。局域网或浏览器请求该路径返回 404。发现服务使用 `Authorization: Bearer <runtimeWebToolGrant>`，发送 JSON `{taskId,messageId,callId,operation}`。例如一笔关键词查找的 `operation` 是 `{"kind":"search","provider":"Bing","query":"NASA IMERG Final Run"}`。取回正文时，`operation` 使用 `kind:"fetch"`，带提供方、所选 `url` 和来源标识 `hit`。原生搜索使用 `kind:"native-search"` 和 `queries`，仅凭运行时已授权的原生执行器配置运行。
 
 受理绑定之前返回 425，发现侧可原样重送。受理后排队或执行中返回 HTTP 202 和 `{"state":"pending"}`。原 `callId` 与相同输入可查询已保存的 HTTP 200 回执，成功为 `{state:"complete",value}`，失败为 `{state:"failed",error}`。越权返回 403，重用编号提交不同输入返回 409。运行时 API 侧的有界执行队列与等待发现的研究 worker 分开推进。取消、到期和委托结束时停止可取消的工作。执行中断且结果未知会留下明确失败回执；再次查询原执行不重新请求上游。网页入口不提供此路径。
 

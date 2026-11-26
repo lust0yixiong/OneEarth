@@ -1,11 +1,12 @@
+import {runtimeStepContext} from "./runtime-step";
 export const evidenceDecisionLimits={modelCalls:8,acquisitions:2,locations:4,toolAttempts:6,milliseconds:110000} as const;
 export const foregroundDecisionLimits={modelCalls:4,milliseconds:110000} as const;
 
 /** Local decision expiry is distinct from user cancellation and never raises
  * the downstream tool or answer-generation allowance. */
 export function decisionDeadline(parent:AbortSignal,milliseconds:number){
- const controller=new AbortController(),expiresAt=Date.now()+milliseconds;
- const timer=setTimeout(()=>controller.abort(Error("有界取证判断达到时间预算。")),milliseconds);
+ const controller=new AbortController(),expiresAt=runtimeStepContext.getStore()?.budget(milliseconds)??Date.now()+milliseconds;
+ const timer=setTimeout(()=>controller.abort(Error("有界取证判断达到时间预算。")),Math.max(0,expiresAt-Date.now()));
  const signal=AbortSignal.any([parent,controller.signal]);
  return {signal,remainingMs:()=>Math.max(0,expiresAt-Date.now()),
   async run<T>(action:(signal:AbortSignal)=>Promise<T>){

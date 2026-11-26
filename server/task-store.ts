@@ -1,3 +1,4 @@
+import {runtimeTaskLease,runtimeTaskLeaseMs,type RuntimeTaskLease} from "./runtime-task-lease";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import type { Router } from "express";
@@ -7,6 +8,10 @@ import type { AnswerReference, EvidenceStage } from "../src/domain/types";
 export const taskIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export type TaskStatus = "queued" | "running" | "complete" | "failed" | "cancelled";
 export type Payload = Record<string, unknown>;
+export function cancellationReceipt(event:Payload):Payload{
+  const {error:_error,code:_code,result:_result,...receipt}=event;
+  return {...receipt,cancellationReceipt:true};
+}
 export type Task = {id: string; body: string; fingerprint: string; status: TaskStatus; created: number; updated: number};
 export type ConversationHistoryTurn = {
   taskId: string;
@@ -80,7 +85,7 @@ export function openTaskStore(file: string) {
     terminal(id: string): Payload | undefined {
       const task = get(id);
       if (!task || task.status === "queued" || task.status === "running") return;
-      const row = db.prepare("SELECT payload FROM task_events WHERE id=? ORDER BY seq DESC LIMIT 1").get(id);
+      const row = db.prepare("SELECT payload FROM task_events WHERE id=? AND json_extract(payload,'$.cancellationReceipt') IS NOT 1 ORDER BY seq DESC LIMIT 1").get(id);
       if (row) return JSON.parse(String(row.payload));
     },
     submit(id: string, body: unknown, checkpoint?:Payload) {
@@ -99,7 +104,7 @@ export function openTaskStore(file: string) {
         return get(id)!;
       });
     },
-    claim() {
+    claim():{id:string;body:any;checkpoint?:Payload;lease?:RuntimeTaskLease}|undefined {
       return transaction(() => {
         const row = db.prepare(`SELECT t.* FROM tasks t LEFT JOIN task_steps s ON s.id=t.id
           WHERE t.status='queued' OR (t.status='running' AND s.wake_at<=?) ORDER BY t.updated,t.created,t.id LIMIT 1`).get(Date.now()) as Task | undefined;
@@ -129,7 +134,7 @@ export function openTaskStore(file: string) {
       if(!row)return false;
       const checkpoint=JSON.parse(row.checkpoint);checkpoint.cancellation={...checkpoint.cancellation,...cancellation};
       db.prepare("UPDATE task_steps SET checkpoint=? WHERE id=?").run(JSON.stringify(checkpoint),id);
-      if(event)write(id,{error:"任务已取消。",code:"cancelled",...event,result:checkpoint.cancelledResult});return true;
+      if(event)write(id,cancellationReceipt(event));return true;
     });},
     park(id:string,checkpoint:Payload,wakeAt:number,event?:Payload){return transaction(()=>{
       if(get(id)?.status!=="running")return false;
@@ -165,7 +170,10 @@ type LocalTaskStore = ReturnType<typeof openTaskStore>;
 export type TaskStore = {
   [Method in Exclude<keyof LocalTaskStore,"materialEvents"|"step"|"clearStep"|"saveStep"|"park"|"cancelStep"|"cancelledSteps">]: (...args: Parameters<LocalTaskStore[Method]>) =>
     ReturnType<LocalTaskStore[Method]> | Promise<ReturnType<LocalTaskStore[Method]>>;
-}&{materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>;researchHandoff?:(id:string)=>Promise<Payload|undefined>;
+}&{runtimeStatus?:(id:string)=>Promise<{runtimePhase?:import("../src/domain/runtime-status").RuntimePhase;remoteStop?:import("../src/domain/runtime-status").RemoteStop;remoteStops?:import("../src/domain/runtime-status").RemoteStop[]}>;
+  recordRemoteStop?:(id:string,receipt:import("../src/domain/runtime-status").RemoteStop)=>Promise<boolean>;
+  pendingRemoteStops?:()=>Promise<{id:string;discoveryTaskId:string}[]>;
+  renewLease?:(lease:RuntimeTaskLease)=>Promise<boolean>;releaseLease?:(lease:RuntimeTaskLease)=>Promise<void>;materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>;researchHandoff?:(id:string)=>Promise<Payload|undefined>;
   workspaceReceipt?:(id:string)=>Promise<import("../src/domain/turn-context").WorkspaceReceipt|undefined>;
   researchExecution?:(id:string)=>Promise<ResearchExecutionReceipt|undefined>;
   conversationHistory?:(conversationId:string,currentTaskId:string)=>Promise<ConversationHistoryTurn[]>}&{
@@ -204,7 +212,7 @@ export function taskRoutes(router: Router, base: string, store: TaskStore, valid
   router.get(base + "/:taskId", async (req, res) => {
     const task = await store.get(String(req.params.taskId));
     if (!task) { res.status(404).json({error:"任务不存在。"}); return; }
-    res.set("Cache-Control", "no-store").json({id:task.id, status:task.status, created:task.created, updated:task.updated});
+    res.set("Cache-Control", "no-store").json({id:task.id, status:task.status, created:task.created, updated:task.updated,...await store.runtimeStatus?.(task.id)});
   });
   if(options.researchRecords)router.get(base+"/:taskId/record",async(req,res)=>{
     const id=String(req.params.taskId);
@@ -241,7 +249,8 @@ export function taskRoutes(router: Router, base: string, store: TaskStore, valid
           let buffered=false;
           for(const event of rows){
             cursor=event.seq;
-            if(!res.write(JSON.stringify(event)+"\n")){buffered=true;break;}
+            const publicEvent=event.observationCancellation?cancellationReceipt(event):event;
+            if(!res.write(JSON.stringify(publicEvent)+"\n")){buffered=true;break;}
           }
           if(!buffered && task && task.status!=="queued"&&task.status!=="running"&&rows.length<128){res.end();return;}
           if(Date.now()-heartbeat>=10000){res.write("\n");heartbeat=Date.now();}
@@ -259,19 +268,27 @@ export async function workTasks(store: TaskStore, run: (task: {id:string; body:a
   let stopped=false;
   let timer:ReturnType<typeof setTimeout>|undefined;
   let polling:Promise<void>;
+  let lastSweep=Date.now();
   async function poll(){
     if(stopped)return;
     try{
+      if(store.renewLease&&Date.now()-lastSweep>=5000){lastSweep=Date.now();await store.recoverInterrupted();}
       await options.maintenance?.();
       const task=await store.claim();
       if(!task)return;
+      await runtimeTaskLease.run(task.lease,async()=>{
       const controller=new AbortController();
       active=controller;
+      let leaseLost:ReturnType<typeof setTimeout>|undefined;
+      const resetLease=()=>{clearTimeout(leaseLost);leaseLost=setTimeout(()=>controller.abort(Error("后台步骤租约已失效。")),runtimeTaskLeaseMs-1000);leaseLost.unref();};
+      if(task.lease)resetLease();
+      let lastRenew=0;
       let checking=false;
       const watch=setInterval(async()=>{
         if(checking)return;
         checking=true;
         try{
+          if(task.lease&&store.renewLease&&Date.now()-lastRenew>=5000){lastRenew=Date.now();if(await store.renewLease(task.lease))resetLease();else controller.abort(Error("后台步骤失去所有权。"));}
           if((await store.get(task.id))?.status==="cancelled")controller.abort(new TaskCancelled());
         }catch{controller.abort();}
         finally{checking=false;}
@@ -293,7 +310,8 @@ export async function workTasks(store: TaskStore, run: (task: {id:string; body:a
         if(checkpoint){
           if(!stopped&&(await store.get(task.id))?.status==="running")await store.park?.(task.id,checkpoint,Date.now()+500,{stepInterrupted:true,workerReleased:true});
         }else await store.finish(task.id,"failed",{error:"后台执行未完成，请查看已取得的结果。",code:"worker_error"});
-      }finally{clearInterval(watch);active=undefined;}
+      }finally{clearInterval(watch);clearTimeout(leaseLost);if(task.lease)await store.releaseLease?.(task.lease);active=undefined;}
+      });
     }catch{console.error("OneEarth task worker could not use its task store");}
     finally{if(!stopped)timer=setTimeout(()=>{polling=poll();},100);}
   }

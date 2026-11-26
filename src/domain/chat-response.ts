@@ -1,15 +1,19 @@
 import type { DiscoveryResponse, SearchRun, RunTrace, ProviderReasoningSnapshot } from "./types";
 import {mergeProviderReasoning,traceWithProviderReasoning} from "./provider-reasoning";
 import {validResearchRegion,type ResearchRegion} from "./research-region";
+import {readTaskLifecycle,type TaskLifecycle} from "./task-lifecycle-client";
 export class ChatResponseError extends Error {
   constructor(message:string,readonly code?:string,readonly runTrace?:RunTrace){super(message);this.name="ChatResponseError";}
 }
 export type ChatPhase = "foreground" | "research";
 export async function readChatResponse(response:Response,onStage:(text:string,searches?:SearchRun[],trace?:RunTrace,phase?:ChatPhase)=>void,onRegion?:(region:ResearchRegion|null)=>void,
-  initialReasoning?:ProviderReasoningSnapshot[],retiredReasoning=new Set<string>()):Promise<DiscoveryResponse> {
+  initialReasoning?:ProviderReasoningSnapshot[],retiredReasoning=new Set<string>(),
+  onLifecycle?:(facts:TaskLifecycle,seq?:number)=>void):Promise<DiscoveryResponse> {
   let reasoning=initialReasoning;
   if(!response.headers.get("content-type")?.includes("application/x-ndjson")){
     const data=await response.json();
+    const facts=readTaskLifecycle(data);
+    if(facts)onLifecycle?.(facts);
     reasoning=mergeProviderReasoning(reasoning,data.runTrace?.providerReasoning,retiredReasoning);
     const trace=traceWithProviderReasoning(data.runTrace,reasoning);
     if(!response.ok) throw new ChatResponseError(data.error || "数据发现请求失败。",data.code,trace);
@@ -26,6 +30,8 @@ export async function readChatResponse(response:Response,onStage:(text:string,se
       for(const line of lines){
         if(!line.trim())continue;
         const event=JSON.parse(line);
+        const facts=readTaskLifecycle(event);
+        if(facts)onLifecycle?.(facts,Number.isSafeInteger(event.seq)?event.seq:undefined);
         if(Object.hasOwn(event,"researchRegion") && (event.researchRegion===null || validResearchRegion(event.researchRegion)))onRegion?.(event.researchRegion);
         if(event.runTrace)trace=event.runTrace;
         if(!trace && typeof event.traceStarted==="number")trace={started:event.traceStarted,stages:[],calls:[]};

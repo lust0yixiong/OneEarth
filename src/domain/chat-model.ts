@@ -4,11 +4,11 @@ export interface ChatModel {
   provider?: "native" | "deepseek" | "custom";
   endpoint?: string;
 }
-export const defaultChatModel: ChatModel = { executor: "codex", model: "gpt-6-luna" };
+export const defaultChatModel: ChatModel = { executor:"codex", model:"deepseek-flash", provider:"deepseek" };
 /** Empty native Codex choices follow the OneEarth deployment default. */
 export function resolvedChatModel(config: ChatModel): ChatModel {
   return config.executor === "codex" && (!config.provider || config.provider === "native") && !config.model
-    ? {...config, model: defaultChatModel.model}
+    ? {...config, model:"gpt-6-luna"}
     : config;
 }
 export function validChatModel(value: unknown): value is ChatModel {

@@ -2,13 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {defaultChatModel,resolvedChatModel,readChatModel,rememberedModel,rememberedService} from "./chat-model";
 
-test("empty native choices and legacy browser preferences use GPT-6-Luna",t=>{
+test("new browsers default to Flash and previously configured native choices keep their model",t=>{
   const values=new Map<string,string>();
   const descriptor=Object.getOwnPropertyDescriptor(globalThis,"localStorage");
   Object.defineProperty(globalThis,"localStorage",{configurable:true,value:{getItem:(k:string)=>values.get(k)??null}});
   t.after(()=>{if(descriptor)Object.defineProperty(globalThis,"localStorage",descriptor);else Reflect.deleteProperty(globalThis,"localStorage");});
-  assert.equal(defaultChatModel.model,"gpt-6-luna");
-  assert.equal(readChatModel().model,"gpt-6-luna");
+  assert.deepEqual(defaultChatModel,{executor:"codex",provider:"deepseek",model:"deepseek-flash"});
+  assert.deepEqual(readChatModel(),defaultChatModel);
+  const explicit = {executor:"codex",provider:"native",model:"gpt-6.1-sol"};
+  values.set("oneearth.chat-model.v1",JSON.stringify(explicit));
+  assert.deepEqual(readChatModel(),explicit);
   values.set("oneearth.chat-model.v1",JSON.stringify({executor:"codex",model:""}));
   values.set("oneearth.chat-model.v1.codex.native",JSON.stringify({executor:"codex",provider:"native",model:""}));
   assert.equal(readChatModel().model,"gpt-6-luna");

@@ -1,3 +1,5 @@
+import {createRuntimeStep,runtimeStepContext,reconcileRuntimeStops} from "./runtime-step";
+import {modelExecutionContext} from "./model-execution-context";
 import {executeTurn,resumePlannedTurn,type RuntimeServices} from "./runtime-turn";
 import {runtimeObservation,type RuntimeObservationEngine} from "./runtime-observation";
 import {runtimeObservationResearch,ObservationGeneral} from "./runtime-observation-research";
@@ -12,8 +14,8 @@ export function runtimeWorkerRunner(services:RuntimeServices,engine?:RuntimeObse
   const {chatHandoff,...observationOptions}=options;
   const observation=runtimeObservation({tasks:services.tasks,engine,...observationOptions});
   const research=runtimeObservationResearch({tasks:services.tasks,engine,...observationOptions});
-  return {maintenance:engine||process.env.ONEEARTH_SKILL_SERVICE_TOKEN?async()=>{await observation.reconcileCancelled();await research.reconcileCancelled();}:undefined,
-    run:async(task:{id:string;body:any;checkpoint?:Payload},signal:AbortSignal,emit:(payload:Payload)=>void)=>{
+  return {maintenance:async()=>{await reconcileRuntimeStops(services.tasks);if(engine||process.env.ONEEARTH_SKILL_SERVICE_TOKEN){await observation.reconcileCancelled();await research.reconcileCancelled();}},
+    run:async(task:{id:string;body:any;checkpoint?:Payload},signal:AbortSignal,emit:(payload:Payload)=>void)=>modelExecutionContext.run({role:"background",taskId:task.id,tasks:services.tasks},async()=>{
       if(task.body.observationCheck!==undefined)return observation.run(task,signal);
       if(task.checkpoint?.kind==="observation-research-step.v1"){
         const result=await research.run(task,signal);if(!(result instanceof ObservationGeneral))return result;
@@ -29,10 +31,12 @@ export function runtimeWorkerRunner(services:RuntimeServices,engine?:RuntimeObse
         return executeTurn(services,task.id,body,signal,emit,{observationUnavailable:result.unavailable});
       }
       const handoff=await chatHandoff?.(task.id);
-      if(handoff){
-        const {body,plan}=readChatResearchHandoff(handoff);
-        return resumePlannedTurn(services,task.id,body,plan,signal,emit);
-      }
-      return executeTurn(services,task.id,task.body,signal,emit);
-    }};
+      const planned=handoff?readChatResearchHandoff(handoff):undefined;
+      const body=planned?.body??task.body;
+      if(!services.tasks.saveStep||!services.tasks.park)return planned?resumePlannedTurn(services,task.id,body,planned.plan,signal,emit):executeTurn(services,task.id,body,signal,emit);
+      const step=await createRuntimeStep(services.tasks,task.id,body,task.checkpoint,signal,emit);
+      try{return await runtimeStepContext.run(step,()=>planned?resumePlannedTurn(services,task.id,body,planned.plan,signal,emit):executeTurn(services,task.id,body,signal,emit));}
+      catch(error){if(error instanceof TaskParked)return error;throw error;}
+
+    })};
 }

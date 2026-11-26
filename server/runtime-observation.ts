@@ -2,7 +2,7 @@ import {randomUUID,createHash} from "node:crypto";
 import {isDeepStrictEqual} from "node:util";
 import {TaskParked,type TaskStore,type Payload,type Task} from "./task-store";
 import {validateTurnStructure} from "./runtime-input";
-import {parseObservationCheck,observationSha256,validObservationResult,observationResultMatchesRequest,
+import {parseObservationCheck,observationSha256,validObservationResult,observationResultMatchesRequest,skillRequestKind,
   type ObservationCheck,type ObservationRequest,type ObservationCheckResult,type SkillExecutionRequest} from "./observation-check-contract";
 import {observationDiscoveryClient,observationTerminal,validateObservationEvents,ObservationProtocolError,
   type ObservationBinding,type ObservationTask} from "./observation-discovery-client";
@@ -15,6 +15,7 @@ export interface RuntimeObservationEngine {
 type Step=Payload&{kind:"observation-check-step.v1";phase:"submit"|"discovery"|"engine"|"deliver";
   expectedSha256:string;
   initialMessageId:string;replyMessageId:string;binding?:ObservationBinding;requestId?:string;afterSeq?:number;
+  initialSent?:true;replySent?:true;
   result?:ObservationCheckResult;attempts:number;completedResult?:Payload;cancelledResult?:Payload;failedResult?:Payload;
   cancellation?:{binding?:ObservationBinding;reconciled?:boolean;retryAt?:number}};
 
@@ -143,7 +144,12 @@ export function runtimeObservation(options:{tasks:TaskStore;engine?:RuntimeObser
       try{
         signal.throwIfAborted();
         if(state.phase==="submit"){
-          const accepted=await client.submit(state.initialMessageId,task.id,check,signal);
+          const recover=state.initialSent===true||state.attempts>0;
+          if(!state.initialSent){
+            if(!await tasks.saveStep!(task.id,{...state,initialSent:true}))return new TaskParked();
+            state.initialSent=true;
+          }
+          const accepted=await client.submit(state.initialMessageId,task.id,check,signal,recover);
           validateObservationEvents(accepted,task.id,check);
           const next:Step={...state,phase:"discovery",binding:{taskId:accepted.taskId,contextId:accepted.contextId},attempts:0};
           if(!await tasks.saveStep!(task.id,next,{observationDiscovery:{messageId:state.initialMessageId,taskId:accepted.taskId,state:accepted.state}})){
@@ -172,7 +178,12 @@ export function runtimeObservation(options:{tasks:TaskStore;engine?:RuntimeObser
         const demand=before.events.filter(event=>event.skillDemand).at(-1);
         if(!demand?.skillDemand||demand.skillDemand.requestId!==state.requestId||demand.seq!==state.afterSeq)
           throw new ObservationProtocolError("原发现已不在该 Skill 等待点，不能回送过期结果。");
-        const delivered=await client.deliver(state.binding,state.replyMessageId,{requestId:state.requestId,afterSeq:state.afterSeq,result:state.result},signal);
+        const recover=state.replySent===true||state.attempts>0;
+        if(!state.replySent){
+          if(!await tasks.saveStep!(task.id,{...state,replySent:true}))return new TaskParked();
+          state.replySent=true;
+        }
+        const delivered=await client.deliver(state.binding,state.replyMessageId,{requestId:state.requestId,afterSeq:state.afterSeq,result:state.result},signal,recover);
         return await adopt(task.id,check,state,delivered,root.created);
       }catch(error){
         if(signal.aborted)throw error;
@@ -189,7 +200,11 @@ export function runtimeObservation(options:{tasks:TaskStore;engine?:RuntimeObser
       try{
         if(state.requestId&&engine)await engine.cancel(state.requestId);
         let cancellation="acceptance_unconfirmed";
-        const binding=state.binding??state.cancellation?.binding;
+        const check=parseObservationCheck(pending.body.observationCheck);
+        const binding=state.binding??state.cancellation?.binding??
+          (check&&(state.initialSent||state.attempts>0)?await client.readAcceptance?.({
+            messageId:state.initialMessageId,kind:skillRequestKind,input:{researchTaskId:pending.id,check},
+          },AbortSignal.timeout(2500)):undefined);
         if(binding)cancellation=await client.cancel(binding,AbortSignal.timeout(2500));
         await tasks.cancelStep!(pending.id,{reconciled:true},{observationCancellation:{state:cancellation,requestId:state.requestId,discoveryTaskId:binding?.taskId}});
       }catch{await tasks.cancelStep!(pending.id,{retryAt:now()+2000});}

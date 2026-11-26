@@ -1,3 +1,4 @@
+import {TaskParked} from "./task-store";
 import {estimatedHistoryTokens,historyReadSelections,historySummarySchema,conversationTokenLimit,type RuntimeConversationHistory} from "./conversation-history";
 import {createHash} from "node:crypto";
 import {assetById} from "../src/domain/datasets";
@@ -511,7 +512,7 @@ export async function prepareTurn(input:TurnInput,signal:AbortSignal,deps:Planni
   };
   const call={id:"turn-action",kind:"tool" as const,name:"本轮目标与动作规划",input:JSON.stringify(input.semanticDecision?{...tracePayload(),planningMode:"foreground",promptBytes}:{question:input.question,targets:available.map(({excerpt,...t})=>({...t,hasExcerpt:!!excerpt})),coverageScope,...(input.context.workspaceView?{workspaceView:input.context.workspaceView}:{})})};
   deps.stage("正在结合本轮目标与引用对象决定动作");deps.report({...call,status:"running"});
-  const runPlanning=async(schema?:Record<string,unknown>)=>{try{return await runBounded(prompt,schema);}catch(error){deps.report({...call,status:"failed",error:modelSafeText(error instanceof Error?error.message:"前台规划未完成。"),output:JSON.stringify({attempts:planningAttempts,promptBytes,inputs:planningInputs,historyBudget:input.turnContext?.conversation?.budget})});throw error;}};
+  const runPlanning=async(schema?:Record<string,unknown>)=>{try{return await runBounded(prompt,schema);}catch(error){if(error instanceof TaskParked)throw error;deps.report({...call,status:"failed",error:modelSafeText(error instanceof Error?error.message:"前台规划未完成。"),output:JSON.stringify({attempts:planningAttempts,promptBytes,inputs:planningInputs,historyBudget:input.turnContext?.conversation?.budget})});throw error;}};
   let raw=await runPlanning();
   if(input.semanticDecision&&input.conversationHistory){
     let selections:import("./conversation-history").HistorySelection[]|undefined;
@@ -565,7 +566,7 @@ export async function prepareTurn(input:TurnInput,signal:AbortSignal,deps:Planni
       prompt=makePrompt("\n本轮已选定read，只纠正targets数量：readCorrection给实际数量、原许可候选key及剩余模型/时间资源，须保留原用户目的、原范围和所有语义标记，选一至三个确切对象。过量时只能缩小第一次请求集合；空列表只能从原已核候选选择。不得改成search、workspace、respond、观测分流或新增来源。不能安全选择则保持未能执行；不得宣称已读取。纠正受本轮共同模型调用和原时间预算约束；此分支不开放history-read，已有历史读回仍受其独立的一次上限约束。");
       promptBytes=Buffer.byteLength(prompt);call.input=JSON.stringify({...tracePayload(),planningMode:"foreground",promptBytes});
       deps.report({id:"foreground-read-repair",kind:"tool",name:"纠正本轮读取对象数量",input:JSON.stringify({actualCount:invalidCount,allowedTargets:modelKeys,minTargets:1,maxTargets:3,correction,remainingModelCalls:foregroundDecisionLimits.modelCalls-foregroundCalls}),status:"running"});
-      try{raw=await runPlanning(schema);}catch(error){deps.report({id:"foreground-read-repair",kind:"tool",name:"纠正本轮读取对象数量",input:"同轮一次，复用原目的与许可范围",status:"failed",error:"读取数量纠正未完成，未执行工具。"});throw error;}
+      try{raw=await runPlanning(schema);}catch(error){if(error instanceof TaskParked)throw error;deps.report({id:"foreground-read-repair",kind:"tool",name:"纠正本轮读取对象数量",input:"同轮一次，复用原目的与许可范围",status:"failed",error:"读取数量纠正未完成，未执行工具。"});throw error;}
       try{
         const normalized=normalizeForegroundDecision(raw,input),value=JSON.parse(normalized);
         if(value.action!=="read"||!value.targets.length||value.targets.length>3||Object.entries(markers).some(([key,marker])=>value[key]!==marker)||

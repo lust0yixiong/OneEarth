@@ -42,7 +42,7 @@ GitHub 的 `lust0yixiong/OneEarth` 是产品代码与规范的主仓库，集成
 | 主程与集成 | [同源主入口](server/index.ts)、[启动](scripts/launch.mjs)、跨模块集成、正式仓库与发布 | 统一派工、排期、跟进和协调依赖，接收模块交接，维护候选版本和部署记录，向测试会话提供候选版本、复现条件及证据 |
 | 测试会话 | 牵头端到端系统回归，复测候选与单项修复 | 与主程交接运行环境、候选版本和复现条件，向总体负责人报告结论并按约定结项 |
 | 网页工作台与球体 | [应用入口](src/App.tsx)、[组件](src/components)、[球体](src/globe)、[样式](src/styles)与展示侧的数据适配 | 按任务事件呈现进展，按时空接口取图层。提交真实浏览器操作、视觉对照及交互性能证据 |
-| 运行时 | [任务 API](server/runtime-api.ts)、[后台 worker](server/runtime-worker.ts)、[轮次执行](server/runtime-turn.ts)、[模型动作规划](server/turn-planning.ts)与[执行器适配](server/research-executor.ts) | 向网页提供任务、状态、事件和研究记录。worker 经 A2A 委托发现，使用时空服务签发的权威范围。运行时 API 侧的独立工具队列经适配层执行获准的公开 Search、Fetch 和原站读取，并将回执绑定原发现委托 |
+| 运行时 | [任务 API](server/runtime-api-service.ts)、[后台 worker](server/runtime-worker.ts)、[轮次执行](server/runtime-turn.ts)、[模型动作规划](server/turn-planning.ts)与[执行器适配](server/research-executor.ts) | 向网页提供任务、状态、事件和研究记录。worker 经 A2A 委托发现，使用时空服务签发的权威范围。运行时 API 侧的独立工具队列经适配层执行获准的公开 Search、Fetch 和原站读取，并将回执绑定原发现委托 |
 | 数据发现智能体服务 | [服务入口](server/discovery-service.ts)、[A2A 客户端契约](docs/发现服务-A2A.md)、论文断言读取、渠道策略与取证规划 | 以 A2A `/message:send` 受理，提供确定性 Message 或受托 Task。负责选择渠道、词、URL、读法和证据采纳，公开网络执行走运行时工具接口。断言库只读。`/v1/discoveries` 是旧协议兼容入口。接口改动与运行时及其他消费者共同验证 |
 | 时空数据服务 | [服务入口](server/spatial-service.ts)、[时空存储](server/spatial-store.ts)、[覆盖查询](server/coverage-router.ts)、图层准备 | 签发权威范围和修订，管理 PostGIS 索引与对象存储中的可视化产物。海纳提供目录及原始文件。与运行时核对问答范围，与前端核对图层、分块和缓存语义 |
 

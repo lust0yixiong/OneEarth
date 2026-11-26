@@ -30,12 +30,12 @@ export function validProviderRequest(bytes:Buffer,encoding:string|undefined){
 
 /** One authenticated loopback listener per actual CLI invocation. Production
  * always uses this pinned HTTPS origin; transport injection is server-only. */
-export async function providerReasoningRelay(apiKey:string,sink:ProviderReasoningSink,signal:AbortSignal,expectedPrompt:string,transport:typeof https.request=https.request){
+export async function providerReasoningRelay(apiKey:string,sink:ProviderReasoningSink,signal:AbortSignal,expectedPrompt:string,transport:typeof https.request=https.request,options:{maxRequests?:number}={}){
  signal.throwIfAborted();const token=randomBytes(32).toString("base64url"),attempt=randomUUID();
  const active=new Set<http.ClientRequest>(),observers=new Set<ProviderReasoningObserver>();let requests=0,closed=false;
  const server=http.createServer(async(req,res)=>{
   if(closed||signal.aborted||req.method!=="POST"||req.url!=="/responses"||req.headers.authorization!=="Bearer "+token){res.writeHead(403).end();return;}
-  if(++requests>4){res.writeHead(429).end();return;}
+  if(++requests>(options.maxRequests??4)){res.writeHead(429).end();return;}
   let bytes:Buffer=Buffer.alloc(0);
   try{for await(const chunk of req){if(bytes.length+chunk.length>maxBodyBytes)throw Error();bytes=Buffer.concat([bytes,chunk]);}
    bytes=projectProviderRequest(bytes,req.headers["content-encoding"] as string|undefined,expectedPrompt);

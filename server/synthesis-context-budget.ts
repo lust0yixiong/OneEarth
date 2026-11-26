@@ -1,3 +1,4 @@
+import {runtimeStepContext} from "./runtime-step";
 import {rankEvidence} from "./evidence-ranking";
 import {modelSafeText,modelSafeValue} from "./model-context-safety";
 
@@ -171,8 +172,8 @@ export function packSynthesisContext(instructions:string,input:Record<string,any
 
 /** One original answer deadline shared by generation, repair and calculation planning. */
 export function answerTimeBudget(parent:AbortSignal,requestedMs=synthesisTimeLimitMs){
-  const milliseconds=Math.max(1,Math.min(synthesisTimeLimitMs,requestedMs)),controller=new AbortController(),deadline=Date.now()+milliseconds;
-  const timer=setTimeout(()=>controller.abort(Error("回答整理已达到本轮预算，已停止后续模型调用。")),milliseconds);
+  const milliseconds=Math.max(1,Math.min(synthesisTimeLimitMs,requestedMs)),controller=new AbortController(),deadline=runtimeStepContext.getStore()?.budget(milliseconds)??Date.now()+milliseconds;
+  const timer=setTimeout(()=>controller.abort(Error("回答整理已达到本轮预算，已停止后续模型调用。")),Math.max(0,deadline-Date.now()));
   const signal=AbortSignal.any([parent,controller.signal]);
   return {signal,remainingMs:()=>Math.max(0,deadline-Date.now()),close:()=>clearTimeout(timer),
     async run<T>(operation:(signal:AbortSignal)=>Promise<T>):Promise<T>{

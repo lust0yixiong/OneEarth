@@ -5,17 +5,22 @@ import {observationKey,type ObservationAuthority} from "./runtime-observation-au
 import {observationResponse,observationRetainedRecords,type RuntimeObservationEngine} from "./runtime-observation";
 import {parseObservationRequest,observationResultMatchesRequest,validObservationResult,observationSha256,
   type ObservationRequest,type ObservationEvidence,type ObservationCheckResult} from "./observation-check-contract";
-import {modelObservationEvidence,type ObservationResearchResult} from "./observation-research-contract";
+import {modelObservationEvidence,observationResearchKind,type ObservationResearchResult} from "./observation-research-contract";
 import {observationDiscoveryClient,observationTerminal,ObservationProtocolError,type ObservationTask,type ObservationBinding} from "./observation-discovery-client";
 import {provenanceForBinding} from "../src/domain/observation-source";
 
 type Step=Payload&{kind:"observation-research-step.v1";phase:"submit"|"discovery"|"engine"|"deliver"|"general";
   ordinaryFallback?:boolean;hasAttachments?:boolean;observationParent?:boolean;
   materials:PinnedObservationMaterial[];history:ObservationEvidence[];initialMessageId:string;replyMessageId:string;attempts:number;
+  initialSent?:true;replySent?:true;
   binding?:ObservationBinding;requestId?:string;afterSeq?:number;check?:ObservationRequest;expectedSha256?:string;result?:ObservationCheckResult;
   completedResult?:Payload;cancelledResult?:Payload;failedResult?:Payload;cancellation?:{binding?:ObservationBinding;reconciled?:boolean;retryAt?:number}};
 /** Trusted worker marker; never supplied by the browser or provider. */
 export class ObservationGeneral {constructor(readonly unavailable=false,readonly observationParent=false){}}
+const initialResearch = (id:string,body:{query:string;questionDecision?:{dataQuestion:string}},state:Step) =>
+  ({researchTaskId:id,question:body.questionDecision?.dataQuestion??body.query,
+    materials:state.materials.map(({artifactId,version,title,variables})=>({artifactId,version,title,variables})),
+    evidence:state.history.map(modelObservationEvidence)});
 export async function recoverObservationResearchRecord(tasks:TaskStore,task:Task){
   if(task.status!=="cancelled"&&task.status!=="failed")return;
   const state=await tasks.step?.(task.id);if(state?.kind!=="observation-research-step.v1")return;
@@ -119,9 +124,12 @@ export function runtimeObservationResearch(options:{tasks:TaskStore;engine?:Runt
         if(state.phase==="general")return new ObservationGeneral(false,state.observationParent);
         if(state.phase==="submit"){
           if((await tasks.get(task.id))?.status!=="running")return new TaskParked();
-          const question=task.body.questionDecision?.dataQuestion??task.body.query;
-          const accepted=await client.submitResearch(state.initialMessageId,{researchTaskId:task.id,question,
-            materials:state.materials.map(({artifactId,version,title,variables})=>({artifactId,version,title,variables})),evidence:state.history.map(modelObservationEvidence)},signal);
+          const recover=state.initialSent===true||state.attempts>0;
+          if(!state.initialSent){
+            if(!await tasks.saveStep!(task.id,{...state,initialSent:true}))return new TaskParked();
+            state.initialSent=true;
+          }
+          const accepted=await client.submitResearch(state.initialMessageId,initialResearch(task.id,task.body,state),signal,recover);
           validate(accepted,task.id,state);
           const next:Step={...state,phase:"discovery",binding:{taskId:accepted.taskId,contextId:accepted.contextId},attempts:0};
           if(!await tasks.saveStep!(task.id,next,{observationDiscovery:{messageId:state.initialMessageId,taskId:accepted.taskId,state:accepted.state}})){
@@ -154,7 +162,12 @@ export function runtimeObservationResearch(options:{tasks:TaskStore;engine?:Runt
         if(!demand?.skillDemand||demand.skillDemand.requestId!==state.requestId||demand.seq!==state.afterSeq)throw new ObservationProtocolError("原发现已不在该执行等待点。");
         if(!await authorized(state))return park(task.id,state,undefined,0);
         if((await tasks.get(task.id))?.status!=="running")return new TaskParked();
-        const delivered=await client.deliver(state.binding,state.replyMessageId,{requestId:state.requestId,afterSeq:state.afterSeq,result:state.result},signal);
+        const recover=state.replySent===true||state.attempts>0;
+        if(!state.replySent){
+          if(!await tasks.saveStep!(task.id,{...state,replySent:true}))return new TaskParked();
+          state.replySent=true;
+        }
+        const delivered=await client.deliver(state.binding,state.replyMessageId,{requestId:state.requestId,afterSeq:state.afterSeq,result:state.result},signal,recover);
         return await adopt(task.id,state,delivered,root.created);
       }catch(error){
         if(signal.aborted)throw error;
@@ -168,7 +181,10 @@ export function runtimeObservationResearch(options:{tasks:TaskStore;engine?:Runt
       const state=pending.checkpoint as Step;
       try{
         if(state.requestId&&engine)await engine.cancel(state.requestId);
-        const binding=state.binding??state.cancellation?.binding;
+        const binding=state.binding??state.cancellation?.binding??
+          (state.initialSent||state.attempts>0?await client.readAcceptance?.({
+            messageId:state.initialMessageId,kind:observationResearchKind,input:initialResearch(pending.id,pending.body,state),
+          },AbortSignal.timeout(2500)):undefined);
         const cancellation=binding?await client.cancel(binding,AbortSignal.timeout(2500)):"acceptance_unconfirmed";
         await tasks.cancelStep!(pending.id,{reconciled:true},{observationCancellation:{state:cancellation,requestId:state.requestId,discoveryTaskId:binding?.taskId}});
       }catch{await tasks.cancelStep!(pending.id,{retryAt:now()+2000});}

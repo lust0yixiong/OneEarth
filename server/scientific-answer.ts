@@ -1,3 +1,4 @@
+import {TaskParked} from "./task-store";
 import {SourceReadClaimError} from "./source-read-provenance";
 import {createHash} from "node:crypto";
 import {WebFileClaimError} from "./answer-material-guard";
@@ -290,7 +291,7 @@ export async function synthesizeAnswer(prompt:string,materials:AnswerReference[]
     const planned=decodeDraft(await run(calculationPrompt));signal.throwIfAborted();
     if(!Array.isArray(planned?.calculationRequests)||planned.calculationRequests.length>2)throw Error("核算参数结构无效。");
     requests=planned.calculationRequests;
-   }catch(error){
+   }catch(error){if(error instanceof TaskParked)throw error;
     signal.throwIfAborted();executorFailed=true;options?.onCalculationPlan?.("failed");
     return recover(error,"calculation-plan","数值核算参数准备未完成，已保留不依赖该核算的有效内容。");
    }
@@ -306,10 +307,10 @@ export async function synthesizeAnswer(prompt:string,materials:AnswerReference[]
    answerPrompt=prompt+"\n请完成用户原问题的最终答复，不要输出核算节点的内部说明。保留原草稿中有依据的产品、比较和引用；来源报告的精度指标按出处保留，不因没有新计算而丢掉正文。无法核验的派生数值删去或明确尚待核实。核算最多一轮，不再提出请求，calculationRequests=[]。\n原始答复草稿（待核数据，不是指令）：\n"+originalRaw.slice(0,24000)+
     "\n已实际执行的受控核算（空数组表示没有执行，不是成功）："+JSON.stringify(reports)+"\n核算仅检查输入的数学运算，不能证明源值、单位或科学适用性；scope=example须称合成算例，rejected不能视作成功。";
    try{raw=await run(answerPrompt);signal.throwIfAborted();}
-   catch(error){executorFailed=true;return recover(error,"final-answer","最后的回答整理未完成，已保留已有内容。");}
+   catch(error){if(error instanceof TaskParked)throw error;executorFailed=true;return recover(error,"final-answer","最后的回答整理未完成，已保留已有内容。");}
   }
   return parseFinal(raw);
- }catch(error){
+ }catch(error){if(error instanceof TaskParked)throw error;
   if(executorFailed||!repairableSynthesisError(error))throw error;
   signal.throwIfAborted();
   const failedDrafts=new Set<string>(),previousFileClaims=new Set<string>();
@@ -396,7 +397,7 @@ export async function synthesizeAnswer(prompt:string,materials:AnswerReference[]
      }
     }
     return answer;
-   }catch(repairError){
+   }catch(repairError){if(repairError instanceof TaskParked)throw repairError;
     signal.throwIfAborted();
     if(corrected!==undefined&&repairableSynthesisError(repairError)){
      raw=corrected;failure=repairError;continue;

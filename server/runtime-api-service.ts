@@ -1,8 +1,6 @@
 import express from "express";
 import { mkdirSync } from "node:fs";
-import { accessGuard } from "./access";
 import { resultSnapshots } from "./result-snapshots";
-import { releaseVersion } from "./version";
 import { validateTurn } from "./runtime-input";
 import { taskRoutes } from "./task-store";
 import { postgresTaskStore } from "./postgres-task-store";
@@ -18,16 +16,18 @@ import { runtimeWebToolChannel } from "./runtime-web-tool-router";
 import { runtimeChatChannel } from "./runtime-chat-channel";
 import { prepareRuntimeChat } from "./runtime-chat-turn";
 import { runtimeServices } from "./runtime-services";
+import { closeRuntimeModelCapacity } from "./runtime-model-capacity";
 
 const badRequest: express.ErrorRequestHandler = (_error, _req, res, next) => {
   if (res.headersSent) { next(_error); return; }
   res.status(400).json({error:"运行时任务请求无效。"});
 };
 
-/** Both listeners use one API, one Chat owner and one tools coordinator. */
+/** The workbench serves the business API and mounts the tool callback on loopback. */
 export async function createRuntimeApi(state: string) {
   mkdirSync(state, {recursive:true, mode:0o700});
   const dispose: (() => void | Promise<void>)[] = [];
+  dispose.push(closeRuntimeModelCapacity);
   let stop: Promise<void> | undefined;
   let close: Promise<void> | undefined;
   const stopWork: (() => void | Promise<void>)[] = [];
@@ -78,14 +78,10 @@ export async function createRuntimeApi(state: string) {
         onCancelled:id=>chat.cancel(id)});
     business.use(badRequest);
 
-    const compatibility = express();
-    compatibility.disable("x-powered-by");
-    compatibility.use(accessGuard());
-    compatibility.use(webChannel.router);
-    compatibility.use(business);
-    compatibility.get("/api/health", (_req,res) => res.json({status:"ok",service:"runtime",version:releaseVersion}));
-    compatibility.use(badRequest);
-    return {business, compatibility, stopAccepting, close:closeResources};
+    const internal = express.Router();
+    internal.use(webChannel.router);
+    internal.use(badRequest);
+    return {business, internal, stopAccepting, close:closeResources};
   } catch (error) {
     await closeResources().catch(() => console.error("OneEarth could not release runtime API resources"));
     throw error;

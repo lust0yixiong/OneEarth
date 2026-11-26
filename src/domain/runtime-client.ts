@@ -1,3 +1,4 @@
+import {readTaskLifecycle,type TaskLifecycle} from "./task-lifecycle-client";
 import type {DiscoveryAttempt,DiscoveryResponse,Message} from "./types";
 import {validBrowserWorkspaceReceipt,type BrowserWorkspaceReceipt,type WorkspaceReceipt,type WorkspaceRecoveryInput} from "./turn-context";
 import {createClarificationPrompt,validClarificationPrompt} from "./clarification";
@@ -80,6 +81,7 @@ interface ResearchRecord {
   updated:number;
   result:DiscoveryResponse;
   workspaceReceipt?:WorkspaceReceipt;
+  taskLifecycle?:TaskLifecycle;
 }
 
 export async function loadResearchRecord(id:string):Promise<ResearchRecord>{
@@ -89,7 +91,7 @@ export async function loadResearchRecord(id:string):Promise<ResearchRecord>{
   const record:ResearchRecord=await response.json();
   if(record.id!==id||typeof record.question!=="string"||typeof record.conversationId!=="string"||
     typeof record.turnId!=="string"||typeof record.result?.message!=="string")throw Error("研究记录格式无效。");
-  return record;
+  return {...record,taskLifecycle:readTaskLifecycle(record)};
 }
 
 

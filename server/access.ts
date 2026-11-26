@@ -13,6 +13,15 @@ export interface WorkbenchLan {
   peers:BlockList;
 }
 
+export const ipv4LoopbackOnly: RequestHandler = (req, res, next) => {
+  if (req.socket.localAddress === "127.0.0.1" && req.socket.remoteAddress === "127.0.0.1" &&
+      !req.get("origin") && !req.get("sec-fetch-site")) {
+    next();
+    return;
+  }
+  res.status(404).json({error:"未找到对应接口。"});
+};
+
 /** Resolve only the explicitly selected interface, with one private IPv4 address. */
 export function workbenchLan(name:string|undefined, interfaces=networkInterfaces()):WorkbenchLan|undefined {
   if(!name)return;

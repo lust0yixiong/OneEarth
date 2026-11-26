@@ -1,3 +1,4 @@
+import {TaskParked} from "./task-store";
 import {pickedSamples} from "./question-grid";
 import {sourceExcerpts,scopeSourceTabs} from "./evidence-excerpts";
 import {rankEvidence} from "./evidence-ranking";
@@ -403,7 +404,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         onStage?.(retained?"后续核对未完成，正在保留已有答复内容":"回答整理未完成，正在保留已取得的资料线索",searches);
         onTool?.({id,kind:"tool",name:node==="answer-repair"?"回答引用与结构核对":node==="calculation-plan"?"核对数值演算参数":"回答整理",input:node==="answer-repair"?repairInput:"依据本轮已取得材料处理",status:"failed",error:error instanceof Error?error.message:"本步骤未完成。",output:retained?"已保留此前通过结构及引用校验的内容，不保留未核验的新计算结果。":"未取得可直接恢复的正文，将仅保留实际取得的来源线索。"});
       }});
-    }catch(error){
+    }catch(error){if(error instanceof TaskParked)throw error;
       signal.throwIfAborted();let retained=retainedSourceAnswer(references,webHits,packet.retained,!!retrieval);if(!retained)throw error;
       if(deliveredComparisons.length){const statement="本轮未核对新旧材料差异，不能判断事实新增。";retained.limitation+="\n"+statement;
         retained.sourceChanges=deliveredComparisons.filter(comparison=>retained!.references.some(ref=>ref.kind==="web"&&readSourceIdentity(ref.url)===comparison.identity)).map(comparison=>({ref:comparison.ref,statement,status:"unknown" as const,historyWindow:null,historyQuote:null,currentWindow:null,currentQuote:null}));}
@@ -427,7 +428,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         run:(p,schema,reviewSignal)=>runModel(p,schema===synthesisResponseSchema?answerSchema:schema,reviewSignal),onTool});
       signal.throwIfAborted();
       try{verifyExecutionAndReferences(reviewed.answer);answer=reviewed.answer;}
-      catch(error){onTool?.({id:"source-read-provenance",kind:"tool",name:"核对来源访问记录",input:"核对模型审读生成的动作描述",
+      catch(error){if(error instanceof TaskParked)throw error;onTool?.({id:"source-read-provenance",kind:"tool",name:"核对来源访问记录",input:"核对模型审读生成的动作描述",
         status:"failed",error:error instanceof Error?error.message:"来源访问记录不相符。"});}
     }
     onTool?.({id:origin==="model-validated"?"answer-generation":"answer-delivery",kind:"tool",name:origin==="model-validated"?"回答整理":"保留可核依据",input:"区分模型成文通过校验、保留依据与无直接依据",status:origin==="model-validated"?"done":"partial",output:JSON.stringify({mode:origin,promptBytes:packet.stats.promptBytes,modelCalls,sentPromptBytes,elapsedMs:Date.now()-start,references:answer.references.length})});

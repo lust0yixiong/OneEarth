@@ -1,3 +1,4 @@
+import type {TaskLifecycle} from "../domain/task-lifecycle-client";
 import { loadRemoteAssetIds } from "../domain/datasets";
 import {QuestionScope} from "./QuestionScope";
 import {ObservationCatalogueContext,usePublishedObservationCatalogue} from "./observation-catalogue";
@@ -157,6 +158,31 @@ function ResearchRows({ message }: { message: Message }) {
   );
   return message.answerNotes ? <details className="chat-role"><summary>查看研究需求与候选资料 <ChevronDown size={12}/></summary>{content}</details> : content;
 }
+const runtimePhaseLabels={
+  queued:"等待执行",executing:"正在执行","waiting-discovery":"等待资料发现",resuming:"接续执行",
+  "cancel-pending":"正在取消本地任务",complete:"本轮已完成",failed:"本轮执行未完成",cancelled:"本地任务已取消",
+} as const;
+const remoteStopLabels={
+  pending:"等待远端停止确认",unconfirmed:"远端停止未获确认",confirmed:"远端已确认停止",
+} as const;
+
+function ChatTaskStatus({lifecycle,active=false}:{lifecycle?:TaskLifecycle;active?:boolean}){
+  const phase=lifecycle?.runtimePhase;
+  const stops=lifecycle?.remoteStops??[];
+  const state=stops.some(stop=>stop.state==="pending")?"pending"
+    : stops.some(stop=>stop.state==="unconfirmed")?"unconfirmed"
+    : stops.length?"confirmed":undefined;
+  const showPhase=phase && (active||phase.phase==="complete"||phase.phase==="failed");
+  if(!state && !showPhase)return null;
+  return <div className="answer-reply-context" role={active?undefined:"status"}>
+    {showPhase && <span>
+      {phase.phase==="waiting-discovery" && phase.operation==="read"?"等待读取资料":runtimePhaseLabels[phase.phase]}
+    </span>}
+    {state && <span data-remote-stop={state}>{remoteStopLabels[state]}{stops.length>1&&
+      "（"+stops.filter(stop=>stop.state==="confirmed").length+" / "+stops.length+" 项已确认）"}</span>}
+  </div>;
+}
+
 export function ChatPanel({ layout }: { layout: ChatLayout }) {
   const home=useChatHome();
   const {
@@ -296,6 +322,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
               key={m.id}
               id={"message-"+m.id}
               data-message-id={m.id}
+              data-runtime-phase={m.taskLifecycle?.runtimePhase?.phase}
               data-reply-to={m.replyTo}
               tabIndex={m.role==="user"?-1:undefined}
               className={"message " + m.role + (m.failed ? " failed" : "")}
@@ -311,6 +338,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   {regionsByQuestion.get(m.id)!.status!=="located"?" · 待定位":regionsByQuestion.get(m.id)!.precision==="approximate"?" · 示意范围":""}
                 </button></>:m.role==="user" && m.context && " · " + m.context}
               </small>
+              {m.role==="assistant" && <ChatTaskStatus lifecycle={m.taskLifecycle}/>}
               {m.role==="assistant" && (m.historicalReply || m.context?.startsWith("原问题 · ")) && <div className="answer-reply-context">
                 <span>保持当前地图</span><span aria-hidden="true">·</span>
                 <button disabled={!questions.has(m.id)} aria-controls={questions.has(m.id)?"message-"+questions.get(m.id)!.id:undefined}
@@ -531,9 +559,10 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
         {s.activeChats.map(chat=>{
           const question=s.messages.find(message=>message.id===chat.userMessageId);
           return <div className="live-search pending" role="status" key={chat.id}
-              data-chat-id={chat.id} data-chat-phase={chat.phase} data-reply-to={chat.userMessageId}>
+              data-chat-id={chat.id} data-chat-phase={chat.phase} data-runtime-phase={chat.taskLifecycle?.runtimePhase?.phase} data-reply-to={chat.userMessageId}>
             {question && <button type="button" className="activity-link" onClick={()=>locateQuestion(question.id)}
               aria-controls={"message-"+question.id}>{chat.phase==="research" ? "研究" : "回复"} · {question.text}</button>}
+            <ChatTaskStatus lifecycle={chat.taskLifecycle} active/>
             <RunDetails working trace={chat.trace} stage={chat.stage} runs={chat.searches}
               openFinding={id=>void loadRemoteAssetIds([id]).then(()=>inspectAsset(id,chat.scope.filters,chat.scope.selection)).catch(()=>patch({error:"暂时无法打开这条线索。"}))}/>
             {chat.accepted && <button type="button" className="activity-link" disabled={chat.cancelling}

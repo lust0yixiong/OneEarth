@@ -1,3 +1,5 @@
+import {runtimeStepContext} from "./runtime-step";
+import {TaskParked} from "./task-store";
 import {literatureText,literatureDisplay} from "../src/domain/literature-label";
 import {providerReasoningArchive} from "./provider-reasoning";
 import {isDeepStrictEqual} from "node:util";
@@ -109,14 +111,17 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
   publish:(payload:Record<string,unknown>)=>void,internal:RuntimeTurnOptions&{foreground?:boolean;semanticDecision?:boolean;handoff?:RuntimeTurnHandoff;approvedConfirmation?:boolean}={}):Promise<Record<string,unknown>>{
   const {tasks, push, coverage, researchRegionService, adminBoundaryDir, canonicalCache} = services;
   const turnContext=internal.turnContext??internal.handoff?.turnContext??await runtimeTurnContext(tasks,taskId,body);
-  const batchOwner={batchId:randomUUID(),taskId,turnId:body.turnId,conversationId:body.conversationId};
+  const batchOwner={batchId:runtimeStepContext.getStore()?.stableId("result-batch")??randomUUID(),taskId,turnId:body.turnId,conversationId:body.conversationId};
   const cachedPapers=runtimeTurnPapers();
   const haina=runtimeTurnHaina();
+  const savedMaterials=runtimeStepContext.getStore()?.state.cancelledResult as DiscoveryResponse|undefined;
+  if(savedMaterials?.paperRecords?.length)cachedPapers.remember(savedMaterials.paperRecords);
   const currentAssertionReadings:CurrentAssertionReading[]=[];
+  let idSequence=0;const nextId=()=>runtimeStepContext.getStore()?.stableId("turn-"+idSequence++)??randomUUID();
   let context=boundTurnContext(body.context,turnContext);
   const controller = {signal};
   let activeExecutor:ReturnType<typeof researchExecutor>|undefined;
-  const runTrace:RunTrace = internal.handoff?structuredClone(internal.handoff.runTrace):{started:Date.now(),stages:[],calls:[],timings:requestPerformance.getStore()};
+  const runTrace:RunTrace = internal.handoff?structuredClone(internal.handoff.runTrace):{started:runtimeStepContext.getStore()?.state.startedAt??Date.now(),stages:[],calls:[],timings:requestPerformance.getStore()};
   if(internal.handoff&&requestPerformance.getStore()){
     requestPerformance.getStore()!.unshift(...(runTrace.timings||[]));runTrace.timings=requestPerformance.getStore();
   }
@@ -215,7 +220,8 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     }
     async function retainMaterials(material:RuntimeMaterialReceipt){
       // Persist full acquired content before synthesis; call logs contain identities only.
-      if(internal.foreground)event({researchMaterials:material});else await tasks.append(taskId,{researchMaterials:material});
+      if(!runtimeStepContext.getStore()){if(internal.foreground)event({researchMaterials:material});else await tasks.append(taskId,{researchMaterials:material});}
+      await runtimeStepContext.getStore()?.captureMaterial(material);
       cachedPapers.remember(material.papers);
       haina.remember(material);
       for(const reading of material.paperEvidence||[])if(!currentAssertionReadings.some(old=>isDeepStrictEqual(old,reading)))currentAssertionReadings.push(reading);
@@ -299,7 +305,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         throw Error("原任务没有允许独立补查的范围，本轮未启动新的发现。");
       if(continuation)continuation={...continuation,focus:modelSafeText(continuation.focus)};
       if(evidenceGap!==undefined)evidenceGap=modelSafeText(evidenceGap);
-      const messageId=continuation?randomUUID():taskId;
+      const messageId=continuation?nextId():taskId;
       const a2a=discoveryProtocol()==="a2a";
       let discoveryId=a2a?undefined:messageId;
       const confirmation=clarification?{continuedFrom:clarification.binding.discoveryId,options:{target:{discoveryId:clarification.binding.discoveryId,
@@ -313,7 +319,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         discoveryId=binding.discoveryId;
         lastBinding=binding;
         if(!continuation){initialDiscoveryId=discoveryId;initialBinding=binding;}
-        await tasks.append(taskId,{discoveryBinding:{...binding,kind:continuation?"continuation":"initial"}});
+        if(!runtimeStepContext.getStore()?.replaying)await tasks.append(taskId,{discoveryBinding:{...binding,kind:continuation?"continuation":"initial"}});
       };
       report({...call,status:"running"});
       try {
@@ -359,6 +365,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
             web:[...new Set(result.searches.flatMap(search=>search.hits.map(hit=>hit.url)))]}})});
         return result;
       } catch(error) {
+        if(error instanceof TaskParked)throw error;
         report({...call,status:"failed",error:error instanceof Error?error.message:"发现服务未完成。",
           output:JSON.stringify({messageId,...(discoveryId?{discoveryId}:{})})});
         throw error;
@@ -479,8 +486,8 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       }
       const progress:SearchRun[]=[];
       const searches=await executor.read({...plan,targets:allowed},question,{stage,report,callPrefix,executionSignal,onFailure:message=>{readIssues.push(message);},
-      options:{onAccepted:async binding=>{await tasks.append(taskId,{sourceReadBinding:binding});},
-        onCheckpoint:async binding=>{await tasks.append(taskId,{sourceReadBinding:binding});}},onResult:async material=>{readIssues.push(...material.issues);await retainMaterials(material);progress.push(...material.searches);}});
+      options:{onAccepted:async binding=>{if(!runtimeStepContext.getStore()?.replaying)await tasks.append(taskId,{sourceReadBinding:binding});},
+        onCheckpoint:async binding=>{if(!runtimeStepContext.getStore()?.replaying)await tasks.append(taskId,{sourceReadBinding:binding});}},onResult:async material=>{readIssues.push(...material.issues);await retainMaterials(material);progress.push(...material.searches);}});
       return [...new Map([...progress,...searches].map(run=>[JSON.stringify(run),run])).values()];
     };
     await regionTask;
@@ -875,6 +882,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       return {result:reply};
     }
   } catch(err) {
+    if(err instanceof TaskParked)throw err;
     if(signal.aborted)throw err;
     const error=modelSafeText(err instanceof SyntaxError?"模型回复格式异常，请重试。":err instanceof Error?err.message:"数据发现请求未能完成。");
     const code=err instanceof AnswerReferenceError||err instanceof ExecutorFailure||err instanceof TurnPlanningFailure?err.code:undefined;

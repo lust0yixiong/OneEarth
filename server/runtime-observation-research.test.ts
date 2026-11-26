@@ -15,11 +15,13 @@ import {runtimeWorkerRunner} from "./runtime-worker-runner";
 import type {RuntimeServices} from "./runtime-turn";
 import type {RuntimeObservationEngine} from "./runtime-observation";
 import {observationDiscoveryClient,type ObservationTask} from "./observation-discovery-client";
+import {discoveryDelegationLookupPath,discoveryRequestFingerprint} from "./discovery-request-fingerprint";
 import {modelObservationEvidence,observationResearchKind,type ObservationResearchResult} from "./observation-research-contract";
 import {observationCheckSkill,skillResultKind,type ObservationEvidence,type ObservationRequest,type ObservationCheckResult,type SkillExecutionRequest} from "./observation-check-contract";
 import type {PinnedObservationMaterial} from "./observation-artifacts";
 
 const token="natural-runtime-controlled-service-token-32bytes";
+const recoveryToken="natural-separate-controlled-recovery-token";
 const material:PinnedObservationMaterial={artifactId:"weather",version:"A",title:"已授权站点观测",variables:["temperature"],sha256:"a".repeat(64)};
 const evidence:ObservationEvidence={artifactId:"weather",version:"A",variable:"temperature",sha256:material.sha256,unit:"K",count:2,first:"2020-01-01",last:"2020-01-03"};
 const describe:ObservationRequest={skill:observationCheckSkill,artifactId:"weather",version:"A",variable:"temperature",purpose:"describe"};
@@ -31,13 +33,22 @@ function saveParent(store:TaskStore,conversationId:string,e:ObservationEvidence=
   const id=randomUUID(),input={...body(),conversationId};return Promise.resolve(store.submit(id,input)).then(async()=>{assert.equal((await store.claim())?.id,id);await store.finish(id,"complete",{result:{message:"原始已读事实",observationCheckResult:{status:"verified",evidence:e}}});return id;});
 }
 
-async function fixture(t:TestContext,options:{final?:ObservationResearchResult;check?:ObservationRequest;lostInitial?:boolean;lostReply?:boolean;pendingFinal?:boolean;alterDemand?:(d:any)=>any;alterAnswer?:(answer:any)=>any}={}){
+async function fixture(t:TestContext,options:{final?:ObservationResearchResult;check?:ObservationRequest;lostInitial?:boolean;lostReply?:boolean;pendingFinal?:boolean;recoveryUnavailable?:boolean;alterDemand?:(d:any)=>any;alterAnswer?:(answer:any)=>any}={}){
   const tasks=openTaskStore(":memory:"),app=express();let grants=[structuredClone(material)],grantReads=0,release=!options.pendingFinal;
   const authority:ObservationAuthority=async()=>{grantReads++;return structuredClone(grants);};
   const jobs=new Map<string,SkillExecutionRequest>(),results=new Map<string,ObservationCheckResult>(),requests:any[]=[],accepted=new Map<string,{input:any;task:any}>();let cancels=0,deliveries=0;
   const engine:RuntimeObservationEngine={submit:async request=>{if(jobs.has(request.requestId))assert.deepEqual(request,jobs.get(request.requestId));else jobs.set(request.requestId,structuredClone(request));},result:async id=>results.get(id),cancel:async id=>{if(jobs.has(id)&&!results.has(id))results.set(id,{status:"cancelled",reason:"cancelled"});}};
   app.use(express.json({type:["application/json","application/a2a+json"]}));
   app.use(observationMaterialsRoutes(authority));
+  app.get(discoveryDelegationLookupPath+"/:messageId",(req,res)=>{
+    if(options.recoveryUnavailable){res.sendStatus(503);return;}
+    assert.equal(req.get("authorization"),"Bearer "+recoveryToken);
+    assert.equal(req.get("x-oneearth-delegation-family"),"observation");
+    const saved=accepted.get(String(req.params.messageId));
+    if(!saved){res.status(404).json({code:"DELEGATION_NOT_FOUND",idempotentReplay:true});return;}
+    assert.equal(req.get("x-oneearth-request-fingerprint"),discoveryRequestFingerprint(observationResearchKind,saved.input));
+    res.json({taskId:saved.task.id,idempotentReplay:true});
+  });
   app.use(["/message:send","/tasks"],(req,res,next)=>{if(req.get("authorization")!=="Bearer "+token){res.sendStatus(401);return;}next();});
   app.post("/message:send",(req,res)=>{
     const {message,configuration}=req.body,data=message.parts[0].data;requests.push(structuredClone(req.body));
@@ -67,7 +78,7 @@ async function fixture(t:TestContext,options:{final?:ObservationResearchResult;c
   app.post(/^\/tasks\/([^/]+):cancel$/,(req,res)=>{const s=[...accepted.values()].find(s=>s.task.id===req.params[0]);assert.ok(s);cancels++;s.task.status.state="TASK_STATE_CANCELED";res.json(s.task);});
   taskRoutes(app,"/api/tasks",tasks,input=>validateTurn(tasks,input),{researchRecords:true,prepareWhen:input=>hasObservationResearch(tasks,input),prepare:(id,input)=>prepareObservationResearch(tasks,id,input,authority),recoverRecord:task=>recoverObservationResearchRecord(tasks,task)});
   const server=app.listen(0,"127.0.0.1");await once(server,"listening");const address=server.address();assert.ok(address&&typeof address!=="string");const origin="http://127.0.0.1:"+address.port;
-  const client=observationDiscoveryClient({base:origin,token}),services={tasks,push:{latest:()=>({records:[]})},coverage:async()=>assert.fail("no spatial scope"),researchRegionService:{locate:async()=>null},adminBoundaryDir:"/tmp",canonicalCache:new Map()} as unknown as RuntimeServices;
+  const client=observationDiscoveryClient({base:origin,token,recoveryToken}),services={tasks,push:{latest:()=>({records:[]})},coverage:async()=>assert.fail("no spatial scope"),researchRegionService:{locate:async()=>null},adminBoundaryDir:"/tmp",canonicalCache:new Map()} as unknown as RuntimeServices;
   const runner=runtimeWorkerRunner(services,engine,{client,authority,pollMs:10});let stop:(()=>Promise<void>)|undefined;
   const submit=async(input=body(),id=randomUUID())=>({id,response:await fetch(origin+"/api/tasks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id,input})})});
   t.after(async()=>{await stop?.();server.closeAllConnections();await new Promise<void>(done=>server.close(()=>done()));tasks.close();});
@@ -168,7 +179,7 @@ test("natural comparison uses the provider's persisted exact demand, rather than
   const record=f.tasks.terminal(id)?.result as any;assert.equal(record.observationCheckResult.matches,true);assert.deepEqual(record.observationCheck,check);assert.match(record.message,/符合本次指定的单位和记录起止边界/);assert.match(record.answerNotes.limitation,/不代表时段内连续有效/);
 });
 test("natural cancellation with an unconfirmed initial receipt does not resubmit or cancel an unknown Task",async t=>{
-  const f=await fixture(t,{lostInitial:true}),{id}=await f.submit();await f.start();await until(()=>f.accepted.size===1);
+  const f=await fixture(t,{lostInitial:true,recoveryUnavailable:true}),{id}=await f.submit();await f.start();await until(()=>f.accepted.size===1);
   assert.equal((await fetch(f.origin+"/api/tasks/"+id,{method:"DELETE"})).status,204);await until(()=>!!(f.tasks.step(id)?.cancellation as any)?.reconciled);
   assert.equal(f.requests.length,1);assert.equal(f.cancels(),0);assert.equal(f.jobs.size,0);
 });

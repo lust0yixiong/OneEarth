@@ -1,6 +1,9 @@
+import type {RuntimePhase,RemoteStop} from "../src/domain/runtime-status";
+import {randomUUID} from "node:crypto";
+import {runtimeTaskLease,runtimeTaskLeaseMs,runtimeStepConcurrency,type RuntimeTaskLease} from "./runtime-task-lease";
 import type { PoolClient } from "pg";
 import { productDatabase } from "./product-database";
-import { TaskConflict,type ResearchExecutionReceipt,type TaskStore,type Task,type Payload,type TaskStatus } from "./task-store";
+import { cancellationReceipt,TaskConflict,type ResearchExecutionReceipt,type TaskStore,type Task,type Payload,type TaskStatus } from "./task-store";
 import {conversationHistorySchema, postgresConversationHistory} from "./postgres-conversation-history";
 import {chatSchema, claimClarificationAnswer, lockRuntimeSubmission, postgresChatMessages, submissionFingerprint, type PostgresChatMessages} from "./postgres-chat-messages";
 
@@ -39,12 +42,20 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         CREATE INDEX IF NOT EXISTS ${events}_replay ON ${events}(id,seq);`);
       if(namespace==="runtime"){
         await db.query(`
+          ALTER TABLE runtime_tasks ADD COLUMN IF NOT EXISTS lease_owner uuid;
+          ALTER TABLE runtime_tasks ADD COLUMN IF NOT EXISTS lease_until bigint;
+          ALTER TABLE runtime_tasks ADD COLUMN IF NOT EXISTS lease_fence bigint NOT NULL DEFAULT 0;
+          ALTER TABLE runtime_tasks ADD COLUMN IF NOT EXISTS recovered_fence bigint NOT NULL DEFAULT -1;
           CREATE TABLE IF NOT EXISTS runtime_steps (
             id uuid PRIMARY KEY REFERENCES runtime_tasks(id), checkpoint jsonb NOT NULL, wake_at bigint
           );
           CREATE TABLE IF NOT EXISTS runtime_confirmations (
             task_id uuid PRIMARY KEY REFERENCES runtime_tasks(id), parent_task_id uuid,
             decision jsonb, proposal jsonb
+          );
+          CREATE TABLE IF NOT EXISTS runtime_remote_stops (
+            task_id uuid NOT NULL REFERENCES runtime_tasks(id),discovery_id text NOT NULL,state text NOT NULL,
+            remote_state text,updated bigint NOT NULL,PRIMARY KEY(task_id,discovery_id)
           );
           CREATE TABLE IF NOT EXISTS runtime_references (
             task_id uuid NOT NULL REFERENCES runtime_tasks(id), ordinal integer NOT NULL,
@@ -79,6 +90,10 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         [id,saved.rows[0].seq,JSON.stringify(payload.finding)]);
     }
   }
+  async function owns(db:PoolClient,id:string){
+    const lease=runtimeTaskLease.getStore();if(namespace!=="runtime"||!lease||lease.id!==id)return true;
+    return !!(await db.query("SELECT 1 FROM runtime_tasks WHERE id=$1 AND lease_owner=$2 AND lease_fence=$3 AND lease_until>$4",[id,lease.owner,lease.fence,Date.now()])).rowCount;
+  }
   async function submit(db:PoolClient,id:string,body:unknown,checkpoint?:Payload,options?:{created:number;handoff:true}){
     const raw=JSON.stringify(body), hash=submissionFingerprint(raw), now=Date.now();
     if(namespace==="runtime"&&!options?.handoff){
@@ -107,7 +122,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
       await db.query("INSERT INTO runtime_confirmations(task_id,parent_task_id,decision) VALUES ($1,$2,$3::jsonb)",
         [id,decision.checkMessageId,JSON.stringify(decision)]);
     }
-    await write(db,id,{queued:true,queuedAt:now,...(options?.handoff?{chatPhase:"research"}:{})},now);
+    await write(db,id,{queued:true,queuedAt:now,runtimePhase:{phase:"queued"},...(options?.handoff?{chatPhase:"research"}:{})},now);
     return row(inserted.rows[0]);
   }
   const chat=namespace==="runtime"?postgresChatMessages(pool,transaction,submit):undefined;
@@ -118,6 +133,8 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   async function finish(id:string,status:Exclude<TaskStatus,"queued"|"running">,payload:Payload){
     return transaction(async db=>{
       if(status==="cancelled"&&await chat?.cancel(db,id,payload))return true;
+      await db.query(`SELECT id FROM ${tasks} WHERE id=$1 FOR UPDATE`,[id]);
+      if(!await owns(db,id))return false;
       const now=Date.now();
       const updated=await db.query(`UPDATE ${tasks} SET status=$1,updated=$2 WHERE id=$3 AND status IN ('running','queued')`,[status,now,id]);
       if(!updated.rowCount)return false;
@@ -126,7 +143,19 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         const retained=checkpoint?.[status==="cancelled"?"cancelledResult":"failedResult"];
         if(retained)payload={...payload,result:retained};
       }
-      await write(db,id,payload,now);
+      await write(db,id,{...payload,...(namespace==="runtime"?{runtimePhase:{phase:status}}:{})},now);
+      if(namespace==="runtime"&&status==="cancelled"){
+        const {rows}=await db.query<{discoveryId:string;state:string}>(`SELECT binding->>'discoveryId' AS "discoveryId",binding->>'state' AS state FROM (
+          SELECT DISTINCT ON (COALESCE(payload->'discoveryBinding',payload->'sourceReadBinding')->>'discoveryId') COALESCE(payload->'discoveryBinding',payload->'sourceReadBinding') AS binding
+          FROM runtime_events WHERE id=$1 AND (payload ? 'discoveryBinding' OR payload ? 'sourceReadBinding')
+          ORDER BY COALESCE(payload->'discoveryBinding',payload->'sourceReadBinding')->>'discoveryId',seq DESC
+        ) latest WHERE binding->>'state' NOT IN ('TASK_STATE_COMPLETED','TASK_STATE_FAILED','TASK_STATE_CANCELED','TASK_STATE_REJECTED')`,[id]);
+        for(const binding of rows){
+          if(!binding.discoveryId)continue;
+          await db.query("INSERT INTO runtime_remote_stops VALUES($1,$2,'pending',NULL,$3) ON CONFLICT DO NOTHING",[id,binding.discoveryId,now]);
+          await write(db,id,{remoteStop:{discoveryTaskId:binding.discoveryId,state:"pending"},runtimePhase:{phase:"cancel-pending"}},now);
+        }
+      }
       const result=payload.result as {
         questionCheck?:unknown;
         answerNotes?:{references?:{sourceChannel?:string}[]};
@@ -152,6 +181,8 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
     });
   }
   let workerConnection:PoolClient|undefined;
+  let firstRecovery=true;
+  const owned=new Map<string,RuntimeTaskLease>();
   const store={
     ...(chat?{chat,researchHandoff:chat.handoff,workspaceReceipt:chat.workspaceReceipt,conversationHistory:postgresConversationHistory(pool)}:{}),
     get,
@@ -177,7 +208,8 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
     }}:{}),
     async terminal(id){
       const result=await pool.query<{payload:Payload}>(`SELECT e.payload FROM ${events} e JOIN ${tasks} t ON t.id=e.id
-        WHERE e.id=$1 AND t.status NOT IN ('queued','running') ORDER BY e.seq DESC LIMIT 1`,[id]);
+        WHERE e.id=$1 AND t.status NOT IN ('queued','running') AND NOT(e.payload ? 'cancellationReceipt')
+          AND NOT(e.payload ? 'remoteStop' AND NOT(e.payload ? 'error' OR e.payload ? 'result')) ORDER BY e.seq DESC LIMIT 1`,[id]);
       return result.rows[0]?.payload??chat?.terminal(id);
     },
     async submit(id,body,checkpoint){
@@ -185,34 +217,62 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
     },
     async claim(){
       return transaction(async db=>{
-        const selected=(await db.query<Task>(namespace==="runtime"?`SELECT t.* FROM runtime_tasks t LEFT JOIN runtime_steps s ON s.id=t.id
-          WHERE t.status='queued' OR (t.status='running' AND s.wake_at<=$1)
-          ORDER BY t.updated,t.created,t.id LIMIT 1 FOR UPDATE OF t SKIP LOCKED`:`SELECT * FROM ${tasks} WHERE status='queued'
-          ORDER BY created,id LIMIT 1 FOR UPDATE SKIP LOCKED`,namespace==="runtime"?[Date.now()]:[])).rows[0];
-        if(!selected)return;
         const now=Date.now();
-        await db.query(`UPDATE ${tasks} SET status='running',updated=$1 WHERE id=$2`,[now,selected.id]);
-        if(selected.status==="queued")await write(db,selected.id,{started:true,startedAt:now},now);
+        if(namespace==="runtime"){
+          await db.query("SELECT pg_advisory_xact_lock(7142541)");
+          const count=Number((await db.query("SELECT count(*) AS n FROM runtime_tasks WHERE status='running' AND lease_until>$1",[now])).rows[0].n);
+          if(count>=runtimeStepConcurrency())return;
+        }
+        const selected=(await db.query<Task>(namespace==="runtime"?`SELECT t.* FROM runtime_tasks t LEFT JOIN runtime_steps s ON s.id=t.id
+          WHERE (t.status='queued' OR (t.status='running' AND s.wake_at<=$1)) AND (t.lease_until IS NULL OR t.lease_until<$1)
+          ORDER BY t.updated,t.created,t.id LIMIT 1 FOR UPDATE OF t SKIP LOCKED`:`SELECT * FROM ${tasks} WHERE status='queued'
+          ORDER BY created,id LIMIT 1 FOR UPDATE SKIP LOCKED`,namespace==="runtime"?[now]:[])).rows[0];
+        if(!selected)return;
+        let lease:RuntimeTaskLease|undefined;
+        if(namespace==="runtime"){
+          const owner=randomUUID();
+          const {rows:[saved]}=await db.query<{lease_fence:string}>("UPDATE runtime_tasks SET status='running',updated=$2,lease_owner=$3,lease_until=$4,lease_fence=lease_fence+1 WHERE id=$1 RETURNING lease_fence",[selected.id,now,owner,now+runtimeTaskLeaseMs]);
+          lease={id:selected.id,owner,fence:Number(saved.lease_fence)};owned.set(selected.id,lease);
+        }else await db.query(`UPDATE ${tasks} SET status='running',updated=$1 WHERE id=$2`,[now,selected.id]);
+        await write(db,selected.id,{...(selected.status==="queued"?{started:true,startedAt:now}:{}),runtimePhase:{phase:selected.status==="queued"?"executing":"resuming"}},now);
         const step=namespace==="runtime"?(await db.query<{checkpoint:Payload}>("UPDATE runtime_steps SET wake_at=NULL WHERE id=$1 RETURNING checkpoint",[selected.id])).rows[0]:undefined;
-        return {id:selected.id,body:JSON.parse(selected.body),...(step?{checkpoint:step.checkpoint}:{})};
+        return {id:selected.id,body:JSON.parse(selected.body),...(step?{checkpoint:step.checkpoint}:{}),...(lease?{lease}:{})};
       });
     },
     async append(id,payload){
       await transaction(async db=>{
         const active=await db.query(`SELECT id FROM ${tasks} WHERE id=$1 AND status='running' FOR UPDATE`,[id]);
-        if(active.rowCount)await write(db,id,payload);
+        if(active.rowCount&&await owns(db,id))await write(db,id,payload);
       });
     },
     finish,
     ...(namespace==="runtime"?{
+      async runtimeStatus(id:string){
+        const {rows:[latest]}=await pool.query<{phase:RuntimePhase}>("SELECT payload->'runtimePhase' AS phase FROM runtime_events WHERE id=$1 AND payload ? 'runtimePhase' ORDER BY seq DESC LIMIT 1",[id]);
+        const {rows}=await pool.query<{discoveryTaskId:string;state:RemoteStop["state"];remoteState?:string}>(`SELECT discovery_id AS "discoveryTaskId",state,remote_state AS "remoteState" FROM runtime_remote_stops WHERE task_id=$1 ORDER BY CASE state WHEN 'pending' THEN 0 WHEN 'unconfirmed' THEN 1 ELSE 2 END,updated DESC`,[id]);
+        const receipts=rows.map(({remoteState,...receipt})=>({...receipt,...(remoteState?{remoteState}:{})}));
+        const phase=latest?.phase??((await get(id))?.status);
+        return {runtimePhase:typeof phase==="string"?{phase:phase==="running"?"executing":phase}:phase,...(receipts.length?{remoteStop:receipts[0],remoteStops:receipts}:{})};
+      },
+      async recordRemoteStop(id:string,receipt:RemoteStop){return transaction(async db=>{
+        if(!(await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='cancelled' FOR UPDATE",[id])).rowCount)return false;
+        const changed=await db.query(`INSERT INTO runtime_remote_stops VALUES($1,$2,$3,$4,$5) ON CONFLICT(task_id,discovery_id) DO UPDATE SET state=EXCLUDED.state,remote_state=EXCLUDED.remote_state,updated=EXCLUDED.updated
+          WHERE runtime_remote_stops.state<>'confirmed' AND (runtime_remote_stops.state,runtime_remote_stops.remote_state) IS DISTINCT FROM (EXCLUDED.state,EXCLUDED.remote_state)`,[id,receipt.discoveryTaskId,receipt.state,receipt.remoteState??null,Date.now()]);
+        if(!changed.rowCount)return false;
+        const pending=(await db.query("SELECT 1 FROM runtime_remote_stops WHERE task_id=$1 AND state='pending' LIMIT 1",[id])).rowCount;
+        await write(db,id,{remoteStop:receipt,runtimePhase:{phase:pending?"cancel-pending":"cancelled"}});return true;
+      });},
+      async pendingRemoteStops(){return (await pool.query<{id:string;discoveryTaskId:string}>(`SELECT task_id AS id,discovery_id AS "discoveryTaskId" FROM runtime_remote_stops WHERE state='pending' ORDER BY updated LIMIT 16`)).rows;},
+      async renewLease(lease:RuntimeTaskLease){return !!(await pool.query("UPDATE runtime_tasks SET lease_until=$4 WHERE id=$1 AND lease_owner=$2 AND lease_fence=$3 AND status='running' AND lease_until>$5",[lease.id,lease.owner,lease.fence,Date.now()+runtimeTaskLeaseMs,Date.now()])).rowCount;},
+      async releaseLease(lease:RuntimeTaskLease){owned.delete(lease.id);await pool.query("UPDATE runtime_tasks SET lease_owner=NULL,lease_until=NULL WHERE id=$1 AND lease_owner=$2 AND lease_fence=$3",[lease.id,lease.owner,lease.fence]);},
       async step(id:string){return (await pool.query<{checkpoint:Payload}>("SELECT checkpoint FROM runtime_steps WHERE id=$1",[id])).rows[0]?.checkpoint;},
       async clearStep(id:string){return transaction(async db=>{
-        if(!(await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id])).rowCount)return false;
+        if(!(await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id])).rowCount||!await owns(db,id))return false;
         return !!(await db.query("DELETE FROM runtime_steps WHERE id=$1",[id])).rowCount;
       });},
       async saveStep(id:string,checkpoint:Payload,event?:Payload){return transaction(async db=>{
         const active=await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id]);
-        if(!active.rowCount)return false;
+        if(!active.rowCount||!await owns(db,id))return false;
         await db.query("INSERT INTO runtime_steps VALUES($1,$2::jsonb,NULL) ON CONFLICT(id) DO UPDATE SET checkpoint=EXCLUDED.checkpoint",[id,JSON.stringify(checkpoint)]);
         if(event)await write(db,id,event);return true;
       });},
@@ -221,29 +281,41 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         const saved=(await db.query<{checkpoint:Payload}>(`UPDATE runtime_steps SET checkpoint=jsonb_set(checkpoint,'{cancellation}',COALESCE(checkpoint->'cancellation','{}'::jsonb)||$2::jsonb)
           WHERE id=$1 RETURNING checkpoint`,[id,JSON.stringify(cancellation)])).rows[0];
         if(!saved)return false;
-        if(event)await write(db,id,{error:"任务已取消。",code:"cancelled",...event,result:saved.checkpoint.cancelledResult});return true;
+        if(event)await write(db,id,cancellationReceipt(event));return true;
       });},
       async park(id:string,checkpoint:Payload,wakeAt:number,event?:Payload){return transaction(async db=>{
         const active=await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id]);
-        if(!active.rowCount)return false;
+        if(!active.rowCount||!await owns(db,id))return false;
         await db.query("INSERT INTO runtime_steps VALUES($1,$2::jsonb,$3) ON CONFLICT(id) DO UPDATE SET checkpoint=EXCLUDED.checkpoint,wake_at=EXCLUDED.wake_at",[id,JSON.stringify(checkpoint),wakeAt]);
-        const now=Date.now();await db.query("UPDATE runtime_tasks SET updated=$2 WHERE id=$1",[id,now]);if(event)await write(db,id,event,now);return true;
+        const now=Date.now();await db.query("UPDATE runtime_tasks SET updated=$2,lease_owner=NULL,lease_until=NULL WHERE id=$1",[id,now]);if(event)await write(db,id,event,now);return true;
       });},
       async cancelledSteps(){const {rows}=await pool.query<{id:string;body:string;checkpoint:Payload}>(`SELECT t.id,t.body,s.checkpoint FROM runtime_steps s JOIN runtime_tasks t ON t.id=s.id
         WHERE t.status='cancelled' AND (s.checkpoint->'cancellation'->>'reconciled') IS DISTINCT FROM 'true' ORDER BY t.updated LIMIT 20`);
         return rows.map(row=>({id:row.id,body:JSON.parse(row.body),checkpoint:row.checkpoint}));},
     }:{}),
     async recoverInterrupted(){
+      if(namespace==="runtime"){
+        await transaction(async db=>{
+          const {rows}=await db.query<{id:string;checkpoint:Payload|null}>(`SELECT t.id,s.checkpoint FROM runtime_tasks t LEFT JOIN runtime_steps s ON s.id=t.id
+            WHERE t.status='running' AND (t.lease_until IS NULL OR t.lease_until<$1) AND (t.lease_owner IS NOT NULL OR s.wake_at IS NULL OR ($2 AND t.recovered_fence<t.lease_fence)) ORDER BY t.updated FOR UPDATE OF t SKIP LOCKED`,[Date.now(),firstRecovery]);
+          for(const item of rows){
+            if(item.checkpoint){
+              await db.query("UPDATE runtime_tasks SET lease_owner=NULL,lease_until=NULL,recovered_fence=lease_fence WHERE id=$1",[item.id]);
+              await db.query("UPDATE runtime_steps SET wake_at=LEAST(coalesce(wake_at,$2),$2) WHERE id=$1",[item.id,Date.now()]);
+              await write(db,item.id,{stepRecovered:true,runtimePhase:{phase:"resuming"}});
+            }else{
+              await db.query("UPDATE runtime_tasks SET status='failed',updated=$2,lease_owner=NULL,lease_until=NULL WHERE id=$1",[item.id,Date.now()]);
+              await write(db,item.id,{error:"后台进程中断，原执行结果不确定；未重复启动。",code:"worker_interrupted",runtimePhase:{phase:"failed"}});
+            }
+          }
+        });firstRecovery=false;return;
+      }
       const client=await pool.connect();
       try{
         const elected=await client.query("SELECT pg_try_advisory_lock($1::bigint) AS acquired",[lock]);
         if(!elected.rows[0].acquired)throw Error("同一任务库已有后台 worker。");
         const interrupted=await pool.query<{id:string}>(`SELECT id FROM ${tasks} WHERE status='running'`);
         for(const {id} of interrupted.rows){
-          if(namespace==="runtime"){
-            const resumed=await pool.query("UPDATE runtime_steps SET wake_at=$2 WHERE id=$1",[id,Date.now()]);
-            if(resumed.rowCount){await transaction(db=>write(db,id,{stepRecovered:true}));continue;}
-          }
           await finish(id,"failed",{
           error:"后台进程中断。已取得的结果仍可查看，请明确重试未完成的工作。",code:"worker_interrupted"});
         }
@@ -261,7 +333,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         ORDER BY seq LIMIT 128`,[id,after]);
       return result.rows.map(({seq,at,payload})=>({...payload,seq:Number(seq),at:Number(at),taskId:id}));
     },
-    async close(){workerConnection?.release(true);chat?.release();await pool.end();},
+    async close(){for(const lease of owned.values())await pool.query("UPDATE runtime_tasks SET lease_until=0 WHERE id=$1 AND lease_owner=$2 AND lease_fence=$3",[lease.id,lease.owner,lease.fence]).catch(()=>{});owned.clear();workerConnection?.release(true);chat?.release();await pool.end();},
   } satisfies TaskStore & {chat?: PostgresChatMessages};
   return store;
 }

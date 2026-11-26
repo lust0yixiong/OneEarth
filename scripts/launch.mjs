@@ -44,9 +44,8 @@ env.NODE_ENV ||= "production";
 env.PORT = port(env.ONEEARTH_PORT, 5274);
 env.ONEEARTH_DISCOVERY_PORT = port(env.ONEEARTH_DISCOVERY_PORT, 5275);
 env.ONEEARTH_SPATIAL_PORT = port(env.ONEEARTH_SPATIAL_PORT, 5276);
-env.ONEEARTH_RUNTIME_PORT = port(env.ONEEARTH_RUNTIME_PORT,Number(env.PORT)+3);
-if (new Set([env.PORT,env.ONEEARTH_DISCOVERY_PORT,env.ONEEARTH_SPATIAL_PORT,env.ONEEARTH_RUNTIME_PORT]).size !== 4) throw Error("OneEarth 服务端口重复。");
-env.ONEEARTH_RUNTIME_URL = "http://127.0.0.1:" + env.ONEEARTH_RUNTIME_PORT;
+if (new Set([env.PORT,env.ONEEARTH_DISCOVERY_PORT,env.ONEEARTH_SPATIAL_PORT]).size !== 3) throw Error("OneEarth 服务端口重复。");
+env.ONEEARTH_DISCOVERY_TOOL_CALLBACK_URL = "http://127.0.0.1:" + env.PORT;
 env.ONEEARTH_DISCOVERY_URL = "http://127.0.0.1:" + env.ONEEARTH_DISCOVERY_PORT;
 env.ONEEARTH_SPATIAL_URL = "http://127.0.0.1:" + env.ONEEARTH_SPATIAL_PORT;
 env.ONEEARTH_STATE_DIR = scopedPath(env.ONEEARTH_STATE_DIR || ".local/state");
@@ -62,32 +61,23 @@ mkdirSync(env.TMPDIR,{recursive:true,mode:0o700});
 const services = {
   discovery:["server/discovery-service.ts"],
   worker:["server/runtime-worker.ts"],
-  runtime:["server/runtime-api.ts"],
-  web:["server/index.ts"],
   workbench:["server/index.ts"],
   spatial:["server/spatial-service.ts"],
   seed:["scripts/seed-spatial.ts"],
   baseline:[".local/baseline/server/index.ts"],
   haina:["scripts/probe-haina.py"],
 };
-const serviceDatabase = {discovery:"DISCOVERY",worker:"RUNTIME",runtime:"RUNTIME",workbench:"RUNTIME",spatial:"SPATIAL",seed:"SPATIAL",web:null};
+const serviceDatabase = {discovery:"DISCOVERY",worker:"RUNTIME",workbench:"RUNTIME",spatial:"SPATIAL",seed:"SPATIAL"};
 const roles = process.argv.slice(2);
 if (!roles.length) roles.push("discovery","spatial","worker","workbench");
 if (!roles.every(role => Object.hasOwn(services,role))) throw Error("未知 OneEarth 服务。");
-if (new Set(roles).size !== roles.length || (roles.includes("workbench") && roles.some(role => role==="web" || role==="runtime")))
-  throw Error("工作台后端与旧网关或运行时 API 角色不能同时启动。");
-const children = [];
-let stopping = false;
-function stop(signal = "SIGTERM") {
-  if (stopping) return;
-  stopping = true;
-  for (const child of children) child.kill(signal);
-}
-for (const role of roles) {
+if (new Set(roles).size !== roles.length) throw Error("OneEarth 服务角色重复。");
+function launchSpec(role) {
   const executable=role==="haina" ? path.join(root,".local/haina-venv/bin/python") : process.execPath;
   const args=role==="haina" ? services[role] : ["--import","tsx",...services[role]];
   const childEnv={...env,ONEEARTH_ROLE:role};
   if (role!=="discovery") delete childEnv.ONEEARTH_DISCOVERY_CHAT_MODEL;
+  if (role!=="discovery" && role!=="worker") delete childEnv.ONEEARTH_DISCOVERY_RECOVERY_TOKEN;
   if (Object.hasOwn(serviceDatabase,role)){
     for(const database of ["RUNTIME","DISCOVERY","SPATIAL"]){
       if(database!==serviceDatabase[role]) delete childEnv["ONEEARTH_"+database+"_DATABASE_URL"];
@@ -97,6 +87,27 @@ for (const role of roles) {
     for (const name of ["ONEEARTH_OBJECT_ENDPOINT","ONEEARTH_OBJECT_BUCKET","ONEEARTH_OBJECT_PREFIX",
       "ONEEARTH_OBJECT_PATH_STYLE","AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN"]) delete childEnv[name];
   }
+  return {executable,args,childEnv};
+}
+
+// launchd tracks each service PID directly. The multi-role development command
+// still forwards signals to its children.
+if (process.platform === "darwin" && roles.length === 1 &&
+    ["workbench","worker","discovery","spatial"].includes(roles[0])) {
+  const {executable,args,childEnv} = launchSpec(roles[0]);
+  process.chdir(root);
+  process.execve(executable,[executable,...args],childEnv);
+}
+
+const children = [];
+let stopping = false;
+function stop(signal = "SIGTERM") {
+  if (stopping) return;
+  stopping = true;
+  for (const child of children) child.kill(signal);
+}
+for (const role of roles) {
+  const {executable,args,childEnv} = launchSpec(role);
   const child = spawn(executable,args,{
     stdio:"inherit",cwd:root,env:childEnv,
   });

@@ -1,6 +1,6 @@
 import {AsyncLocalStorage} from 'node:async_hooks';
 export interface ExecutorTiming {
-  kind:'model-executor'; model:string; executor:string; startedAt:number;
+  kind:'model-executor'; model:string; executor:string; transport?:'api'|'cli'; startedAt:number;
   activeAtStart:number; localQueueMs:number; spawnMs?:number; firstStdoutMs?:number;
   elapsedMs:number; promptBytes:number; outputBytes:number;
 }

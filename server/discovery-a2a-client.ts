@@ -1,3 +1,5 @@
+import {lookupDiscoveryDelegation} from "./discovery-delegation-recovery";
+import type {DurableDelegation} from "./runtime-step";
 import {publicPage} from "./fetch-pages";
 import {parseSourceReadLocators,validAvailableSourceLocator,validSourceReadLocatorResult} from "../src/domain/source-read-locator";
 import {setTimeout as delay} from "node:timers/promises";
@@ -20,9 +22,12 @@ export type DiscoveryBinding = {
   transport:"a2a"; messageId:string; discoveryId:string; contextId?:string; state:string; lastSeq?:number;
 };
 export type DiscoveryA2AOptions = {
+  durable?:DurableDelegation;persist?:()=>Promise<void>;park?:()=>Promise<never>;
   onAccepted?:(binding:DiscoveryBinding)=>Promise<void>;
   onCheckpoint?:(binding:DiscoveryBinding)=>Promise<void>;
   onEvent?:(event:MaterialEvent)=>Promise<void>;
+  onReplay?:(event:MaterialEvent)=>Promise<void>;
+  authorizeReplay?:()=>Promise<boolean>;
   target?:Pick<DiscoveryBinding,"discoveryId"|"contextId">;
   afterSeq?:number;
 };
@@ -114,20 +119,28 @@ async function cancelTask(base:string,binding:DiscoveryBinding) {
       const response=await fetch(new URL("/tasks/"+encodeURIComponent(binding.discoveryId)+":cancel",base),
         {method:"POST",headers,body:"{}",signal:deadline,redirect:"error"});
       const stopped=task(await json(response),binding);
-      if(terminal.has(stopped.status.state))return;
+      if(terminal.has(stopped.status.state))return stopped.status.state;
       last=stopped.status.state;
     }catch(error){
       if(error instanceof DiscoveryA2AError){
         last=error.reason||"HTTP "+error.status;
         // Completion racing cancellation is resolved only against the known Task.
         if(error.reason==="TASK_NOT_CANCELABLE"){
-          try{if(terminal.has((await getTask(base,binding,deadline)).status.state))return;}catch{}
+          try{const found=await getTask(base,binding,deadline);if(terminal.has(found.status.state))return found.status.state;}catch{}
         }
       }
     }
     try{await delay(Math.min(100*2**attempt,500),undefined,{signal:deadline});}catch{break;}
   }
   console.error("OneEarth discovery cancellation unconfirmed: "+binding.discoveryId+" ("+last+")");
+}
+
+/** Only a previously verified runtime binding or fingerprint lookup may call this. */
+export async function stopAcceptedDiscovery(discoveryId:string,contextId?:string){
+ const base=process.env.ONEEARTH_DISCOVERY_URL||"http://127.0.0.1:5275";
+ const binding:DiscoveryBinding={transport:"a2a",messageId:"cancel-reconciliation",discoveryId,contextId,state:"TASK_STATE_WORKING"};
+ try{const before=await getTask(base,binding,AbortSignal.timeout(2000));if(terminal.has(before.status.state))return before.status.state;}catch{}
+ return cancelTask(base,binding);
 }
 
 export function discoveryA2ACancellation(signal:AbortSignal){
@@ -222,13 +235,47 @@ async function taskThroughA2A<Result>(messageId:string,data:{kind:string;input:u
   signal.throwIfAborted();
   if(!identifier(messageId))throw new DiscoveryA2AError("发现委托的消息身份无效。");
   const base=process.env.ONEEARTH_DISCOVERY_URL||"http://127.0.0.1:5275";
-  const body=JSON.stringify({message:{messageId,role:"ROLE_USER",
+  let body=JSON.stringify({message:{messageId,role:"ROLE_USER",
     ...(options.target?{taskId:options.target.discoveryId,...(options.target.contextId?{contextId:options.target.contextId}:{})}:{}),
     parts:[{data}]},configuration:{returnImmediately:true}});
-  const delegations=cancellation??discoveryA2ACancellation(signal),submission=delegations.track(messageId,base);
+  // Durable cancellation is owned by the persisted parent reconciliation.
+  // The abort listener must not independently race another worker's stop.
+  const delegations=cancellation??discoveryA2ACancellation(signal),submission=options.durable?{accept:(_binding:DiscoveryBinding)=>{},terminal:()=>{}}:delegations.track(messageId,base);
   let binding:DiscoveryBinding|undefined;
   try{
     let accepted:Task|undefined;
+    const durable=options.durable;
+    const short=()=>AbortSignal.any([signal,AbortSignal.timeout(3000)]);
+    if(durable){
+      if(durable.messageId!==messageId)throw new DiscoveryA2AError("持久委托消息身份不一致。");
+      if(durable.envelope){const saved=JSON.parse(durable.envelope);if(saved.message?.messageId!==messageId||saved.message?.parts?.[0]?.data?.kind!==data.kind)throw new DiscoveryA2AError("已存委托封包身份不一致。");body=durable.envelope;data=saved.message.parts[0].data;}
+      else durable.envelope=body;
+      durable.request??={kind:data.kind,input:data.input as Record<string,unknown>,...(options.target?{taskId:options.target.discoveryId}:{})};
+      if(durable.binding){
+        accepted={id:durable.binding.discoveryId,contextId:durable.binding.contextId,status:{state:durable.binding.state},artifacts:[]};
+      }else{
+        if(durable.submitted){
+          const lookup=await lookupDiscoveryDelegation(base,{messageId,...durable.request},short());
+          if(lookup.state==="accepted")accepted=await getTask(base,{discoveryId:lookup.taskId,...(options.target?.contextId?{contextId:options.target.contextId}:{})},short());
+          else if(lookup.state!=="missing")throw new DiscoveryA2AError("发现受理结果尚未确认；未自动重新提交。",false,undefined,"SUBMISSION_UNCONFIRMED");
+        }
+        if(!accepted){
+          if(durable.submissionAttempts&&!await options.authorizeReplay?.())throw new DiscoveryA2AError("原委托授权已失效或无法确认，未重新提交。",false,undefined,"REPLAY_NOT_AUTHORIZED");
+          if((durable.submissionAttempts??0)>=3)throw new DiscoveryA2AError("原发现委托的受理重送额度已用尽。");
+          durable.submitted=true;durable.submissionAttempts=(durable.submissionAttempts??0)+1;await options.persist?.();
+          try{
+            const response=await fetch(new URL("/message:send",base),{method:"POST",headers,body,signal:short(),redirect:"error"});
+            const receipt=await json(response);
+            if(response.status!==200||!object(receipt)||!receipt.task||receipt.message||receipt.error)throw new DiscoveryA2AError("发现服务没有返回有效受理确认。");
+            accepted=task(receipt.task,options.target);
+          }catch(error){
+            signal.throwIfAborted();
+            if(error instanceof DiscoveryA2AError&&!error.retryable)throw error;
+            return await options.park!();
+          }
+        }
+      }
+    }else{
     for(let attempt=0;attempt<3;attempt++){
       try{
         const response=await fetch(new URL("/message:send",base),{method:"POST",headers,body,signal,redirect:"error"});
@@ -242,6 +289,7 @@ async function taskThroughA2A<Result>(messageId:string,data:{kind:string;input:u
         if(attempt===2||(error instanceof DiscoveryA2AError&&!error.retryable))throw error;
       }
     }
+    }
     if(!accepted)throw new DiscoveryA2AError("发现任务尚未确认受理。");
     binding={transport:"a2a",messageId,discoveryId:accepted.id,...(accepted.contextId?{contextId:accepted.contextId}:{}),state:accepted.status.state};
     submission.accept(binding);
@@ -251,20 +299,23 @@ async function taskThroughA2A<Result>(messageId:string,data:{kind:string;input:u
     signal.throwIfAborted();
 
     const seen=new Map<number,{id:string;fingerprint:string}>(),ids=new Map<string,number>();
-    let result:Result|undefined,remoteError:string|undefined,lastSeq=options.afterSeq??0;
+    let result:Result|undefined=options.durable?.result as Result|undefined,remoteError:string|undefined,lastSeq=options.durable?.lastSeq??options.afterSeq??0;
     if(!Number.isSafeInteger(lastSeq)||lastSeq<0)throw new DiscoveryA2AError("已存发现事件序号无效。");
     async function consume(artifacts:unknown[]){
       const entries=artifacts.map(artifactEvent).filter((v):v is NonNullable<typeof v>=>!!v).sort((a,b)=>a.event.seq!-b.event.seq!);
       for(const entry of entries){
         const seq=entry.event.seq!;
         if(seq<=(options.afterSeq??-1))continue;
+        const stored=options.durable?.seen?.[String(seq)];
+        if(stored&&(stored.id!==entry.id||stored.fingerprint!==entry.fingerprint))throw new DiscoveryA2AError("持久发现事件发生冲突。");
+        if(seq<=(options.durable?.lastSeq??-1))continue;
         const previous=seen.get(seq),oldSeq=ids.get(entry.id);
         if(previous){
           if(previous.id!==entry.id||previous.fingerprint!==entry.fingerprint)throw new DiscoveryA2AError("已归档的发现事件发生冲突。");
           continue;
         }
         if(oldSeq!==undefined&&oldSeq!==seq)throw new DiscoveryA2AError("发现产物身份被用于不同事件。");
-        seen.set(seq,entry);ids.set(entry.id,seq);lastSeq=Math.max(lastSeq,seq);
+        seen.set(seq,entry);ids.set(entry.id,seq);if(options.durable)(options.durable.seen??={})[String(seq)]={id:entry.id,fingerprint:entry.fingerprint};lastSeq=Math.max(lastSeq,seq);
         const delivered=resultFrom(entry.event);if(delivered!==undefined)result=delivered;
         if(entry.event.error)remoteError=entry.event.error;
         try{await options.onEvent?.(entry.event);}
@@ -287,8 +338,17 @@ async function taskThroughA2A<Result>(messageId:string,data:{kind:string;input:u
       }
       if(strict)throw new DiscoveryA2AError(remoteError||"发现任务已结束或等待输入，但没有可恢复的发现结果（"+binding!.state+"）。");
     }
+    if(options.durable)for(const event of options.durable.events.slice()){
+      // Restore only actual stored material to the current fold; never re-run a tool.
+      await options.onReplay?.(event);
+    }
     await snapshot(accepted);
     let ready=await complete();if(ready)return ready;
+    if(options.durable){
+      try{await snapshot(await getTask(base,binding,short()));}catch(error){signal.throwIfAborted();if(error instanceof DiscoveryA2AError&&!error.retryable)throw error;return await options.park!();}
+      ready=await complete(true);if(ready)return ready;
+      await options.onCheckpoint?.({...binding,lastSeq});return await options.park!();
+    }
     for(let attempt=0;attempt<=3;attempt++){
       try{
         await snapshot(await getTask(base,binding,signal));
@@ -369,7 +429,7 @@ function paperValue(input:PaperQuery,value:unknown):boolean{
 export async function queryPapers<Q extends PaperQuery>(input:Q,signal:AbortSignal):Promise<PaperQueryOutput[Q["operation"]]>{
   const clean=paperQuery(input),messageId=randomUUID();
   const deadline=AbortSignal.any([signal,AbortSignal.timeout(clean.operation==="search"?35000:12000)]);
-  const body=JSON.stringify({message:{messageId,role:"ROLE_USER",parts:[{data:{kind:paperQueryKind,input:clean}}]}});
+  let body=JSON.stringify({message:{messageId,role:"ROLE_USER",parts:[{data:{kind:paperQueryKind,input:clean}}]}});
   const base=process.env.ONEEARTH_DISCOVERY_URL||"http://127.0.0.1:5275";
   for(let attempt=0;;attempt++){
     try{
@@ -452,7 +512,7 @@ export async function queryHainaCatalog(cursor:number,limit:number,signal:AbortS
   if(!Number.isSafeInteger(cursor)||cursor<0||!Number.isSafeInteger(limit)||limit<1||limit>250)
     throw new DiscoveryA2AError("海纳目录分页参数无效。",false,400);
   const deadline=AbortSignal.any([signal,AbortSignal.timeout(12000)]),messageId=randomUUID();
-  const body=JSON.stringify({message:{messageId,role:"ROLE_USER",parts:[{data:{kind:hainaCatalogQueryKind,input:{cursor,limit}}}]}});
+  let body=JSON.stringify({message:{messageId,role:"ROLE_USER",parts:[{data:{kind:hainaCatalogQueryKind,input:{cursor,limit}}}]}});
   const base=process.env.ONEEARTH_DISCOVERY_URL||"http://127.0.0.1:5275";
   for(let attempt=0;;attempt++){
     try{

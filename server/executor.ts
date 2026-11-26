@@ -10,9 +10,13 @@ import {assertModelContextSafe,modelSafeText} from "./model-context-safety";
 import https from "node:https";
 import {providerReasoningRelay,publicFlashResponses} from "./provider-reasoning-relay";
 import {isolateProviderCli} from "./provider-cli-isolation";
+import {runtimeModelCapacity,runtimeLeaseMs} from "./runtime-model-capacity";
+import {modelExecutionContext} from "./model-execution-context";
+import {authorizedFlashApi,runFlashApi} from "./flash-api";
 import type {ProviderReasoningSink} from "./provider-reasoning";
 
 export interface ExecutorOptions {
+  singleRequest?:boolean;
   webSearch?: true;
   outputSchema?: Record<string, unknown>;
   providerReasoning?: ProviderReasoningSink;
@@ -35,13 +39,31 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
   const schema=options?.outputSchema?modelSafeText(JSON.stringify(options.outputSchema)):undefined;
   if(schema!==undefined)assertModelContextSafe(schema);
   config=resolvedChatModel(config);
-  if(slots.active>=10) throw Error("模型执行器正在处理其他请求，请稍后重试。");
+  const execution=modelExecutionContext.getStore(),capacity=runtimeModelCapacity();
+  const resource=capacity?await (await capacity).acquire(execution?.role??"background",execution?.taskId):undefined;
+  const ownership=new AbortController();signal=AbortSignal.any([signal,ownership.signal]);
+  let lost:ReturnType<typeof setTimeout>|undefined,checking=false;
+  const reset=()=>{clearTimeout(lost);lost=setTimeout(()=>ownership.abort(Error("模型容量租约已失效。")),runtimeLeaseMs-1000);lost.unref();};
+  if(resource)reset();
+  const heartbeat=resource?setInterval(async()=>{if(checking)return;checking=true;try{if(await resource.renew())reset();else ownership.abort(Error("模型容量租约已失效。"));}catch{ownership.abort(Error("模型容量租约无法续期。"));}finally{checking=false;}},5000):undefined;
+  heartbeat?.unref();
+  if(slots.active>=10&&!resource) throw Error("模型执行器正在处理其他请求，请稍后重试。");
   const timing:ExecutorTiming={kind:'model-executor',model:config.model,executor:config.executor,startedAt:Date.now(),activeAtStart:slots.active,localQueueMs:0,
     elapsedMs:0,promptBytes:Buffer.byteLength(prompt),outputBytes:0};
   slots.active++;
   let dir:string|undefined;
   let relay:Awaited<ReturnType<typeof providerReasoningRelay>>|undefined;
   try {
+    if(modelExecutionContext.getStore()?.role==="foreground"&&authorizedFlashApi(config)){
+      if(options?.webSearch)throw Error("前台模型未获准直接调用网络工具。");
+      const args:string[]=[],env:NodeJS.ProcessEnv={};configure(config,args,env);
+      const key=env.ONEEARTH_EXECUTOR_KEY||env.ANTHROPIC_API_KEY;
+      if(!key)throw Error("The authorized model service is unavailable.");
+      timing.transport="api";
+      const value=await runFlashApi(prompt,key,signal,{transport:providerTransport,reasoning:options?.providerReasoning,schema:options?.outputSchema});
+      timing.outputBytes=Buffer.byteLength(value);return value;
+    }
+    timing.transport="cli";
     dir=await mkdtemp(path.join(tmpdir(),"oneearth-chat-"));
     const args=config.executor==="codex"
       ? ["exec","--ignore-user-config","--ephemeral","--skip-git-repo-check","-s","read-only","--disable","shell_tool","--disable","unified_exec","--disable","plugins","--disable","multi_agent"]
@@ -57,12 +79,14 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
       if (/^(?:HOME|PATH|SHELL|USER|LOGNAME|TMPDIR|LANG|LC_[A-Z_]+|XDG_[A-Z_]+|CODEX_HOME|CLAUDE_CONFIG_DIR|OPENAI_API_KEY|ANTHROPIC_[A-Z_]+|HTTPS?_PROXY|NO_PROXY|NODE_EXTRA_CA_CERTS)$/.test(name)) env[name]=value;
     }
     configure(config,args,env);
-    if(options?.providerReasoning&&publicFlashResponses(config)){
+    if((options?.providerReasoning||options?.singleRequest||modelExecutionContext.getStore()?.role==="background")&&publicFlashResponses(config)){
       const key=env.ONEEARTH_EXECUTOR_KEY;
       if(!key)throw Error("The authorized model service is unavailable.");
       // Qualification uses the original server-pinned provider, never a local
       // endpoint claimed by the browser. The temporary token cannot reach it.
-      relay=await providerReasoningRelay(key,options.providerReasoning,signal,prompt,providerTransport);
+      const background=options?.singleRequest===true||modelExecutionContext.getStore()?.role==="background";
+      relay=await providerReasoningRelay(key,options?.providerReasoning??{taskId:execution?.taskId??"single-model-request",onSnapshot:()=>{}},signal,prompt,providerTransport,{maxRequests:background?1:4});
+      if(background)args.push("-c","model_providers.oneearth_service.request_max_retries=0","-c","model_providers.oneearth_service.stream_max_retries=0");
       const base='model_providers.oneearth_service.base_url="https://api.deepseek.com"';
       if(args.filter(arg=>arg===base).length!==1)throw Error("The authorized provider configuration could not be verified.");
       args[args.indexOf(base)]="model_providers.oneearth_service.base_url="+JSON.stringify(relay.baseUrl);
@@ -81,13 +105,13 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
       child.stdin.on("error",()=>{});
       child.stdout.on("data",chunk=>{timing.firstStdoutMs??=Date.now()-timing.startedAt;timing.outputBytes+=Buffer.byteLength(chunk);out+=chunk;if(out.length>150000){outputLimited=true;child.kill("SIGKILL");}});
       child.stderr.on("data",chunk=>{errors=(errors+chunk).slice(-4096);});
-      child.on("error",()=>{clearTimeout(deadline);reject(new ExecutorFailure(executorDiagnostic({exitCode:null,signal:null,elapsedMs:Date.now()-launched,stdout:out,stderr:errors,aborted:signal.aborted,spawnFailed:!signal.aborted})));});
+      child.on("error",()=>{if(child.pid)return;clearTimeout(deadline);reject(new ExecutorFailure(executorDiagnostic({exitCode:null,signal:null,elapsedMs:Date.now()-launched,stdout:out,stderr:errors,aborted:signal.aborted,spawnFailed:!signal.aborted})));});
       child.on("close",(code,killed)=>{
         clearTimeout(deadline);
         if(code===0) resolve(out.trim());
         else reject(new ExecutorFailure(executorDiagnostic({exitCode:code,signal:killed,elapsedMs:Date.now()-launched,stdout:out,stderr:errors,aborted:signal.aborted,outputLimited,timedOut})));
       });
-      child.stdin.end(prompt);
+      void (async()=>{if(resource){if(!child.pid)throw Error("模型子进程未建立。");await resource.attachProcess(child.pid);}signal.throwIfAborted();child.stdin.end(prompt);})().catch(()=>{child.kill("SIGKILL");reject(Error("模型执行容量或子进程归属无法确认，未发送提示。"));});
     });
-  } finally {timing.elapsedMs=Date.now()-timing.startedAt;requestPerformance.getStore()?.push(timing);slots.active--;try{await relay?.close();}finally{if(dir) await rm(dir,{recursive:true,force:true});}}
+  } finally {clearTimeout(lost);clearInterval(heartbeat);await resource?.release().catch(()=>{});timing.elapsedMs=Date.now()-timing.startedAt;requestPerformance.getStore()?.push(timing);slots.active--;try{await relay?.close();}finally{if(dir) await rm(dir,{recursive:true,force:true});}}
 }

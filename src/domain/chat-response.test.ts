@@ -167,3 +167,19 @@ test("provider reasoning keeps the newest twelve IDs in arrival order across rec
   assert.deepEqual(result.runTrace?.providerReasoning,expected);
   assert.equal(result.message,"重连后正文");
 });
+
+test("lifecycle-only events and a terminal cancellation carry ordered facts separately from progress text",async()=>{
+  const events=[
+    {seq:1,runtimePhase:{phase:"waiting-discovery",operation:"read"}},
+    {seq:2,runtimePhase:{phase:"unrecognized"}},
+    {seq:3,runtimePhase:{phase:"cancelled"},remoteStop:{discoveryTaskId:"a",state:"pending"},error:"取消",code:"cancelled"},
+  ];
+  const phases:unknown[]=[],stages:unknown[]=[];
+  await assert.rejects(readChatResponse(reasoningResponse(events),stage=>stages.push(stage),
+    undefined,undefined,undefined,(facts,seq)=>phases.push({facts,seq})),{code:"cancelled"});
+  assert.deepEqual(stages,[]);
+  assert.deepEqual(phases,[
+    {seq:1,facts:{runtimePhase:{phase:"waiting-discovery",operation:"read"}}},
+    {seq:3,facts:{runtimePhase:{phase:"cancelled"},remoteStops:[{discoveryTaskId:"a",state:"pending"}]}},
+  ]);
+});

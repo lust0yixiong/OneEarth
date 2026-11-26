@@ -91,7 +91,7 @@ export async function persistObservationReadReceipt(db:PoolClient,receipt:ReadRe
 }
 
 /** One persistent coordinator per runtime database. Slots are enforced at the real claim boundary. */
-export async function observationExecution(){
+export async function observationExecution({follower=false}:{follower?:boolean}={}){
   const registry=process.env.ONEEARTH_SKILL_REGISTRY;
   if(!registry||!process.env.ONEEARTH_SKILL_SERVICE_TOKEN||process.env.ONEEARTH_SKILL_SERVICE_TOKEN.length<32)
     throw Error("Observation Skill requires an approved registry and service authorization");
@@ -119,14 +119,17 @@ export async function observationExecution(){
     }finally{db.release();}
   }
 
-  const owner=await pool.connect().catch(async error=>{await pool.end();throw error;});
+  let owner:PoolClient|undefined;
   try{
-    if(!(await owner.query("SELECT pg_try_advisory_lock($1::bigint) AS locked",[schedulerLock])).rows[0].locked)
-      throw Error("Observation Skill already has a coordinator on this runtime database");
-    owner.on("error",()=>{
-      stopped=true;clearTimeout(timer);
-      for(const job of active.values())job.controller.abort();
-    });
+    if(!follower){
+      owner=await pool.connect();
+      if(!(await owner.query("SELECT pg_try_advisory_lock($1::bigint) AS locked",[schedulerLock])).rows[0].locked)
+        throw Error("Observation Skill already has a coordinator on this runtime database");
+      owner.on("error",()=>{
+        stopped=true;clearTimeout(timer);
+        for(const job of active.values())job.controller.abort();
+      });
+    }
     await transaction(async db=>{
       await db.query(`
         CREATE TABLE IF NOT EXISTS observation_skill_runs (
@@ -156,6 +159,7 @@ export async function observationExecution(){
           lease uuid NOT NULL, outcome jsonb NOT NULL
         );
       `);
+      if (follower) return;
       // Interrupted reads are ambiguous. A completed read is never re-issued on restart.
       const interrupted=(await db.query<Call>(`SELECT * FROM observation_skill_calls WHERE stage='C' AND state='running'`)).rows;
       for(const call of interrupted){
@@ -167,7 +171,7 @@ export async function observationExecution(){
         WHERE stage<>'C' AND state='running' AND slot IS NOT NULL`);
     });
   }catch(error){
-    owner.release(true);
+    owner?.release(true);
     await pool.end();
     throw error;
   }
@@ -359,6 +363,11 @@ export async function observationExecution(){
   }
 
   async function poll(){
+    if(active.size){
+      const {rows}=await pool.query<{id:string}>("SELECT id FROM observation_skill_calls WHERE state='running' AND id=ANY($1::uuid[])",[[...active.keys()]]);
+      const stillActive=new Set(rows.map(row=>row.id));
+      for(const [id,job] of active)if(!stillActive.has(id))job.controller.abort();
+    }
     while(!stopped){
       const call=await claim();
       if(!call)return;
@@ -380,7 +389,7 @@ export async function observationExecution(){
       if(!stopped)timer=setTimeout(schedule,40).unref();
     });
   }
-  schedule();
+  if(!follower)schedule();
 
   return {
     async submit(request:SkillExecutionRequest){
@@ -429,7 +438,7 @@ export async function observationExecution(){
       await tick;
       for(const job of active.values())job.controller.abort();
       await Promise.allSettled([...active.values()].map(job=>job.done));
-      owner.release(true);
+      owner?.release(true);
       await pool.end();
     },
   };

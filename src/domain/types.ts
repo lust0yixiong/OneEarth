@@ -300,6 +300,7 @@ export interface AnswerNotes {
 }
 export type ClarificationReply = {parentTaskId:string};
 export interface Message {
+  taskLifecycle?: import("./task-lifecycle-client").TaskLifecycle;
   browserTurnFrame?: import("./turn-context").BrowserTurnFrame;
   workspaceEffect?: import("./turn-context").WorkspaceEffect;
   workspaceReceipt?: import("./turn-context").WorkspaceReceipt | import("./turn-context").BrowserWorkspaceReceipt;

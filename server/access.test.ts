@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {Request, Response} from "express";
 import type {NetworkInterfaceInfoIPv4} from "node:os";
-import {accessGuard, workbenchLan, type WorkbenchLan} from "./access";
+import {accessGuard, ipv4LoopbackOnly, workbenchLan, type WorkbenchLan} from "./access";
 
 const entry:NetworkInterfaceInfoIPv4={
   address:"10.23.48.143",netmask:"255.255.248.0",family:"IPv4",cidr:"10.23.48.143/21",mac:"",internal:false,
@@ -17,6 +17,23 @@ function allowed(socket:{localAddress:string;remoteAddress:string},headers:Recor
   accessGuard("oneearth.example",network)(req,res,()=>{});
   return status;
 }
+
+test("internal service routes accept only direct IPv4 loopback traffic outside browser requests", () => {
+  const local = {localAddress:"127.0.0.1",remoteAddress:"127.0.0.1"};
+  const status = (socket:typeof local, headers:Record<string,string> = {}) => {
+    let code = 200;
+    const req = {socket,get:(name:string)=>headers[name]} as unknown as Request;
+    const res = {status:(value:number)=>{code=value;return res;},json:()=>{}} as unknown as Response;
+    ipv4LoopbackOnly(req,res,()=>{});
+    return code;
+  };
+  assert.equal(status(local),200);
+  assert.equal(status(local,{origin:"http://127.0.0.1:5474"}),404);
+  assert.equal(status(local,{"sec-fetch-site":"same-origin"}),404);
+  assert.equal(status({localAddress:entry.address,remoteAddress:local.remoteAddress},
+    {"x-forwarded-for":"127.0.0.1"}),404);
+  assert.equal(status({...local,remoteAddress:entry.address}),404);
+});
 
 test("only a selected interface with one private IPv4 has an optional LAN entry",()=>{
   assert.equal(workbenchLan(undefined,{en1:[entry]}),undefined);

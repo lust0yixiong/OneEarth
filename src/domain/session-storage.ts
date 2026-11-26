@@ -1,3 +1,4 @@
+import {mergeTaskLifecycle} from "./task-lifecycle-client";
 import {workspaceReceiptAdvances} from "./published-raster-observation";
 import type { Message } from "./types";
 import type { WorkspaceSnapshot } from "./store";
@@ -57,6 +58,12 @@ function matchingWorkspaceReceipt(message:Message) {
   return receipt?.turnId===message.replyTo && receipt?.effectId==="workspace:"+message.id ? receipt : undefined;
 }
 
+function mergeCancelledLifecycle(previous:Message|undefined, incoming:Message) {
+  if(!previous || previous.role!=="assistant" || incoming.role!=="assistant" || previous.replyTo!==incoming.replyTo ||
+    previous.taskLifecycle?.runtimePhase?.phase!=="cancelled" || incoming.taskLifecycle?.runtimePhase?.phase!=="cancelled")return;
+  return mergeTaskLifecycle(previous.taskLifecycle,incoming.taskLifecycle);
+}
+
 export function mergeMessages(existing: Message[], incoming: Message[]) {
   const messages = new Map(existing.map(message => [message.id, message]));
   let changed = false;
@@ -69,6 +76,12 @@ export function mergeMessages(existing: Message[], incoming: Message[]) {
       (receipt && previous.replyTo===message.replyTo && (!prior || workspaceReceiptAdvances(prior,receipt)))) {
       messages.set(message.id, message);
       changed = true;
+    }else if(previous){
+      const taskLifecycle=mergeCancelledLifecycle(previous,message);
+      if(taskLifecycle && taskLifecycle!==previous.taskLifecycle){
+        messages.set(message.id,{...previous,taskLifecycle});
+        changed=true;
+      }
     }
   }
   return changed ? [...messages.values()].sort((a, b) => a.time - b.time || a.id.localeCompare(b.id)) : existing;
@@ -120,13 +133,18 @@ export async function writeSession(
     for (const message of messages) {
       const records=tx.objectStore("messages");
       const row={session:id,id:message.id,message};
-      if(!message.workspaceEffect){
+      if(!message.workspaceEffect && message.taskLifecycle?.runtimePhase?.phase!=="cancelled"){
         records.put(row);
         continue;
       }
       const existing=records.get([id,message.id]);
       existing.onsuccess=()=>{
         const previous:Message|undefined=existing.result?.message;
+        const taskLifecycle=mergeCancelledLifecycle(previous,message);
+        if(previous && taskLifecycle){
+          if(taskLifecycle!==previous.taskLifecycle)records.put({...row,message:{...previous,taskLifecycle}});
+          return;
+        }
         const prior=previous&&matchingWorkspaceReceipt(previous),next=matchingWorkspaceReceipt(message);
         if(prior && (!next || !workspaceReceiptAdvances(prior,next)))return;
         records.put(row);

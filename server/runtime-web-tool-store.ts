@@ -7,7 +7,8 @@ import {webToolGrantPattern,type WebToolCall,type WebToolOperation,type WebToolR
 
 export type WebGrantInput={researchTaskId:string;messageId:string;kind:"discovery"|"source-read";allowSearch:boolean;allowFetch:boolean;
   deepseekSearch:boolean;deepseekFetch:boolean;urls?:string[];nativeModel?:ChatModel};
-export type RuntimeWebToolAuthority={reserve(input:WebGrantInput):Promise<string>;bind(token:string,taskId:string):Promise<void>;revoke(token:string):Promise<void>};
+export type RuntimeWebToolAuthority={reserve(input:WebGrantInput):Promise<string>;bind(token:string,taskId:string):Promise<void>;revoke(token:string):Promise<void>;
+  canReplay?(token:string,researchTaskId:string,messageId:string):Promise<boolean>};
 type Policy=Omit<WebGrantInput,"researchTaskId"|"messageId"|"kind">;
 type Grant={digest:string;research_id:string;message_id:string;discovery_id:string|null;kind:WebGrantInput["kind"];expires:string;revoked:boolean;policy:Policy};
 export type WebToolClaim={callId:string;lease:string;operation:WebToolOperation;nativeModel?:ChatModel;sourceSnapshotScope?:string};
@@ -96,6 +97,14 @@ export async function runtimeWebToolStore(options:{pool?:Pool;now?:()=>number;tt
         await db.query("UPDATE runtime_web_tool_grants SET discovery_id=$2 WHERE digest=$1",[grant.digest,taskId]);});
     },
     async revoke(token:string){if(!webToolGrantPattern.test(token))return;await pool.query("UPDATE runtime_web_tool_grants SET revoked=true WHERE digest=$1",[hash(token)]);},
+    async canReplay(token:string,researchTaskId:string,messageId:string){
+      available();
+      if(!webToolGrantPattern.test(token)||!uuid.test(researchTaskId)||!uuid.test(messageId))return false;
+      const result=await pool.query(`SELECT 1 FROM runtime_web_tool_grants g JOIN runtime_tasks t ON t.id=g.research_id
+        WHERE g.digest=$1 AND g.research_id=$2 AND g.message_id=$3 AND g.discovery_id IS NULL
+          AND NOT g.revoked AND g.expires>$4 AND t.status='running'`,[hash(token),researchTaskId,messageId,now()]);
+      return !!result.rowCount;
+    },
     async request(token:string,call:WebToolCall):Promise<WebToolReceipt>{
       available();if(!webToolGrantPattern.test(token))throw new WebToolAccessError(403,"工具授权无效。");
       return transaction(async db=>{

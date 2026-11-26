@@ -1,3 +1,4 @@
+import {TaskParked} from "./task-store";
 import type {QuestionDecision, SearchRun, ToolCall,DiscoveryResponse} from "../src/domain/types";
 import type {DataSearchResult} from "./data-search";
 import {discoverySourceNames,explicitDiscoverySourcePolicy,parseDiscoverySourcePolicy,releasesDiscoverySourcePolicy,type DiscoverySourcePolicy} from "../src/domain/discovery-source-policy";
@@ -269,7 +270,7 @@ export async function continueResearch(question:string,plan:TurnPlan,material:Ma
         receipts:[...receipts.values()].map(receipt=>({...receipt,label:labels.get(receipt.url),sourceAcquired:acquired.has(receipt.url),mode:"stored-receipt-no-tool"})),sameSourceLocatorTargets:[...allowed].filter(([,source])=>acquired.has(source.url!)).map(([label])=>label),materials:view};
       let raw:string;
       try{raw=await budget.run(operationSignal=>deps.model(modelSafeText(instructions+"\n"+JSON.stringify(input)),operationSignal));}
-      catch(error){previousFailure={kind:"decision",category:"external-receipt",message:failureText(error),toolAttempted:false};throw error;}
+      catch(error){if(error instanceof TaskParked)throw error;previousFailure={kind:"decision",category:"external-receipt",message:failureText(error),toolAttempted:false};throw error;}
       decision=decisionFrom(raw,allowed,actions,gaps);
       if(decision.action==="read"){
         const sources=decision.targets.map(label=>allowed.get(label)!);
@@ -284,7 +285,7 @@ export async function continueResearch(question:string,plan:TurnPlan,material:Ma
         if(rereads.length>1||rereads.length&&decision.gap?.normalize("NFKC").replace(/\s+/g," ").trim()===question.normalize("NFKC").replace(/\s+/g," ").trim())throw new EvidenceDecisionFailure("repeated-source-gap","局部回读限一个原授权来源和不同明确缺口。","gap");
         if(decision.action==="read"&&decision.targets.some(label=>!genericLabels.has(label)&&!receipts.has(receiptKey(allowed.get(label)!.url!))))throw new EvidenceDecisionFailure("locator-required","该已尝试来源需要明确的新定位；不能重发原泛读。","locators");
       }
-    }catch(error){
+    }catch(error){if(error instanceof TaskParked)throw error;
       signal.throwIfAborted();const message=failureText(error),external=previousFailure?.category==="external-receipt"&&!(error instanceof EvidenceDecisionFailure)&&!(error instanceof SyntaxError);
       previousFailure={kind:"decision",category:external?"external-receipt":"invalid-decision",message,toolAttempted:false,
         diagnostic:{code:error instanceof EvidenceDecisionFailure?error.code:external?"model-failed":"decision-failed",field:error instanceof EvidenceDecisionFailure?error.field:"$",allowedActions:actions,allowedTargets:[...allowed.keys()],...(error instanceof EvidenceDecisionFailure&&error.invalidTargets?.length?{invalidTargets:error.invalidTargets}:{})}};
@@ -333,7 +334,7 @@ export async function continueResearch(question:string,plan:TurnPlan,material:Ma
           if(locator&&!['found','matched'].includes(receipt.status))errors.push(receipt.detail);
         }
         if(errors.length)previousFailure={kind:"read",category:decision.locators?.length?"same-source-locator":"external-receipt",message:errors.map(failureText).join("；").slice(0,1000),toolAttempted:true,attempted:{action:"read",targets:decision.targets},receipts:[...receipts.values()].filter(row=>fresh.some(source=>source.url===row.url))};
-      }catch(error){
+      }catch(error){if(error instanceof TaskParked)throw error;
         signal.throwIfAborted();if(error instanceof DiscoveryA2AError&&error.reason==="RUNTIME_PERSISTENCE_FAILED")throw error;
         for(const source of fresh)for(const locator of source.locators||[undefined])receipts.set(receiptKey(source.url!,locator),{url:source.url!,locator,status:"unknown",detail:"本次调用未确认取得材料；提供方最终状态未知。"+failureText(error)});
         previousFailure={kind:"read",category:"external-receipt",message:failureText(error),toolAttempted:true,attempted:{action:"read",targets:decision.targets}};
@@ -349,7 +350,7 @@ export async function continueResearch(question:string,plan:TurnPlan,material:Ma
         }
         retrieval=retrieval?joinedDiscovery(retrieval,next):next;
         if(next.sourceStatus.some(row=>row.status==="failed"||row.status==="partial")||next.issues.length)previousFailure={kind:"discover",category:"external-receipt",message:failureText(next.issues.join("；")||"补充发现的渠道未完整完成，请核对实际材料与渠道状态。"),toolAttempted:true};
-      }catch(error){signal.throwIfAborted();if(error instanceof DiscoveryA2AError&&error.reason==="RUNTIME_PERSISTENCE_FAILED")throw error;previousFailure={kind:"discover",category:"external-receipt",message:failureText(error),toolAttempted:true};addIssue("补充发现未完成，保留前面取得的材料。"+failureText(error));}
+      }catch(error){if(error instanceof TaskParked)throw error;signal.throwIfAborted();if(error instanceof DiscoveryA2AError&&error.reason==="RUNTIME_PERSISTENCE_FAILED")throw error;previousFailure={kind:"discover",category:"external-receipt",message:failureText(error),toolAttempted:true};addIssue("补充发现未完成，保留前面取得的材料。"+failureText(error));}
     }
     if(previousFailure)addIssue(previousFailure.message);
 

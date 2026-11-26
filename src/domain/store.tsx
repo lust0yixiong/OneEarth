@@ -25,6 +25,7 @@ import { paperId } from "./paper-record";
 import { readPaperCatalogStatus, type PaperCatalogStatus } from "./paper-catalog-client";
 import { randomId } from "./id";
 import { ChatResponseError, readChatResponse, type ChatPhase } from "./chat-response";
+import {mergeTaskLifecycle,readCancelledTaskLifecycle,type TaskLifecycle} from "./task-lifecycle-client";
 import {readDeepSeekTools,loadDeepSeekTools} from "./deepseek-tools";
 import { readChatModel } from "./chat-model";
 import {geoBounds,geoCentroid} from "d3-geo";
@@ -161,6 +162,7 @@ type ActiveChat = {
   scope:Pick<DiscoveryAttempt["context"],"filters"|"selection">;
   stage:string;
   phase:ChatPhase;
+  taskLifecycle?:TaskLifecycle;
   accepted?:boolean;
   cancelling?:boolean;
   cancelError?:string;
@@ -579,7 +581,7 @@ async function loadInitialSession(): Promise<State> {
             {id:saved.id,role:"assistant",text:reply.message,time:saved.updated,replyTo:saved.turnId,
               chatMessage:true,...(proposed ? {historicalReply:true,
                 activity:workspaceEffectActivity(saved.id,proposed,receipt?.state ?? "proposed",reply.message,workspaceReceiptDetail(receipt?.state),receipt)} : {}),
-              workspaceEffect:effect,workspaceReceipt:receipt,
+              workspaceEffect:effect,workspaceReceipt:receipt,taskLifecycle:saved.taskLifecycle,
               ...(batch ? {candidates:{
                 resultBatch:batch,answerId:saved.id,title:batch.query,ids:resultBatchCandidates(batch,reply.modelIds??reply.catalogMatch?.ids),
                 caseId:reply.caseId ?? null,filters:answerFilters(emptyFilters(),reply.filters),
@@ -682,7 +684,7 @@ function useWorkspaceValue(initialState: State) {
     return {...projectWorkspaceView(s,reading),operations:[...operations.keys()],
       ...(items.length ? {candidateItems:items} : {})};
   },[]);
-  const requests = useRef(new Map<string,{controller:AbortController;progress:ActiveChat}>());
+  const requests = useRef(new Map<string,{controller:AbortController;progress:ActiveChat;finishCancellation:()=>Promise<void>}>());
   const localBatchIds=useRef(new Map<string,string>());
   const chatRequestSnapshot=useCallback((s:State,batch:CandidateSet|null,parentId?:string)=>{
     const reading=readWorkspaceSurface();
@@ -1470,11 +1472,52 @@ function useWorkspaceValue(initialState: State) {
     update({cancelling:true,cancelError:undefined});
     try {
       const cancelled=await cancelChatRequest(id,AbortSignal.any([entry.controller.signal,AbortSignal.timeout(8000)]));
-      if (!cancelled) update({stage:"正在核对本轮终态"});
+      if (cancelled) await entry.finishCancellation();
+      else update({stage:"正在核对本轮终态"});
     } catch (error) {
       update({cancelling:false,cancelError:error instanceof Error ? error.message : "暂时无法取消本轮。"});
     }
   },[publishChatProgress]);
+  const stopWatchIds=state.chatOpen ? state.messages.filter(message=>{
+    const lifecycle=message.taskLifecycle;
+    return message.role==="assistant" && lifecycle?.runtimePhase?.phase==="cancelled"
+      && (lifecycle.remoteStops?.some(stop=>stop.state!=="confirmed")
+        || !lifecycle.remoteStops?.length && Date.now()-message.time<60_000);
+  }).map(message=>message.id).join(",") : "";
+  useEffect(()=>{
+    if(!stopWatchIds)return;
+    const session=state.sessionId,controller=new AbortController();
+    const timers=new Map<string,ReturnType<typeof setTimeout>>();
+    async function check(id:string,attempt=0){
+      let shouldCheckAgain=attempt<2;
+      try{
+        const facts=await readCancelledTaskLifecycle(id,AbortSignal.any([controller.signal,AbortSignal.timeout(5_000)]));
+        if(controller.signal.aborted || latest.current.sessionId!==session)return;
+        const message=latest.current.messages.find(item=>item.id===id);
+        if(!message || message.taskLifecycle?.runtimePhase?.phase!=="cancelled")return;
+        const merged=facts ? mergeTaskLifecycle(message.taskLifecycle,facts) : message.taskLifecycle;
+        if(merged!==message.taskLifecycle){
+          const updated={...message,taskLifecycle:merged};
+          dispatch({type:"messages",sessionId:session,messages:[updated]});
+          await recordWrite(writeSession(session,"",undefined,[updated]).then(()=>{
+            channel.current?.postMessage({sessionId:session,id});
+          }),()=>{if(latest.current.sessionId===session)failedMessages.current.set(id,updated);});
+        }
+        if(merged.remoteStops?.length)shouldCheckAgain=merged.remoteStops.some(stop=>stop.state==="pending");
+      }catch{
+        // A failed read cannot establish that the remote work stopped.
+        shouldCheckAgain=true;
+      }
+      if(!controller.signal.aborted && shouldCheckAgain && attempt<11){
+        timers.set(id,setTimeout(()=>void check(id,attempt+1),attempt<2?1_000:5_000));
+      }
+    }
+    for(const id of stopWatchIds.split(","))void check(id);
+    return ()=>{
+      controller.abort();
+      for(const timer of timers.values())clearTimeout(timer);
+    };
+  },[state.sessionId,stopWatchIds,recordWrite]);
   const persistReceiptUpdate=useCallback(async(id:string,receipt:BrowserWorkspaceReceipt|WorkspaceReceipt)=>{
     const session=receipt.conversationId;
     const message=await readSessionMessage(session,id).catch(()=>null)
@@ -1602,7 +1645,7 @@ function useWorkspaceValue(initialState: State) {
       const retiredReasoning=new Set<string>(); // Preserve evictions on a stream reconnect for this task.
       const legacy = delivery.route !== "chat";
       const clarificationAttempt=isClarificationAttempt(attempt);
-      const entry = {controller,progress:{id:delivery.id,userMessageId:attempt.userMessageId,
+      const entry = {controller,finishCancellation,progress:{id:delivery.id,userMessageId:attempt.userMessageId,
         scope:{filters:attempt.context.filters,selection:attempt.context.selection},
         stage:saved ? "正在接回本轮回答" : "正在提交问题",phase:legacy ? "research" as const : "foreground" as const,
         trace:{started:Date.now(),stages:[],calls:[],...(priorReasoning?{providerReasoning:priorReasoning}:{})},
@@ -1620,7 +1663,20 @@ function useWorkspaceValue(initialState: State) {
         publishChatProgress();
       };
       const complete = (message:string, extra:Partial<Message>) =>
-        add("assistant",message,{...extra,chatMessage:!legacy});
+        add("assistant",message,{taskLifecycle:entry.progress.taskLifecycle,...extra,chatMessage:!legacy});
+      async function finishCancellation(trace?:Message["runTrace"]){
+        if(!isCurrent())return;
+        const taskLifecycle=mergeTaskLifecycle(entry.progress.taskLifecycle,{runtimePhase:{phase:"cancelled"}});
+        const written=complete("本地任务已取消。",{id:delivery.id,replyTo:attempt.userMessageId,runTrace:trace??entry.progress.trace,taskLifecycle});
+        closeProgress();
+        controller.abort();
+        await written;
+        if(clarificationAttempt)rememberClarificationDelivery(delivery.id);
+        if(!failedMessages.current.has(delivery.id))
+          await removeChatDelivery(session,delivery.id).catch(()=>{
+            if(latest.current.sessionId===session)patch({sessionError:sessionFailure});
+          });
+      }
       const latestQuestion = () => {
         const rendered=latest.current.messages.slice().reverse().find(message=>message.role==="user");
         const submitted=recentSubmission.current;
@@ -1686,6 +1742,7 @@ function useWorkspaceValue(initialState: State) {
           .join(" · ") || "全球视图";
       publishChatProgress();
       if (!saved) patch({error:null,chatOpen:true});
+      let lifecycleSequence=0;
       try {
         if (!saved) {
           payload.deepseekTools = await loadDeepSeekTools(controller.signal);
@@ -1699,7 +1756,12 @@ function useWorkspaceValue(initialState: State) {
           return readChatResponse(response, (stage, searches, trace, phase) => {
             if (isCurrent()) updateProgress({...(stage ? {stage} : phase==="research" ? {stage:"研究已进入队列"} : {}),
               ...(searches ? {searches} : {}),...(trace ? {trace} : {}),...(phase ? {phase} : {})});
-          },receiveRegion,entry.progress.trace.providerReasoning,retiredReasoning);
+          },receiveRegion,entry.progress.trace.providerReasoning,retiredReasoning,(facts,seq)=>{
+            if(!isCurrent() || seq!==undefined && seq<=lifecycleSequence)return;
+            if(seq!==undefined)lifecycleSequence=seq;
+            const merged=mergeTaskLifecycle(entry.progress.taskLifecycle,facts);
+            if(merged!==entry.progress.taskLifecycle)updateProgress({taskLifecycle:merged});
+          });
         };
         let r: DiscoveryResponse;
         try { r = await receive(); }
@@ -1709,6 +1771,12 @@ function useWorkspaceValue(initialState: State) {
           r = await receive();
         }
         if (!isCurrent()) return;
+        if(entry.progress.taskLifecycle?.runtimePhase?.phase==="cancelled"){
+          await finishCancellation(r.runTrace);
+          return;
+        }
+        if(entry.progress.taskLifecycle)entry.progress.taskLifecycle=mergeTaskLifecycle(
+          entry.progress.taskLifecycle,{runtimePhase:{phase:"complete"}});
         completedTrace=r.runTrace;
         const clarificationPrompt=validClarificationPrompt(r.clarificationPrompt) ? r.clarificationPrompt : undefined;
         if (r.questionCheck || clarificationPrompt || r.clarification) {
@@ -2231,11 +2299,12 @@ function useWorkspaceValue(initialState: State) {
           return;
         }
         if (error instanceof ChatResponseError && error.code==="cancelled") {
-          await add("assistant",error.message,{id:delivery.id,replyTo:attempt.userMessageId,
-            runTrace:error.runTrace || entry.progress.trace});
+          await finishCancellation(error.runTrace || entry.progress.trace);
           return;
         }
         keepDelivery = !(error instanceof ChatResponseError);
+        if(!keepDelivery && entry.progress.taskLifecycle)entry.progress.taskLifecycle=mergeTaskLifecycle(
+          entry.progress.taskLifecycle,{runtimePhase:{phase:"failed"}});
         if(clarificationAttempt && keepDelivery)rememberClarificationDelivery(delivery.id,delivery);
         const mayRetry=!clarificationAttempt || keepDelivery;
         const message=clarificationAttempt

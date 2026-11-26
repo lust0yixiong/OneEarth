@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {execFileSync} from "node:child_process";
 import {createHash} from "node:crypto";
+import {createConnection} from "node:net";
 import {mkdir,writeFile} from "node:fs/promises";
 import {setTimeout as wait} from "node:timers/promises";
 import {chromium} from "playwright-core";
@@ -20,17 +21,27 @@ async function get(endpoint){
   return res;
 }
 async function health(){
-  const services=await Promise.all([5474,5475,5476,5477].map(async port=>{
+  const services=await Promise.all([5474,5475,5476].map(async port=>{
     const result=await fetch("http://127.0.0.1:"+port+"/api/health",{signal:AbortSignal.timeout(2200)});
     return {port,...await result.json()};
   }));
   assert.ok(services.every(item=>item.status==="ok"));
+  const retiredPortIsOpen=await new Promise((resolve,reject)=>{
+    const socket=createConnection({host:"127.0.0.1",port:5477});
+    socket.once("connect",()=>{socket.destroy();resolve(true);});
+    socket.once("error",error=>error.code==="ECONNREFUSED" ? resolve(false) : reject(error));
+    socket.setTimeout(1000,()=>{socket.destroy();reject(Error("旧端口探针超时。"));});
+  });
+  assert.equal(retiredPortIsOpen,false);
   return services.map(({port,status,version,service,engine,postgis,objects})=>({port,status,version,service,engine,postgis,objects}));
 }
 async function inspect(phase){
   const jobs=service("status");
   assert.ok(jobs.every(job=>job.state==="running"&&job.pid));
-  const app=jobs.find(job=>job.label==="org.oneearth.next");
+  const roles=["runtime","worker","worker.2","discovery","spatial"].map(role=>
+    jobs.find(job=>job.label==="org.oneearth.next."+role));
+  assert.ok(roles.every(Boolean) && new Set(roles.map(job=>job.pid)).size===roles.length);
+  const app=roles[0];
   const [ppid,tty]=execFileSync("/bin/ps",["-p",String(app.pid),"-o","ppid=","-o","tty="],{encoding:"utf8"}).trim().split(/\s+/);
   assert.equal(ppid,"1");
   assert.equal(tty,"??");
@@ -69,20 +80,20 @@ async function inspect(phase){
 
 const before=await inspect("before");
 service("restart");
-const initialPid=before.jobs.find(job=>job.label==="org.oneearth.next").pid;
+const initialPid=before.jobs.find(job=>job.label==="org.oneearth.next.runtime").pid;
 let restarted=false;
 for(let i=0;i<60;i++){
-  const pid=service("status").find(job=>job.label==="org.oneearth.next")?.pid;
+  const pid=service("status").find(job=>job.label==="org.oneearth.next.runtime")?.pid;
   if(pid&&pid!==initialPid&&await health().then(()=>true,()=>false)){restarted=true;break;}
   await wait(400);
 }
 assert.ok(restarted,"受控重启后应用必须更换 PID 并恢复所有健康接口。");
 const after=await inspect("after");
 for(const key of ["checks","sourceId","layerBytes","layerSha256","researchSha256"])assert.deepEqual(before[key],after[key],key);
-for(const job of before.jobs.filter(job=>job.label!=="org.oneearth.next"))
+for(const job of before.jobs.filter(job=>["org.oneearth.next.postgres","org.oneearth.next.garage"].includes(job.label)))
   assert.equal(after.jobs.find(row=>row.label===job.label).pid,job.pid);
 const original=await fetch("http://127.0.0.1:5174/api/health",{signal:AbortSignal.timeout(2000)});
 assert.ok(original.ok);
 await writeFile(output+"/verification.json",JSON.stringify({entry:base.origin,taskId,checkedAt:new Date().toISOString(),
   before,after,prototypeHealthOutsidePolicy:original.status},null,2)+"\n");
-console.log("OneEarth launchd restart verified",initialPid,after.jobs.find(job=>job.label==="org.oneearth.next").pid,taskId);
+console.log("OneEarth launchd restart verified",initialPid,after.jobs.find(job=>job.label==="org.oneearth.next.runtime").pid,taskId);

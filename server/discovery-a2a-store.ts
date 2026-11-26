@@ -137,6 +137,8 @@ export async function discoveryA2aStore(pool: Pool) {
   }
   return {
     find,
+    findAccepted: (messageId:string, fingerprint:string, observation:boolean) =>
+      find(observation ? skillMessageId(messageId) : messageId, fingerprint),
     submit: (messageId:string, fingerprint:string, body:object, continuation?:DiscoveryContinuation) =>
       submit(messageId,fingerprint,{body,continuation}),
     submitObservationCheck: (messageId:string, fingerprint:string, observation:ObservationCheckRequest) =>

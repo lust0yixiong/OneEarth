@@ -9,24 +9,35 @@ import {initialObservationCheckpoint,prepareObservationInput,hasObservationCheck
 import {runtimeWorkerRunner} from "./runtime-worker-runner";
 import type {RuntimeServices} from "./runtime-turn";
 import {observationDiscoveryClient} from "./observation-discovery-client";
+import {discoveryDelegationLookupPath,discoveryRequestFingerprint} from "./discovery-request-fingerprint";
 import {validateTurn} from "./runtime-input";
 import {emptyFilters} from "../src/domain/spatial";
 import {sourcesFor} from "../src/domain/answer-sources";
-import {observationCheckSkill,parseObservationCheck,type ObservationCheck,type ObservationCheckResult,type SkillExecutionRequest} from "./observation-check-contract";
+import {observationCheckSkill,parseObservationCheck,skillRequestKind,type ObservationCheck,type ObservationCheckResult,type SkillExecutionRequest} from "./observation-check-contract";
 
 const token="runtime-controlled-service-token-32bytes-only";
+const recoveryToken="runtime-separate-controlled-recovery-token";
 const check:ObservationCheck={skill:observationCheckSkill,artifactId:"observations",version:"v1",variable:"temperature",unit:"K",start:"2020-01-01",end:"2020-01-02"};
 const result:ObservationCheckResult={status:"verified",matches:true,evidence:{artifactId:check.artifactId,version:check.version,sha256:"a".repeat(64),variable:check.variable,unit:"K",count:2,first:check.start,last:check.end}};
 const body=()=>({query:"核对明确指定的已授权观测资料",observationCheck:check,conversationId:randomUUID(),turnId:randomUUID(),history:[],config:{executor:"codex",model:""},
   context:{filters:emptyFilters(),caseId:null,citation:null,selection:null,gridSystem:"h3",layer:"all",camera:{center:[0,0],zoom:1,reason:"controlled"}}});
 async function until(read:()=>boolean|Promise<boolean>,timeout=5000){const start=Date.now();while(!await read()){if(Date.now()-start>timeout)assert.fail("condition did not become true");await delay(20);}}
-async function fixture(t:TestContext,options:{lostInitial?:boolean;lostResult?:boolean;wrongDemand?:boolean;wrongContext?:boolean;pendingFinal?:boolean;authorize?:(check:ObservationCheck)=>Promise<string|undefined>}={}){
+async function fixture(t:TestContext,options:{lostInitial?:boolean;lostResult?:boolean;wrongDemand?:boolean;wrongContext?:boolean;pendingFinal?:boolean;recoveryUnavailable?:boolean;authorize?:(check:ObservationCheck)=>Promise<string|undefined>}={}){
   const store=openTaskStore(":memory:"),app=express(),requests:any[]=[],submitted=new Map<string,{input:any;task:any}>(),deliveries=new Map<string,any>();
   const jobs=new Map<string,SkillExecutionRequest>(),results=new Map<string,ObservationCheckResult>();let executions=0,cancels=0,acceptances=0,finalRelease=!options.pendingFinal;
   let digest:string|undefined="a".repeat(64),grantReads=0;
   const engine:RuntimeObservationEngine={submit:async request=>{const old=jobs.get(request.requestId);if(old)assert.deepEqual(request,old);else{jobs.set(request.requestId,structuredClone(request));executions++;}},
     result:async requestId=>results.get(requestId),cancel:async requestId=>{if(jobs.has(requestId)&&!results.has(requestId))results.set(requestId,{status:"cancelled",reason:"user_cancelled"});}};
   app.use(express.json({type:["application/json","application/a2a+json"]}));
+  app.get(discoveryDelegationLookupPath+"/:messageId",(req,res)=>{
+    if(options.recoveryUnavailable){res.sendStatus(503);return;}
+    assert.equal(req.get("authorization"),"Bearer "+recoveryToken);
+    assert.equal(req.get("x-oneearth-delegation-family"),"observation");
+    const saved=submitted.get(String(req.params.messageId));
+    if(!saved){res.status(404).json({code:"DELEGATION_NOT_FOUND",idempotentReplay:true});return;}
+    assert.equal(req.get("x-oneearth-request-fingerprint"),discoveryRequestFingerprint(skillRequestKind,saved.input));
+    res.json({taskId:saved.task.id,idempotentReplay:true});
+  });
   app.use(["/message:send","/tasks"],(req,res,next)=>{if(req.get("authorization")!=="Bearer "+token){res.sendStatus(401);return;}next();});
   app.post("/message:send",(req,res)=>{
     const message=req.body.message,data=message.parts[0].data;requests.push({message:structuredClone(message),configuration:req.body.configuration});
@@ -64,7 +75,7 @@ async function fixture(t:TestContext,options:{lostInitial?:boolean;lostResult?:b
   taskRoutes(app,"/api/tasks",store,value=>validateTurn(store,value),
     {researchRecords:true,prepareWhen:hasObservationCheck,prepare:(id,input)=>prepareObservationInput(store,id,input,async check=>{grantReads++;return options.authorize?options.authorize(check):digest;}),recoverRecord:task=>recoverObservationRecord(store,task)});
   const server=app.listen(0,"127.0.0.1");await once(server,"listening");const address=server.address();assert.ok(address&&typeof address!=="string");const origin="http://127.0.0.1:"+address.port;
-  const client=observationDiscoveryClient({base:origin,token,timeoutMs:300});
+  const client=observationDiscoveryClient({base:origin,token,recoveryToken,timeoutMs:300});
   const services={tasks:store,push:{latest:()=>({records:[]})},coverage:async()=>assert.fail("no grid attached"),researchRegionService:{locate:async()=>null},adminBoundaryDir:"/tmp",canonicalCache:new Map()} as unknown as RuntimeServices;
   const coordinator=runtimeWorkerRunner(services,engine,{client,pollMs:10});
   let stop:(()=>Promise<void>)|undefined;
@@ -94,7 +105,7 @@ test("real task route/worker parks the parent, runs an ordinary queued task, and
 for(const lost of ["lostInitial","lostResult"] as const)test("lost acknowledgement reconciles one discovery Task and one engine execution: "+lost,async t=>{
   const f=await fixture(t,{[lost]:true}),{id}=await f.submit();await f.start();await until(()=>f.jobs.size===1);f.results.set([...f.jobs.keys()][0],result);
   await until(()=>f.store.get(id)?.status==="complete");assert.equal(f.acceptances(),1);assert.equal(f.executions(),1);assert.equal(f.deliveries(),1);
-  const initial=f.requests.filter(r=>r.message.parts[0].data.kind.endsWith("request.v1"));assert.equal(new Set(initial.map(r=>r.message.messageId)).size,1);
+  const initial=f.requests.filter(r=>r.message.parts[0].data.kind.endsWith("request.v1"));assert.equal(initial.length,1);
 });
 test("worker restart recovers the durable engine wait without resubmitting the research task",async t=>{
   const f=await fixture(t),{id}=await f.submit();await f.start();await until(()=>f.jobs.size===1);await f.stop();
@@ -108,9 +119,24 @@ test("parent cancellation reconciles only the accepted discovery and does not wa
   assert.equal((await fetch(f.origin+"/api/tasks/"+id+"/record")).status,404);assert.equal(f.store.step(id)?.result,undefined);
 });
 test("cancelling an unconfirmed initial receipt never resubmits to manufacture ownership",async t=>{
-  const f=await fixture(t,{lostInitial:true}),{id}=await f.submit();await f.start();await until(()=>f.acceptances()===1);
+  const f=await fixture(t,{lostInitial:true,recoveryUnavailable:true}),{id}=await f.submit();await f.start();await until(()=>f.acceptances()===1);
   assert.equal((await fetch(f.origin+"/api/tasks/"+id,{method:"DELETE"})).status,204);await until(()=>!!(f.store.step(id)?.cancellation as any)?.reconciled);
   assert.equal(f.requests.length,1);assert.equal(f.cancels(),0);assert.equal(f.jobs.size,0);
+});
+test("cancellation can stop a remotely accepted task recovered by read-only lookup",async t=>{
+  const f=await fixture(t,{lostInitial:true}),{id}=await f.submit();await f.start();await until(()=>f.acceptances()===1);
+  assert.equal((await fetch(f.origin+"/api/tasks/"+id,{method:"DELETE"})).status,204);
+  await until(()=>!!(f.store.step(id)?.cancellation as any)?.reconciled);
+  assert.equal(f.requests.length,1);assert.equal(f.cancels(),1);assert.equal(f.jobs.size,0);
+  const terminal=f.store.terminal(id);
+  const stream=await fetch(f.origin+"/api/tasks/"+id+"/events");
+  const events=(await stream.text()).trim().split("\n").map(line=>JSON.parse(line));
+  assert.equal(events.filter(event=>event.code==="cancelled").length,1);
+  const receipt=events.find(event=>event.observationCancellation);
+  assert.equal(receipt.cancellationReceipt,true);
+  assert.equal(receipt.observationCancellation.state,"TASK_STATE_CANCELED");
+  assert.ok(!("error" in receipt)&&!("code" in receipt)&&!("result" in receipt));
+  assert.deepEqual(f.store.terminal(id),terminal);
 });
 for(const wrong of ["wrongDemand","wrongContext"] as const)test("foreign protocol identity cannot execute or cancel another task: "+wrong,async t=>{
   const f=await fixture(t,{[wrong]:true}),{id}=await f.submit();await f.start();

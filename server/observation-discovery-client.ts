@@ -2,6 +2,7 @@ import {skillRequestKind,skillResultKind,parseObservationRequest,validObservatio
   type ObservationCheck,type ObservationRequest,type ObservationCheckResult,type SkillDemand,type SkillResultSubmission} from "./observation-check-contract";
 import {observationResearchKind,parseObservationResearchRequest,parseObservationResearchResult,type ObservationResearchRequest,type ObservationResearchResult} from "./observation-research-contract";
 import {isDeepStrictEqual} from "node:util";
+import {lookupDiscoveryDelegation,type DiscoverySubmissionIdentity} from "./discovery-delegation-recovery";
 
 export type ObservationBinding={taskId:string;contextId:string};
 export type ObservationTask=ObservationBinding&{state:string;events:{seq:number;artifactId:string;skillDemand?:SkillDemand;result?:ObservationCheckResult;researchResult?:ObservationResearchResult}[]};
@@ -12,7 +13,7 @@ const id=(v:unknown):v is string=>typeof v==="string"&&!!v.trim()&&v.length<=120
 export class ObservationProtocolError extends Error {}
 
 /** Short, authenticated handshakes only. Waiting lives in the task checkpoint. */
-export function observationDiscoveryClient(options:{base?:string;token?:string;fetch?:typeof fetch;timeoutMs?:number}={}){
+export function observationDiscoveryClient(options:{base?:string;token?:string;recoveryToken?:string;fetch?:typeof fetch;timeoutMs?:number}={}){
   const base=options.base??process.env.ONEEARTH_DISCOVERY_URL??"http://127.0.0.1:5275";
   const token=options.token??process.env.ONEEARTH_SKILL_SERVICE_TOKEN;
   const transport=options.fetch??fetch;
@@ -59,23 +60,43 @@ export function observationDiscoveryClient(options:{base?:string;token?:string;f
     }
     return {taskId:value.id,contextId:value.contextId,state:value.status.state,events:events.sort((a,b)=>a.seq-b.seq)};
   }
-  return {
-    async submitResearch(messageId:string,input:ObservationResearchRequest,signal:AbortSignal){
+  async function lookup(identity:DiscoverySubmissionIdentity,signal:AbortSignal){
+    return lookupDiscoveryDelegation(base,identity,signal,{token:options.recoveryToken,fetcher:transport,timeoutMs:options.timeoutMs});
+  }
+  async function readAccepted(taskId:string,signal:AbortSignal,expected?:ObservationBinding){
+    const recovered=task(await request("/tasks/"+encodeURIComponent(taskId),"GET",undefined,signal),expected);
+    if(recovered.taskId!==taskId)throw new ObservationProtocolError("Skill 恢复任务身份与原受理不符。");
+    return recovered;
+  }
+  async function readAcceptance(identity:DiscoverySubmissionIdentity,signal:AbortSignal){
+    const input=identity.kind===observationResearchKind?parseObservationResearchRequest(identity.input):identity.input;
+    if(!input)return;
+    const receipt=await lookup({...identity,input},signal);
+    return receipt.state==="accepted"?readAccepted(receipt.taskId,signal):undefined;
+  }
+  async function send(identity:DiscoverySubmissionIdentity,signal:AbortSignal,recover:boolean,expected?:ObservationBinding){
+    if(recover){
+      const receipt=await lookup(identity,signal);
+      if(receipt.state==="unknown")throw Error("Skill 原委托受理暂无法确认。");
+      if(receipt.state==="accepted")return readAccepted(receipt.taskId,signal,expected);
+    }
+    const {taskId,messageId,kind,input}=identity;
+    const receipt=await request("/message:send","POST",{message:{messageId,role:"ROLE_USER",parts:[{data:{kind,input}}],
+      ...(taskId&&expected?{taskId,contextId:expected.contextId}:{})},configuration:{returnImmediately:true}},signal);
+    if(!object(receipt)||!receipt.task||receipt.message||receipt.error)throw new ObservationProtocolError("Skill 发现受理回执无效。");
+    return task(receipt.task,expected);
+  }
+  const client = {
+    async submitResearch(messageId:string,input:ObservationResearchRequest,signal:AbortSignal,recover=false){
       const clean=parseObservationResearchRequest(input);if(!clean)throw new ObservationProtocolError("自然观测委托缺少受权资料范围。");
-      const receipt=await request("/message:send","POST",{message:{messageId,role:"ROLE_USER",parts:[{data:{kind:observationResearchKind,input:clean}}]},configuration:{returnImmediately:true}},signal);
-      if(!object(receipt)||!receipt.task||receipt.message||receipt.error)throw new ObservationProtocolError("自然观测委托的受理回执无效。");
-      return task(receipt.task);
+      return send({messageId,kind:observationResearchKind,input:clean},signal,recover);
     },
-    async submit(messageId:string,researchTaskId:string,check:ObservationCheck,signal:AbortSignal){
-      const receipt=await request("/message:send","POST",{message:{messageId,role:"ROLE_USER",parts:[{data:{kind:skillRequestKind,input:{researchTaskId,check}}}]},configuration:{returnImmediately:true}},signal);
-      if(!object(receipt)||!receipt.task||receipt.message||receipt.error)throw new ObservationProtocolError("Skill 发现受理回执无效。");
-      return task(receipt.task);
+    async submit(messageId:string,researchTaskId:string,check:ObservationCheck,signal:AbortSignal,recover=false){
+      return send({messageId,kind:skillRequestKind,input:{researchTaskId,check}},signal,recover);
     },
     async snapshot(binding:ObservationBinding,signal:AbortSignal){return task(await request("/tasks/"+encodeURIComponent(binding.taskId),"GET",undefined,signal),binding);},
-    async deliver(binding:ObservationBinding,messageId:string,input:SkillResultSubmission,signal:AbortSignal){
-      const receipt=await request("/message:send","POST",{message:{messageId,taskId:binding.taskId,contextId:binding.contextId,role:"ROLE_USER",parts:[{data:{kind:skillResultKind,input}}]},configuration:{returnImmediately:true}},signal);
-      if(!object(receipt)||!receipt.task||receipt.message||receipt.error)throw new ObservationProtocolError("Skill 结果回送回执无效。");
-      return task(receipt.task,binding);
+    async deliver(binding:ObservationBinding,messageId:string,input:SkillResultSubmission,signal:AbortSignal,recover=false){
+      return send({messageId,taskId:binding.taskId,kind:skillResultKind,input},signal,recover,binding);
     },
     async cancel(binding:ObservationBinding,signal:AbortSignal){
       const before=await this.snapshot(binding,signal);
@@ -85,6 +106,7 @@ export function observationDiscoveryClient(options:{base?:string;token?:string;f
       return cancelled.state;
     },
   };
+  return {...client,readAcceptance} as typeof client & {readAcceptance?:typeof readAcceptance};
 }
 
 export function validateObservationEvents(task:ObservationTask,researchTaskId:string,check:ObservationRequest){

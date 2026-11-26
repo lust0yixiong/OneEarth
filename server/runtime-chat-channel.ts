@@ -1,3 +1,4 @@
+import {modelExecutionContext} from "./model-execution-context";
 import type {Router} from "express";
 import type {PostgresChatMessages} from "./postgres-chat-messages";
 import {submissionFingerprint} from "./postgres-chat-messages";
@@ -51,7 +52,7 @@ export async function runtimeChatChannel(app: Router, tasks: TaskStore & {chat: 
     };
     const done = (async () => {
       try {
-        const outcome = await requestPerformance.run(timings, () => run(id, signal, emit));
+        const outcome = await requestPerformance.run(timings, () => modelExecutionContext.run({role:"foreground",taskId:id,tasks},()=>run(id,signal,emit)));
         await pending;
         signal.throwIfAborted();
         if (outcome.kind === "research") await chat.promote(id, outcome.handoff, outcome.checkpoint);
@@ -149,7 +150,7 @@ export async function runtimeChatChannel(app: Router, tasks: TaskStore & {chat: 
       try{
         signal.throwIfAborted();
         const turnContext=await runtimeTurnContext(tasks,id,body);
-        const advice=await reconcile({taskId:id,original:body,result,refusal:receipt,current,turnContext},{signal});
+        const advice=await modelExecutionContext.run({role:"foreground",taskId:id,tasks},()=>reconcile({taskId:id,original:body,result,refusal:receipt,current,turnContext},{signal}));
         signal.throwIfAborted();
         return await chat.finishWorkspaceRecovery(id,advice);
       }catch {

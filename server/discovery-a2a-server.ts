@@ -1,4 +1,4 @@
-import {createHash,randomUUID} from "node:crypto";
+import {randomUUID} from "node:crypto";
 import {once} from "node:events";
 import {setTimeout as delay} from "node:timers/promises";
 import express, {type Request, type Response} from "express";
@@ -15,6 +15,8 @@ import {paperProjectionPageLimit,paperProjectionQueryKind,paperProjectionResultK
 import {PaperCatalogBaseUnavailable,PaperCatalogGenerationChanged,PaperCatalogUninitialized,type PostgresPaperCatalog} from "./postgres-paper-catalog";
 import {parseObservationCheck, skillRequestKind, skillResultKind, skillServiceAuthorized, validObservationResult} from "./observation-check-contract";
 import {observationResearchKind, parseObservationResearchRequest} from "./observation-research-contract";
+import {ipv4LoopbackOnly} from "./access";
+import {discoveryDelegationLookupPath, discoveryRequestFingerprint} from "./discovery-request-fingerprint";
 
 const media = "application/a2a+json";
 const protocol = "1.0";
@@ -55,12 +57,8 @@ function record(value: unknown): Record<string,unknown> {
 function only(value: Record<string,unknown>, fields: string[]) {
   if (Object.keys(value).some(key => !fields.includes(key))) throw invalid("A2A 请求包含不受支持的字段。");
 }
-function fingerprint(value: unknown) {
-  const canonical = JSON.stringify(value, (_key, part) => part && typeof part === "object" && !Array.isArray(part)
-    ? Object.fromEntries(Object.keys(part).sort().map(key => [key,part[key]]))
-    : part);
-  return createHash("sha256").update(canonical).digest("hex");
-}
+const validMessageId = (value:unknown): value is string =>
+  typeof value === "string" && !!value.trim() && value.length <= 200 && !/[\x00-\x1f\x7f]/.test(value);
 function checkHistoryLength(value: unknown) {
   if (value !== undefined && (!/^\d+$/.test(String(value)) || !Number.isSafeInteger(Number(value))))
     throw invalid("historyLength 须为非负整数。");
@@ -83,6 +81,27 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
   const {catalog,haina,paperProjection} = materials ?? {};
   const router = express.Router();
   const parse = express.json({type:media,limit:"384kb"});
+  router.get(discoveryDelegationLookupPath + "/:messageId", ipv4LoopbackOnly, async (req,res) => {
+    res.set("Cache-Control","no-store");
+    if (!skillServiceAuthorized(req.get("authorization"), process.env.ONEEARTH_DISCOVERY_RECOVERY_TOKEN ?? "")) {
+      res.status(403).json({code:"DELEGATION_LOOKUP_FORBIDDEN"});
+      return;
+    }
+    const family = req.get("x-oneearth-delegation-family");
+    const digest = req.get("x-oneearth-request-fingerprint");
+    const messageId = req.params.messageId;
+    if (!validMessageId(messageId) || !digest || !/^[0-9a-f]{64}$/.test(digest) ||
+        (family !== undefined && family !== "observation")) {
+      res.status(400).json({code:"DELEGATION_LOOKUP_INVALID"});
+      return;
+    }
+    const taskId = await delegations.findAccepted(messageId, digest, family === "observation");
+    if (!taskId) {
+      res.status(404).json({code:"DELEGATION_NOT_FOUND",idempotentReplay:true});
+      return;
+    }
+    res.json({taskId,idempotentReplay:true});
+  });
   router.get("/.well-known/agent-card.json", (req,res) => res.set("Cache-Control","no-store").json({
     name:"OneEarth Discovery",
     description:"Finds and returns traceable materials for a OneEarth research delegation.",
@@ -121,8 +140,7 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
     const envelope = record(req.body);
     only(envelope, ["message","configuration"]);
     const message = record(envelope.message);
-    if (message.role !== "ROLE_USER" || typeof message.messageId !== "string" ||
-      !message.messageId.trim() || message.messageId.length > 200 || /[\x00-\x1f\x7f]/.test(message.messageId))
+    if (message.role !== "ROLE_USER" || !validMessageId(message.messageId))
       throw invalid("A2A 委托需要 ROLE_USER 及稳定的 messageId。");
     only(message, ["messageId","role","parts","taskId","contextId"]);
     if (message.taskId !== undefined && (typeof message.taskId !== "string" || !taskIdPattern.test(message.taskId)))
@@ -140,7 +158,7 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
       (catalog && (data.kind === paperQueryKind || data.kind === sourceReadKind)) ||
       (haina && data.kind === hainaCatalogQueryKind) || data.kind === sceneCatalogQueryKind ||
       (paperProjection && data.kind === paperProjectionQueryKind);
-    if (!available)
+    if (typeof data.kind !== "string" || !available)
       throw invalid("不支持此发现委托类型。","CONTENT_TYPE_NOT_SUPPORTED");
     const input = record(data.input);
     const config = envelope.configuration === undefined ? {} : record(envelope.configuration);
@@ -164,7 +182,7 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
   async function submit({kind,input,messageId,taskId,immediately}: ReturnType<typeof decode>, skillAuthorized:boolean) {
     if (kind === skillRequestKind || kind === skillResultKind || kind === observationResearchKind) {
       if (!skillAuthorized) throw new A2aError(401,"UNAUTHENTICATED","观测核对需要服务凭据。");
-      const digest = fingerprint({kind,taskId,input});
+      const digest = discoveryRequestFingerprint(kind,input,taskId);
       if (kind === observationResearchKind) {
         const prepared = parseObservationResearchRequest(input);
         if (!prepared) throw invalid("观测研究请求的目标、资料身份或已归档证据无效。");
@@ -187,7 +205,7 @@ export function discoveryA2aRouter(delegations: DiscoveryA2aStore, prepare: Prep
       return {id:await delegations.acceptObservationResult(messageId,digest,taskId,{requestId,afterSeq,result}),immediately};
     }
     // Transport preferences may change when resuming. The authorization-bearing input may not.
-    const digest = fingerprint(kind === sourceReadKind ? {kind,input} : {taskId,input});
+    const digest = discoveryRequestFingerprint(kind,input,taskId);
     const previous = await delegations.find(messageId,digest);
     if (previous) return {id:previous,immediately};
     if (kind === sourceReadKind) {
