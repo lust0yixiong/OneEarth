@@ -6,4 +6,5 @@ import "./styles/answer-map.css";
 import "./styles/citation-link.css";
 import "./styles/evidence-reading.css";
 import "./styles/grid-hover.css";
+import "./styles/workbench-surfaces.css";
 createRoot(document.getElementById("root")!).render(<AppErrorBoundary><App /></AppErrorBoundary>);

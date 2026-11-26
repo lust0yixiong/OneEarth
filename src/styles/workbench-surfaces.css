@@ -1,0 +1,346 @@
+:root {
+  --workbench-ink: #142c22;
+  --workbench-secondary: #465d53;
+  --workbench-chrome: #fbfcfb;
+  --workbench-divider: #ccdcd8;
+  --workbench-control: #fafdfb;
+  --workbench-page: #f2f6f4;
+  --workbench-selection: #e7f5ed;
+  --workbench-focus: #167956;
+  --workbench-action: #146749;
+  --workbench-error: #842d24;
+  --workbench-error-surface: #fff5f1;
+  --workbench-control-shadow: 0 4px 14px rgb(34 61 54 / 9%), 0 1px 3px rgb(34 61 54 / 4%);
+  --workbench-panel-shadow: 0 8px 26px rgb(34 61 54 / 11%), 0 2px 7px rgb(34 61 54 / 5%);
+  --workbench-reader-shadow: 0 13px 34px rgb(34 61 54 / 15%), 0 2px 7px rgb(34 61 54 / 5%);
+}
+
+.app :is(.app-header, .app-nav) {
+  background: var(--workbench-chrome);
+  border-color: var(--workbench-divider);
+}
+
+.app :is(.app-nav, .chat-tools, .earth-side-controls) button:hover {
+  background: var(--workbench-selection);
+}
+
+.app :is(.earth-side-controls, .globe-timeline, .catalog-distribution .map-controls-row, .chat-boundary-toggle) {
+  background: var(--workbench-control);
+  border-color: var(--workbench-divider);
+  color: var(--workbench-secondary);
+  box-shadow: var(--workbench-control-shadow);
+}
+
+.app .chat-panel {
+  --pane-background: rgb(255 255 255 / 92%);
+  background: #fff;
+  border-color: var(--workbench-divider);
+  color: var(--workbench-ink);
+  box-shadow: var(--workbench-panel-shadow);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.app:has(.earth-view:not(.wind-mode)) .chat-panel {
+  --pane-background: rgb(255 255 255 / 70%);
+}
+
+@media (max-width: 900px) {
+  .app:has(.earth-view:not(.wind-mode)) .chat-panel {
+    --pane-background: rgb(255 255 255 / 82%);
+  }
+}
+
+@supports (backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px)) {
+  .app .chat-panel {
+    background: var(--pane-background);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .app .chat-panel {
+    background: #fff;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+.app .chat-panel :is(.chat-greeting > p, .icon-actions, .question-meta, .answer-run, .oe-meta, .message > small) {
+  color: var(--workbench-secondary);
+}
+
+.app .chat-panel .chat-author-mark {
+  background: transparent;
+}
+
+.app .messages .message.user {
+  background: #edf5ef;
+  border-color: #d3e4d9;
+}
+
+.app .chat-compose .chat-composer-input {
+  background: var(--workbench-control);
+  border-color: var(--workbench-divider);
+}
+
+.app :is(.data-inspector, .grid-hover-overview, .globe-layer-menu, .map-popover, .grid-data-popover, .grid-policy-popover, .time-range-panel) {
+  background: #fff;
+  border-color: var(--workbench-divider);
+  color: var(--workbench-ink);
+  box-shadow: var(--workbench-control-shadow);
+}
+
+:is(.app .evidence-reader, .oe-source-drawer, .oe-source-drawer .evidence-reader) {
+  background: #fff;
+  border-color: var(--workbench-divider);
+  color: var(--workbench-ink);
+  box-shadow: var(--workbench-reader-shadow);
+}
+
+.evidence-reader :is(.evidence-body, .evidence-bottom, .web-source-preview > nav, .source-pdf nav) {
+  border-color: var(--workbench-divider);
+}
+
+.evidence-reader :is(.evidence-top, .evidence-bottom, .web-source-preview > nav, .source-pdf nav) {
+  background: var(--workbench-chrome);
+}
+
+.app :is(.chat-panel, .app-nav, .data-inspector, .evidence-reader, .map-popover, .time-range-panel)
+  :is(button, a, select, input, textarea):focus-visible,
+.oe-source-drawer :is(button, a, select, input, textarea):focus-visible {
+  outline: 2px solid var(--workbench-focus);
+  outline-offset: 2px;
+}
+
+/* Conversation surfaces */
+.chat-panel .session-history,
+.app .chat-compose .oe-clarification-card form {
+  color: var(--workbench-ink);
+  background: #fff;
+  border-color: var(--workbench-divider);
+  box-shadow: var(--workbench-control-shadow);
+}
+
+.session-history .session-history-head,
+.oe-clarification-card footer {
+  background: var(--workbench-chrome);
+  border-color: var(--workbench-divider);
+}
+
+.chat-panel .session-history-item:is(:hover, [aria-current]),
+.oe-clarification-body .oe-clarification-option:is(:hover, [aria-pressed="true"]) {
+  background: var(--workbench-selection);
+  color: var(--workbench-ink);
+}
+
+.chat-panel :is(.session-history-item small, .answer-reply-context, .oe-clarification-meta, .compose-bottom small),
+.chat-compose textarea::placeholder {
+  color: var(--workbench-secondary);
+}
+
+.chat-panel .oe-run {
+  padding-inline-start: 8px;
+  border-inline-start: 2px solid var(--workbench-divider);
+  color: var(--workbench-secondary);
+}
+
+.chat-panel .oe-run > summary {
+  color: var(--workbench-ink);
+}
+
+.chat-panel .live-search [role="alert"],
+.chat-panel .message.failed .answer-prose,
+.app .error-notice,
+.data-access-view .access-error {
+  background: var(--workbench-error-surface);
+  color: var(--workbench-error);
+  border: 1px solid #e9c5bd;
+  border-radius: 7px;
+  padding: 8px 10px;
+}
+
+.chat-panel .message.failed .answer-prose p {
+  color: inherit;
+  margin-block: 0;
+}
+
+.app .chat-panel :is(.activity-link, .suggested-queries button, .followup-suggestions button, .message.failed > button) {
+  background: var(--workbench-control);
+  border-color: var(--workbench-divider);
+  color: var(--workbench-action);
+}
+
+.chat-panel .message.failed > button {
+  border: 1px solid var(--workbench-divider);
+  border-radius: 7px;
+  margin-block-start: 6px;
+  padding: 5px 9px;
+}
+
+.app .chat-panel :is(.activity-link, .suggested-queries button, .followup-suggestions button):hover:not(:disabled) {
+  background: var(--workbench-selection);
+}
+
+/* Reading surfaces */
+.oe-source-drawer > header {
+  padding-block-end: 8px;
+  border-block-end: 1px solid var(--workbench-divider);
+}
+
+.oe-source-drawer .source-question,
+.evidence-reader .source-pdf-page {
+  background: var(--workbench-page);
+  color: var(--workbench-secondary);
+}
+
+.oe-source-drawer :is(.oe-source-card, .oe-paper),
+.evidence-reader :is(.reader-stamp, .source-pdf nav) {
+  border-color: var(--workbench-divider);
+}
+
+.evidence-reader .evidence-body th {
+  background: var(--workbench-selection);
+  color: var(--workbench-ink);
+}
+
+.evidence-reader .evidence-body tbody tr:nth-child(even) {
+  background: var(--workbench-chrome);
+}
+
+:is(.evidence-reader, .oe-source-drawer) :is(.reader-status, .reader-stamp, .source-question, .oe-source-card small) {
+  color: var(--workbench-secondary);
+}
+
+:is(.evidence-reader, .oe-source-drawer) button[aria-pressed="true"] {
+  background: var(--workbench-selection);
+  color: var(--workbench-action);
+}
+
+/* Globe and supporting panels */
+.app .about-popover {
+  border-color: var(--workbench-divider);
+  color: var(--workbench-ink);
+  box-shadow: var(--workbench-reader-shadow);
+}
+
+.loading-surface {
+  background: var(--workbench-page);
+  color: var(--workbench-secondary);
+}
+
+.loading-surface[role="alert"] > section {
+  max-inline-size: min(92%, 480px);
+  padding: 16px 20px;
+  border: 1px solid var(--workbench-divider);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--workbench-ink);
+  box-shadow: var(--workbench-panel-shadow);
+}
+
+.app .field-controls {
+  border-color: var(--workbench-divider);
+  color: var(--workbench-ink);
+}
+
+.app :is(.grid-policy-popover, .map-popover, .grid-data-popover, .data-inspector, .time-range-panel)
+  :is(small, .picked-location, .eyebrow) {
+  color: var(--workbench-secondary);
+}
+
+.app :is(.time-range-panel, .data-inspector) :is(input:not([type="range"]), select) {
+  border-color: var(--workbench-divider);
+  background: var(--workbench-chrome);
+  color: var(--workbench-ink);
+}
+
+.app .globe-layer-menu .basemap-list label:is(.active, :hover),
+.app .grid-data-popover :is(button[aria-pressed="true"], button[aria-selected="true"]) {
+  background: var(--workbench-selection);
+  color: var(--workbench-action);
+}
+
+@media (max-width: 760px) {
+  .app.chat-collapsed .grid-popover-stack {
+    /* Reserve the edge pull-tab and a gap so it cannot cover the close button. */
+    --stack-width: min(290px, calc(100% - 60px));
+    left: clamp(8px, var(--anchor-x), calc(100% - var(--stack-width) - 50px));
+  }
+}
+
+/* Catalogue, cases and settings */
+.app :is(.data-access-view, .cases-view),
+.settings-page {
+  background: var(--workbench-page);
+  color: var(--workbench-ink);
+}
+
+.app :is(.visual-case, .catalog-card, .research-library, .research-list-item, .access-channels section),
+.settings-content section {
+  background: #fff;
+  border-color: var(--workbench-divider);
+  box-shadow: var(--workbench-control-shadow);
+}
+
+.app .strike-case :is(.strike-heading, .strike-navigation, .strike-caption, .weather-detail, .quake-detail, .quake-timeline) {
+  background: #fff;
+  border-color: var(--workbench-divider);
+  color: var(--workbench-ink);
+  box-shadow: var(--workbench-control-shadow);
+}
+
+@media (max-width: 680px) {
+  .strike-case .strike-globe {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .strike-case .strike-globe > :is(.strike-heading, .strike-navigation) {
+    position: relative;
+    inset: auto;
+    width: max-content;
+    max-width: calc(100% - 16px);
+    margin: 8px 8px 0;
+  }
+
+  .strike-case .strike-heading { justify-self: start; }
+  .strike-case .strike-navigation { justify-self: end; }
+}
+
+.app :is(.access-sections, .access-stream-status, .catalog-library-actions, .research-library) :is(small, p),
+.settings-content :is(small, dt, .settings-version) {
+  color: var(--workbench-secondary);
+}
+
+.app .data-access-view :is(.discovery-filters select, .library-entry, .saved-toggle, .catalog-capabilities button),
+.settings-content :is(select, input:not([type="checkbox"])) {
+  border-color: var(--workbench-divider);
+  background: var(--workbench-control);
+  color: var(--workbench-ink);
+}
+
+.app .data-access-view :is(.access-sections button[aria-selected="true"], button[aria-pressed="true"]),
+.app .cases-view .visual-case:hover {
+  background: var(--workbench-selection);
+  color: var(--workbench-action);
+}
+
+.settings-page > header {
+  background: var(--workbench-chrome);
+  border-color: var(--workbench-divider);
+}
+
+.settings-content :is(.settings-save, .chat-home-save) {
+  background: var(--workbench-action);
+  color: #fff;
+}
+
+.app :is(.data-access-view, .cases-view, .strike-case, .grid-data-popover, .grid-policy-popover, .globe-layer-menu, .about-popover)
+  :is(button, a, select, input):focus-visible,
+.settings-page :is(button, a, select, input, textarea):focus-visible,
+.loading-surface button:focus-visible {
+  outline: 2px solid var(--workbench-focus);
+  outline-offset: 2px;
+}
