@@ -24,7 +24,7 @@ export function readAgUiInput(raw:unknown){
  const latest=run.messages.at(-1),submission=readOneEarthAgUiSubmission(run.forwardedProps);
  if(latest?.role!=="user"||typeof latest.content!=="string"||!taskIdPattern.test(latest.id)||!latest.content.trim()||!submission)
   throw new AgUiInputError("请提交实际用户消息与 OneEarth 工作台输入。");
- const allowed=new Set(["context","config","deepseekTools","previousTaskId","questionDecision","clarificationReply","clarificationAnswer","observationCheck"]);
+ const allowed=new Set(["context","config","deepseekTools","previousTaskId","clarificationReply","clarificationAnswer","observationCheck"]);
  if(Object.keys(submission).some(key=>!allowed.has(key)))throw new AgUiInputError("工作台输入含未登记的字段。");
  if(resume&&["questionDecision","clarificationReply","clarificationAnswer","observationCheck"].some(key=>Object.hasOwn(submission,key)))throw new AgUiInputError("原生续接不接受第二份确认或执行镜像。");
  if([run.runId,run.threadId,latest.id].some(id=>id!==id.toLowerCase()))throw new AgUiInputError("运行、会话和用户消息编号必须使用规范小写UUID。");

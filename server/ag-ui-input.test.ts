@@ -24,3 +24,9 @@ test("native resume has a stable original-request fingerprint but cannot supply 
  const reordered={...wire,resume:[{interruptId:parent,status:"resolved",payload:{text:"补充",optionId:"option-1"}}]};assert.equal(decoded.fingerprint,readAgUiInput(reordered).fingerprint);
  for(const extra of [{parentRunId:parent},{resume:[]},{resume:[...wire.resume,...wire.resume]},{forwardedProps:{oneearth:{version:1,submission:{...source.forwardedProps.oneearth.submission,clarificationAnswer:{parentTaskId:parent,optionId:"approve"}}}}}])assert.throws(()=>readAgUiInput({...wire,...extra}));
 });
+
+
+test("native QuestionDecision mirrors are retired even without a resume entry",()=>{
+ const source=input();(source.forwardedProps.oneearth.submission as Record<string,unknown>).questionDecision={checkMessageId:source.runId,originalQuestion:"本轮原话",dataQuestion:"another",choice:"proposed"};
+ assert.throws(()=>readAgUiInput(source));
+});

@@ -1,5 +1,5 @@
-import {agUiInterruptDefinition,type AgUiResume} from "./ag-ui-interrupt";
-import {agUiInterruptSchema,claimAgUiResume,saveAgUiInterrupt} from "./postgres-ag-ui-interrupt";
+import {agUiInterruptDefinition,agUiQuestionCheckDefinition,validAgUiQuestionCheck,type AgUiResume} from "./ag-ui-interrupt";
+import {agUiInterruptSchema,claimAgUiResume,saveAgUiInterrupt,saveAgUiQuestionCheck} from "./postgres-ag-ui-interrupt";
 import {validClarificationPrompt} from "../src/domain/clarification";
 import {assertPublicAnswerSafe} from "./public-answer-stream";
 import type {PoolClient} from "pg";
@@ -58,9 +58,14 @@ export async function finishAgUi(db:PoolClient,id:string,status:"complete"|"fail
   if(!run.message_open)await writeAgUiEvent(db,id,{type:"TEXT_MESSAGE_START",messageId:id,role:"assistant"});
   if(message.length>run.public_text.length)await writeAgUiEvent(db,id,{type:"TEXT_MESSAGE_CONTENT",messageId:id,delta:message.slice(run.public_text.length)});
   await writeAgUiEvent(db,id,{type:"TEXT_MESSAGE_END",messageId:id});
-  const prompt=response.clarificationPrompt;
-  if(validClarificationPrompt(prompt))await saveAgUiInterrupt(db,id,run.thread_id,prompt);
-  await writeAgUiEvent(db,id,{type:"RUN_FINISHED",threadId:run.thread_id,runId:id,...(validClarificationPrompt(prompt)?{outcome:{type:"interrupt",interrupts:[agUiInterruptDefinition(id,prompt)]}}:{}),result:{oneearth:{version:1,messageId:id,response}}});
+  const prompt=response.clarificationPrompt,check=response.questionCheck;
+  let interrupt;
+  if(check!==undefined){
+   if(!validAgUiQuestionCheck(check)||validClarificationPrompt(prompt))throw Error("问题确认缺少唯一有效的原记录。");
+   response.questionCheck={originalQuestion:check.originalQuestion,proposedQuestion:check.proposedQuestion};
+   await saveAgUiQuestionCheck(db,id,run.thread_id,response.questionCheck);interrupt=agUiQuestionCheckDefinition(id,response.message);
+  }else if(validClarificationPrompt(prompt)){await saveAgUiInterrupt(db,id,run.thread_id,prompt);interrupt=agUiInterruptDefinition(id,prompt);}
+  await writeAgUiEvent(db,id,{type:"RUN_FINISHED",threadId:run.thread_id,runId:id,...(interrupt?{outcome:{type:"interrupt",interrupts:[interrupt]}}:{}),result:{oneearth:{version:1,messageId:id,response}}});
  }else{
   if(run.message_open)await writeAgUiEvent(db,id,{type:"TEXT_MESSAGE_END",messageId:id});
   await writeAgUiEvent(db,id,status==="cancelled"?{type:"RUN_FINISHED",threadId:run.thread_id,runId:id,outcome:{type:"cancelled"}}:

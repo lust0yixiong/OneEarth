@@ -33,9 +33,20 @@ test("the read-only interrupt record only describes the original archived run", 
   assert.deepEqual(readOneEarthAgUiInterruptRecord(pending,id),pending);
   assert.equal(readOneEarthAgUiInterruptRecord(pending,resumedBy),undefined);
   assert.equal(readOneEarthAgUiInterruptRecord({...pending,resumedBy},id),undefined);
+  assert.equal(readOneEarthAgUiInterruptRecord({...pending,status:"resolved"},id),undefined);
+  assert.equal(readOneEarthAgUiInterruptRecord({...pending,status:"resolved",resumedBy:id},id),undefined);
+  assert.deepEqual(readOneEarthAgUiInterruptRecord({...pending,status:"cancelled"},id),{...pending,status:"cancelled"});
   assert.equal(readOneEarthAgUiInterruptRecord({...pending,prompt:{...prompt,options:[prompt.options[0]]}},id),undefined);
   assert.deepEqual(readOneEarthAgUiInterruptRecord({...pending,status:"resolved",resumedBy},id),
     {...pending,status:"resolved",resumedBy});
+});
+
+test("an original question check preserves its two authoritative values", () => {
+  const id="a17993ba-0f17-4d00-9456-8259643cc9d2";
+  const questionCheck={originalQuestion:"有哪些降水资料？",proposedQuestion:"核对2024年公开月降水产品。"};
+  const card={id,status:"pending",kind:"question-check",questionCheck};
+  assert.deepEqual(readOneEarthAgUiInterruptRecord(card,id),card);
+  assert.equal(readOneEarthAgUiInterruptRecord({...card,questionCheck:{...questionCheck,proposedQuestion:""}},id),undefined);
 });
 
 test("the native AG-UI terminal response is bound to its assistant message", () => {
