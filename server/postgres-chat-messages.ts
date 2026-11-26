@@ -1,3 +1,4 @@
+import {readAgUiInterrupt,pendingAgUiInterrupt} from "./postgres-ag-ui-interrupt";
 import {agUiSchema,admitAgUi,appendAgUiText,finishAgUi,type AgUiAdmission} from "./ag-ui-persistence";
 import {createHash} from "node:crypto";
 import {isDeepStrictEqual} from "node:util";
@@ -230,6 +231,9 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
         return {task: view(saved), started: true};
       });
     },
+    async agUiFingerprint(id:string){return (await pool.query<{fingerprint:string}>("SELECT fingerprint FROM runtime_agui_runs WHERE id=$1",[id])).rows[0]?.fingerprint;},
+    agUiInterrupt:(id:string)=>readAgUiInterrupt(pool,id),
+    agUiPending:(threadId:string)=>pendingAgUiInterrupt(pool,threadId),
     async agUiEvents(id:string,after=0){return (await pool.query<{seq:string;event:Payload}>("SELECT seq,event FROM runtime_agui_events WHERE run_id=$1 AND seq>$2 ORDER BY seq LIMIT 128",[id,after])).rows.map(row=>({seq:Number(row.seq),event:row.event}));},
     async appendAgUiText(id:string,delta:string){return transaction(async db=>{
       if(!(await db.query("SELECT id FROM runtime_chat_messages WHERE id=$1 AND status='planning' FOR UPDATE",[id])).rowCount)return false;

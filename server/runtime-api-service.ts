@@ -72,6 +72,7 @@ export async function createRuntimeApi(state: string) {
     stopWork.push(() => chat.close());
     taskStatusRoutes(business, "/api/tasks", tasks,
       {researchRecords:true,chatIdentity:true,
+        readInterrupt:id=>tasks.chat.agUiInterrupt(id),
         recoverRecord:async task=>(await recoverObservationRecord(tasks,task))??recoverObservationResearchRecord(tasks,task),
         onCancelled:id=>chat.cancel(id)});
     business.use(badRequest);

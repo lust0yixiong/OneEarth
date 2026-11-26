@@ -16,3 +16,11 @@ test("native version follows the official major rule and rejects unimplemented c
  for(const version of ["0.9","2.0"]){const source=input();source.protocolVersion=version;assert.throws(()=>readAgUiInput(source),error=>error instanceof AgUiInputError&&error.status===422);}
  for(const mutation of [(source:any)=>source.tools=[{name:"untrusted",description:"tool",parameters:{}}],(source:any)=>source.resume=[{interruptId:"id",payload:"approve"}],(source:any)=>source.forwardedProps.oneearth.submission.query="other",(source:any)=>source.messages.push(source.messages[0]),(source:any)=>source.forwardedProps.oneearth.submission.privateHandoff={approved:true},(source:any)=>source.runId=source.runId.toUpperCase(),(source:any)=>source.threadId=source.threadId.toUpperCase(),(source:any)=>source.messages[0].id=source.messages[0].id.toUpperCase()]){const source=input();mutation(source);assert.throws(()=>readAgUiInput(source));}
 });
+
+test("native resume has a stable original-request fingerprint but cannot supply server confirmation mirrors",()=>{
+ const source=input(),parent=randomUUID();(source.forwardedProps.oneearth.submission as any).previousTaskId=parent;
+ const wire={...source,resume:[{interruptId:parent,status:"resolved",payload:{optionId:"option-1",text:"补充"}}]};
+ const decoded=readAgUiInput(wire);assert.equal(decoded.resume?.interruptId,parent);assert.equal(decoded.body.clarificationAnswer,undefined);
+ const reordered={...wire,resume:[{interruptId:parent,status:"resolved",payload:{text:"补充",optionId:"option-1"}}]};assert.equal(decoded.fingerprint,readAgUiInput(reordered).fingerprint);
+ for(const extra of [{parentRunId:parent},{resume:[]},{resume:[...wire.resume,...wire.resume]},{forwardedProps:{oneearth:{version:1,submission:{...source.forwardedProps.oneearth.submission,clarificationAnswer:{parentTaskId:parent,optionId:"approve"}}}}}])assert.throws(()=>readAgUiInput({...wire,...extra}));
+});

@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import type { Router } from "express";
 import { TaskCancelled } from "./task-cancellation";
+import type { OneEarthAgUiInterruptRecord } from "../src/domain/native-ag-ui";
 import type { AnswerReference, EvidenceStage } from "../src/domain/types";
 
 export const taskIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -185,6 +186,7 @@ type TaskStatusRouteOptions = {
   researchRecords?: boolean;
   chatIdentity?: boolean;
   recoverRecord?:(task:Task)=>Promise<unknown>;
+  readInterrupt?:(id:string)=>Promise<OneEarthAgUiInterruptRecord | undefined>;
   onCancelled?:(id:string)=>void;
 };
 
@@ -210,8 +212,8 @@ export function taskStatusRoutes(router: Router, base: string, store: TaskStore,
     const result=(await store.terminal(id))?.result??(task?await options.recoverRecord?.(task):undefined);
     if(!task||!result){res.status(404).json({error:"没有找到已完成的研究记录。"});return;}
     const {query,turnId,conversationId}=JSON.parse(task.body);
-    const workspaceReceipt=await store.workspaceReceipt?.(id);
-    res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,result,workspaceReceipt});
+    const [workspaceReceipt,interrupt]=await Promise.all([store.workspaceReceipt?.(id),options.readInterrupt?.(id)]);
+    res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,result,workspaceReceipt,interrupt});
   });
   router.delete(base + "/:taskId", async (req, res) => {
     const id=String(req.params.taskId);

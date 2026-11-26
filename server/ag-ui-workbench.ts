@@ -1,10 +1,11 @@
+import {bindAgUiResume} from "./ag-ui-interrupt";
+import {validateTurnStructure} from "./runtime-input";
 import {authorizedFlashApi} from "./flash-api";
 import type {Router,Response} from "express";
 import {setTimeout as delay} from "node:timers/promises";
 import type {TaskStore,Payload} from "./task-store";
 import {TaskConflict} from "./task-store";
 import type {PostgresChatMessages} from "./postgres-chat-messages";
-import {submissionFingerprint} from "./postgres-chat-messages";
 import type {ChatPreparation} from "./runtime-chat-channel";
 import {TaskCancelled} from "./task-cancellation";
 import {modelExecutionContext} from "./model-execution-context";
@@ -63,17 +64,24 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
   if(!req.accepts("text/event-stream")){res.status(406).json({error:"AG-UI 需要 text/event-stream。"});return;}
   if(stopping){res.status(503).json({error:"正在停止接收运行。"});return;}
   try{
-   const {id,body,fingerprint}=readAgUiInput(req.body);
+   const decoded=readAgUiInput(req.body);
+   const {id,fingerprint,resume}=decoded;
    const previous=await tasks.get(id);
    if(previous){
-    res.status(409).set("Location","/api/tasks/"+id).json({error:previous.fingerprint===submissionFingerprint(JSON.stringify(body))?"该运行已受理，请只读原状态与归档。":"该运行编号已用于另一份提交。",code:"RUN_ALREADY_ACCEPTED"});return;
+    const same=await chat.agUiFingerprint(id)===fingerprint;
+    res.status(409).set("Location","/api/tasks/"+id).json({error:same?"该运行已受理，请只读原状态与归档。":"该运行编号已用于另一份提交。",code:same?"RUN_ALREADY_ACCEPTED":"RUN_ID_CONFLICT"});return;
    }
-   const prepared=await prepare(id,body);
-   if("error" in prepared){res.status(400).json({error:prepared.error});return;}
-   const admitted=await chat.admit(id,body,4,{threadId:body.conversationId,turnId:body.turnId,fingerprint});
+   const body=await bindAgUiResume(tasks,decoded.body,resume);
+   const prepared=resume?.status==="cancelled"?{kind:"research" as const}:await prepare(id,body);
+   if(resume?.status==="cancelled"){const issue=await validateTurnStructure(tasks,body);if(issue)throw new AgUiInputError(issue);}
+
+   if("error" in prepared){res.status(resume?409:400).json({error:prepared.error});return;}
+   const admitted=await chat.admit(id,body,4,{threadId:body.conversationId,turnId:body.turnId,fingerprint,...(resume?{resume}:{})});
    if(!admitted){res.status(429).set("Retry-After","2").json({error:"前台正在处理其他运行。"});return;}
    if(!admitted.started){res.status(409).set("Location","/api/tasks/"+id).json({error:"该运行已受理，请只读原状态与归档。",code:"RUN_ALREADY_ACCEPTED"});return;}
-   start(id,prepared,authorizedFlashApi(body.config));await stream(id,res);
+   if(resume?.status==="cancelled")await tasks.finish(id,"cancelled",{error:"研究者明确放弃原追问。",code:"cancelled"});
+   else start(id,prepared,authorizedFlashApi(body.config));
+   await stream(id,res);
   }catch(error){
    if(res.headersSent){res.destroy();return;}
    if(error instanceof AgUiInputError){res.status(error.status).json({error:error.message});return;}
