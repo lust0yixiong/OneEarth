@@ -31,7 +31,7 @@ const baseContext=()=>({filters:emptyFilters(),caseId:null,selection:null,citati
 const view=()=>({version:1,surface:"earth",activeLayer:{id:"forest",title:"已发布日期",status:"ready",controls:[{id:"time",label:"日期",current:{id:"2020-01-01",label:"2020-01-01"},options:[{id:"2020-01-01",label:"2020-01-01"}],ordered:true,publication:{kind:"forest-frames",revision,total:2}}]}});
 
 test("native workspace tool uses the original HTTP/PG ending, authentic receipts, and atomic all-thread tool results",{skip:!fixture,timeout:35000},async t=>{
- assert.ok(fixture);assert.match(new URL(fixture).pathname,/native_agui.*map/);
+ assert.ok(fixture);assert.match(new URL(fixture).pathname,/native_agui.*(?:map|progress)/);
  const old={runtime:process.env.ONEEARTH_RUNTIME_DATABASE_URL,path:process.env.PATH,spatial:process.env.ONEEARTH_SPATIAL_URL};process.env.ONEEARTH_RUNTIME_DATABASE_URL=fixture;
  const dir=await mkdtemp(path.join(tmpdir(),"oe-native-map-")),mode=path.join(dir,"plan.json"),log=path.join(dir,"calls"),stdin=path.join(dir,"stdin");
  await writeFile(mode,JSON.stringify({decide:{kind:"workspace",action}}));

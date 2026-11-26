@@ -1,4 +1,4 @@
-import {finishAgUi} from "./ag-ui-persistence";
+import {finishAgUi,projectAgUiProgress} from "./ag-ui-persistence";
 import type {RuntimePhase,RemoteStop} from "../src/domain/runtime-status";
 import {randomUUID} from "node:crypto";
 import {runtimeTaskLease,runtimeTaskLeaseMs,runtimeStepConcurrency,type RuntimeTaskLease} from "./runtime-task-lease";
@@ -86,6 +86,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   async function write(db:PoolClient,id:string,payload:Payload,at=Date.now()){
     const saved=await db.query(`INSERT INTO ${events}(id,at,payload) VALUES ($1,$2,$3::jsonb) RETURNING seq`,
       [id,at,JSON.stringify(payload)]);
+    if(namespace==="runtime")await projectAgUiProgress(db,id,payload);
     if(namespace==="discovery"&&payload.finding){
       await db.query("INSERT INTO discovery_findings(task_id,seq,finding) VALUES ($1,$2,$3::jsonb)",
         [id,saved.rows[0].seq,JSON.stringify(payload.finding)]);
@@ -306,8 +307,10 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
               await db.query("UPDATE runtime_steps SET wake_at=LEAST(coalesce(wake_at,$2),$2) WHERE id=$1",[item.id,Date.now()]);
               await write(db,item.id,{stepRecovered:true,runtimePhase:{phase:"resuming"}});
             }else{
-              await db.query("UPDATE runtime_tasks SET status='failed',updated=$2,lease_owner=NULL,lease_until=NULL WHERE id=$1",[item.id,Date.now()]);
-              await write(db,item.id,{error:"后台进程中断，原执行结果不确定；未重复启动。",code:"worker_interrupted",runtimePhase:{phase:"failed"}});
+              const now=Date.now(),payload={error:"后台进程中断，原执行结果不确定；未重复启动。",code:"worker_interrupted",runtimePhase:{phase:"failed"}};
+              await db.query("UPDATE runtime_tasks SET status='failed',updated=$2,lease_owner=NULL,lease_until=NULL WHERE id=$1",[item.id,now]);
+              await finishAgUi(db,item.id,"failed",payload);
+              await write(db,item.id,payload,now);
             }
           }
         });firstRecovery=false;return;
