@@ -22,7 +22,7 @@ const workspaceFields = [
   "previewNeed", "previewCaseId", "visualizeNeed", "previewKind", "clearSelection", "selectCenter",
 ] as const satisfies readonly (keyof DiscoveryResponse)[];
 
-function workspaceReply(id: string, payload: Payload): Payload {
+export function workspaceReply(id: string, payload: Payload): Payload {
   const result = payload.result as DiscoveryResponse | undefined;
   if (payload.error || !result || result.clarification || result.clarificationPrompt || result.questionCheck) return payload;
   const fields = workspaceFields.filter(field => result[field] !== undefined);

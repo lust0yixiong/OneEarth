@@ -1,3 +1,4 @@
+import {authorizedFlashApi} from "./flash-api";
 import {authorizeObservationDigest} from "./observation-execution";
 import type {PinnedObservationMaterial} from "./observation-artifacts";
 import {hasObservationCheck, prepareObservationInput} from "./runtime-observation";
@@ -37,7 +38,7 @@ async function originalChatQuestion(tasks:TaskStore,first:RuntimeTurnInput) {
 }
 
 export async function prepareRuntimeChat(services: RuntimeServices, id: string, input: unknown,
-  latestCompleted: (conversationId: string) => Promise<string | undefined>): Promise<ChatPreparation> {
+  latestCompleted: (conversationId: string) => Promise<string | undefined>,mode:{publicAnswer?:true}={}): Promise<ChatPreparation> {
   const {tasks} = services;
   const issue = await validateTurnStructure(tasks, input);
   if (issue) return {error: issue};
@@ -103,7 +104,7 @@ export async function prepareRuntimeChat(services: RuntimeServices, id: string, 
         observationAvailable: modelMaterials.length > 0,
         observationMaterials: modelMaterials.length ? modelMaterials : undefined,
         observationUnavailable: unavailable,
-        pending,turnContext,conversationHistory,
+        pending,turnContext,conversationHistory,...(mode.publicAnswer&&authorizedFlashApi(original.config)?{publicAnswer:true as const}:{}),
       });
       if (outcome.kind === "reply") return outcome;
       const selectedObservation = outcome.checkpoint.plan.observationUse === "selected";

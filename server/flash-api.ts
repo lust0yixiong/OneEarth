@@ -9,7 +9,7 @@ import type {ChatModel} from "../src/domain/chat-model";
 
 export function authorizedFlashApi(config:ChatModel){return config.model==="deepseek-flash"&&(config.provider==="deepseek"||config.provider==="custom"&&config.endpoint==="https://api.deepseek.com");}
 /** One HTTPS request, no CLI, provider tool, automatic retry, or fallback. */
-export async function runFlashApi(prompt:string,key:string,signal:AbortSignal,options:{transport?:typeof https.request;reasoning?:ProviderReasoningSink;schema?:Record<string,unknown>}={}){
+export async function runFlashApi(prompt:string,key:string,signal:AbortSignal,options:{transport?:typeof https.request;reasoning?:ProviderReasoningSink;schema?:Record<string,unknown>;onOutputDelta?:(delta:string)=>void}={}){
  signal.throwIfAborted();prompt=modelSafeText(prompt);assertModelContextSafe(prompt);
  if(options.schema)assertModelContextSafe(JSON.stringify(options.schema));
  if(!key)throw Error("The authorized model service is unavailable.");
@@ -39,6 +39,8 @@ export async function runFlashApi(prompt:string,key:string,signal:AbortSignal,op
      if(typeof event.item_id!=="string"||!Number.isSafeInteger(event.output_index)||event.output_index<0||!Number.isSafeInteger(event.content_index)||event.content_index<0||typeof (event.type.endsWith(".delta")?event.delta:event.text)!=="string")throw fail("schema");
      const id=event.output_index+":"+event.item_id+":"+event.content_index,old=outputs.get(id)||"",value=event.type.endsWith(".delta")?old+event.delta:event.text;
      if(typeof value!=="string"||event.type.endsWith(".done")&&!value.startsWith(old))throw fail("schema");
+     if(options.onOutputDelta&&outputs.size&&!outputs.has(id))throw fail("schema");
+     if(options.onOutputDelta&&value.length>old.length)options.onOutputDelta(value.slice(old.length));
      size+=value.length-old.length;if(size>150000)throw fail("output-limit");outputs.set(id,value);
     }else if(event.type==="response.completed"){
      if(event.response?.status&&event.response.status!=="completed")throw fail("unknown");
@@ -46,7 +48,7 @@ export async function runFlashApi(prompt:string,key:string,signal:AbortSignal,op
       for(const [i,item] of (event.response?.output||[]).entries()){
        if(item.type!=="message")continue;
        const text=(item.content||[]).filter((part:any)=>part.type==="output_text").map((part:any)=>part.text).join("");
-       if(typeof text!=="string")throw fail("schema");size+=text.length;if(size>150000)throw fail("output-limit");outputs.set(String(i),text);
+       if(typeof text!=="string")throw fail("schema");size+=text.length;if(size>150000)throw fail("output-limit");outputs.set(String(i),text);if(options.onOutputDelta)options.onOutputDelta(text);
       }
      }
      completed=true;
@@ -64,7 +66,7 @@ export async function runFlashApi(prompt:string,key:string,signal:AbortSignal,op
    response.on("end",()=>{
     if(deadline.aborted){reject(fail(signal.aborted?"aborted":"timeout"));return;}
     if(!completed||!outputs.size){reject(fail("network"));return;}
-    const text=modelSafeText([...outputs.values()].join("\n")).trim();
+    const joined=[...outputs.values()].join("\n"),text=options.onOutputDelta?joined:modelSafeText(joined).trim();
     try{assertModelContextSafe(text);if(!text)throw fail("schema");resolve(text);}catch(error){reject(error);}
    });
   });

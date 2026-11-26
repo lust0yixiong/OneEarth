@@ -92,7 +92,7 @@ app.get("/api/health", (_req, res) =>
     spatialDataReady: existsSync(path.join(dataDir, "s2-data/manifest.json")),
   }),
 );
-app.use(["/api/chat","/api/models"],(req,res,next)=>{
+app.use("/api/models",(req,res,next)=>{
   if (req.method==="POST" && !req.is("application/json")) {
     res.status(403).json({error:"请通过 OneEarth 页面提交模型请求。"}); return;
   }

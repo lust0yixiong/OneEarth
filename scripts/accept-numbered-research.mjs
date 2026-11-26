@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
-import {setTimeout as wait} from "node:timers/promises";
 import {chromium} from "playwright-core";
+import {isNativeChatSubmission,nativeChatSubmission,readNativeChatRecord} from "./read-native-chat.mjs";
 
 const origin=new URL(process.env.ONEEARTH_URL||"http://127.0.0.1:5474");
 assert.notEqual(origin.port,"5174");
@@ -37,51 +37,42 @@ try{
       await page.goto(new URL("/?research="+parent,origin).href);
       await page.locator(".message.assistant").first().waitFor({timeout:30000});
       await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(question);
-      const next=page.waitForRequest(request=>request.method()==="POST"&&["/api/chat/messages","/api/tasks"].includes(new URL(request.url()).pathname));
+      const next=page.waitForRequest(isNativeChatSubmission);
       await page.getByLabel("发送消息",{exact:true}).click();
-      const {id,input:{previousTaskId}}=(await next).postDataJSON();
+      const input=nativeChatSubmission(await next),id=input.runId;
+      const {previousTaskId}=input.forwardedProps.oneearth.submission;
       assert.equal(previousTaskId,parent);
+      assert.equal(input.threadId,previous.conversationId);
       console.log(JSON.stringify({kind,taskId:id,previousTaskId}));
-      const route="/api/tasks/"+id;
-      let accepted=false;
-      for(let n=0;n<50;n++){
-        const res=await get(route);
-        if(res.ok){accepted=true;break;}
-        assert.equal(res.status,404);
-        await wait(100);
-      }
-      assert.ok(accepted);
-      const stream=await get(route+"/events",420000);
-      assert.ok(stream.ok);
-      const events=(await stream.text()).split("\n").filter(Boolean).map(JSON.parse);
-      const terminal=events.at(-1),traces=terminal.result?.runTrace||terminal.runTrace;
-      const calls=events.filter(e=>e.call).map(e=>({seq:e.seq,...e.call}));
+      const {state,record}=await readNativeChatRecord(origin,input,{timeout:420000});
+      const answer=record?.result,traces=answer?.runTrace;
+      const calls=(traces?.calls??[]).map((call,index)=>({...call,order:index+1}));
       const parsed=(value)=>{try{return JSON.parse(value);}catch{return undefined;}};
       const ordinal=calls.find(c=>c.id==="citation-ordinal"&&c.status==="done");
       const plan=calls.find(c=>c.id==="turn-action"&&c.status==="done");
       const modelDecision=parsed(plan?.output);
-      const reads=calls.filter(c=>/^(read-target|research-read)-/.test(c.id)).map(c=>({id:c.id,seq:c.seq,status:c.status,source:publicAddress(c.input),hits:parsed(c.output)?.hits||0}));
-      const discoveries=calls.filter(c=>c.name==="独立数据发现服务").map(c=>({seq:c.seq,id:c.id,status:c.status,
+      const reads=calls.filter(c=>/^(read-target|research-read)-/.test(c.id)).map(c=>({id:c.id,order:c.order,status:c.status,source:publicAddress(c.input),hits:parsed(c.output)?.hits||0}));
+      const discoveries=calls.filter(c=>c.name==="独立数据发现服务").map(c=>({order:c.order,id:c.id,status:c.status,
         discoveryId:parsed(c.output)?.discoveryId,channels:parsed(c.output)?.channels}));
-      const references=terminal.result?.answerNotes?.references?.map(item=>item.kind==="asset"?{channel:item.sourceChannel,id:item.id}:
+      const references=answer?.answerNotes?.references?.map(item=>item.kind==="asset"?{channel:item.sourceChannel,id:item.id}:
         {channel:item.sourceChannel,url:publicAddress(item.url)});
       const data={kind,question,version:health.version,taskId:id,previousTaskId,
         originalCitation:publicAddress(ref.url),originalExcerptTruncated:priorRead.excerptTruncated,
-        binding:{seq:ordinal?.seq,sourceId:publicAddress(parsed(ordinal?.output)?.sourceId)},
-        decision:{seq:plan?.seq,action:modelDecision?.action,reason:modelDecision?.reason,
+        binding:{order:ordinal?.order,sourceId:publicAddress(parsed(ordinal?.output)?.sourceId)},
+        decision:{order:plan?.order,action:modelDecision?.action,reason:modelDecision?.reason,
           restoredNumberedTarget:modelDecision?.restoredNumberedTarget===true,
           targets:modelDecision?.targets?.map(({key,url,basis})=>({key:publicAddress(url)||key,basis})),},
-        reads,discoveries,references,terminal:terminal.result?"complete":terminal.code||"failed",
+        reads,discoveries,references,terminal:state.status,
         executor:traces?.timings?.map(({model,executor,elapsedMs})=>({model,executor,elapsedMs})),
         followOn:traces?.calls?.filter(c=>c.id.startsWith("research-decision-")).map(c=>({status:c.status,action:parsed(c.output)?.action})),
-        durationMs:terminal.at-events[0].at,prototypeRequests:prototypeRequests.length};
+        durationMs:state.updated-state.created,prototypeRequests:prototypeRequests.length};
       await writeFile(folder+"/"+kind+".json",JSON.stringify(data,null,2)+"\n");
       console.log(JSON.stringify({kind,taskId:id,action:data.decision.action,terminal:data.terminal,reads:reads.filter(r=>r.status!=="running"),references}));
       assert.equal(data.terminal,"complete");
       assert.ok(!traces.calls.some(c=>c.id==="answer-generation"&&c.status==="failed"));
       assert.equal(data.binding.sourceId,publicAddress(ref.url));
       assert.equal(data.decision.action,kind);
-      assert.ok(data.binding.seq<data.decision.seq);
+      assert.ok(data.binding.order<data.decision.order);
       assert.ok(data.decision.targets.some(item=>item.basis==="numbered"&&item.key===publicAddress(ref.url)));
       assert.ok(data.executor.length>=2);
       assert.ok(references?.length);
@@ -92,10 +83,10 @@ try{
         assert.ok(references.some(item=>item.url===publicAddress(ref.url)));
       }else if(kind==="read"){
         assert.equal(discoveries.length,0);
-        assert.ok(reads.some(r=>r.seq>data.decision.seq&&r.status==="done"&&r.hits>0&&r.source===publicAddress(ref.url)));
+        assert.ok(reads.some(r=>r.order>data.decision.order&&r.status==="done"&&r.hits>0&&r.source===publicAddress(ref.url)));
         assert.ok(references.some(item=>item.url===publicAddress(ref.url)));
       }else{
-        assert.ok(discoveries.some(c=>c.seq>data.decision.seq&&c.status==="done"&&c.channels.some(channel=>channel.count>0)));
+        assert.ok(discoveries.some(c=>c.order>data.decision.order&&c.status==="done"&&c.channels.some(channel=>channel.count>0)));
         assert.ok(references.some(item=>item.id||item.url!==publicAddress(ref.url)));
       }
       await page.locator(".message.assistant").nth(1).waitFor({timeout:30000});

@@ -15,7 +15,7 @@ import { sourcesFor } from "../domain/answer-sources";
 import { literatureDisplay } from "../domain/literature-label";
 import { useCatalogRevision } from "./use-catalog-revision";
 import { sceneDocument } from "../domain/earth-search";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import {
   ArrowUp,
   ArrowUpRight,
@@ -48,19 +48,27 @@ import { NeedList } from "./NeedList";
 import { ChatResizeHandles, type ChatLayout } from "./ChatBoundary";
 import {reloadChatHome,useChatHome} from "./use-chat-home";
 
+function isAtChatBottom(viewport:HTMLDivElement) {
+  return viewport.scrollHeight-viewport.clientHeight-viewport.scrollTop<=2;
+}
+
+function chatScrollPosition(viewport:HTMLDivElement) {
+  return {top:viewport.scrollTop,height:viewport.scrollHeight,viewportHeight:viewport.clientHeight};
+}
+
 function hasCoverageRecord(message: Message, question?: Message) {
   return !message.failed && !message.questionCheck && !message.clarification &&
     (message.gridCoverage !== undefined || !!question?.attachedScope?.some(item=>item.kind==="grid") ||
       !!message.runTrace?.calls?.some(call=>call.id==="question-grid"));
 }
 
-function AnswerAuthor({message}:{message:Message}) {
-  const intent=message.researchIntent ?? message.candidates?.researchRecord?.intent;
+function AnswerAuthor({message}:{message?:Message}) {
+  const intent=message?.researchIntent ?? message?.candidates?.researchRecord?.intent;
   const region=intent?.region?.trim() || "未指定地区";
   const time=(intent?.time?.trim() || "未指定时间")
     .replace(/^(\d{4})\s*年?\s*[—–\-~～至到]\s*(\d{4})\s*年?$/, "$1年-$2年");
   return <><img className="chat-author-mark" src="/brand/OneEarth-wordmark-black-red.svg" alt="OneEarth" />
-    <span className="chat-answer-scope" aria-label="本轮研究范围" title={region+" / "+time}><span aria-hidden="true">·</span><span aria-label="空间位置">{region}</span><span aria-hidden="true">/</span><span aria-label="时间范围">{time}</span></span>
+    {message && <span className="chat-answer-scope" aria-label="本轮研究范围" title={region+" / "+time}><span aria-hidden="true">·</span><span aria-label="空间位置">{region}</span><span aria-hidden="true">/</span><span aria-label="时间范围">{time}</span></span>}
   </>;
 }
 
@@ -233,10 +241,15 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     return byAnswer;
   },[s.messages]);
   const [text, setText] = useState("");
+  const scrollViewport = useRef<HTMLDivElement>(null);
+  const scrollContent = useRef<HTMLDivElement>(null);
   const conversation = useRef<HTMLDivElement>(null);
+  const follow = useRef(true);
+  const lastScroll = useRef<ReturnType<typeof chatScrollPosition> | undefined>(undefined);
   const locateQuestion=useCallback((id:string)=>{
     const question=document.getElementById("message-"+id);
     if(!question || !conversation.current?.contains(question))return;
+    follow.current=false;
     question.scrollIntoView({block:"center",behavior:"instant"});
     question.focus({preventScroll:true});
   },[]);
@@ -297,16 +310,27 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     if (!await switchSession(id)) return;
     setText("");
     setHistoryOpen(false);
-    input.current?.focus();
+    input.current?.focus({preventScroll:true});
   }
   useEffect(()=>{if(s.draftScope?.length && s.chatOpen)input.current?.focus({preventScroll:true});},[s.draftScope,s.chatOpen]);
   const c = caseById(s.caseId);
-  useEffect(() => {
-    const latest = conversation.current?.lastElementChild;
-    if (latest && s.messages.length)
-      latest.scrollIntoView({ block: "start", behavior: "instant" });
-    else conversation.current?.closest(".chat-scroll")?.scrollTo(0, 0);
-  }, [s.messages.length, s.activeChats.length]);
+  useLayoutEffect(() => {
+    const viewport=scrollViewport.current,content=scrollContent.current;
+    if(!viewport || !content)return;
+    follow.current=true;
+    viewport.dataset.following="true";
+    lastScroll.current=undefined;
+    const update=()=>{
+      if(!viewport.clientHeight)return;
+      if(follow.current)viewport.scrollTop=viewport.scrollHeight;
+      lastScroll.current=chatScrollPosition(viewport);
+    };
+    update();
+    const observer=new ResizeObserver(update);
+    observer.observe(viewport);
+    observer.observe(content);
+    return ()=>observer.disconnect();
+  },[s.chatOpen,s.sessionId]);
   const regionsByQuestion=useMemo(()=>{
     const regions=new Map(s.messages.flatMap(m=>m.replyTo && m.researchRegion?[[m.replyTo,m.researchRegion] as const]:[]));
     if(s.researchRegion)regions.set(s.researchRegion.messageId,s.researchRegion.region);
@@ -462,6 +486,38 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
             </article>
           );}),[chatMessages,s.messages,recoverableClarifications,s.unansweredQuestionId,s.activeChats,s.camera,s.gridSystem,historyIds,questions,patch,confirmQuestion,attachScope,retry,inspectAsset,answerReady,regionsByQuestion,flyToResearchRegion,locateQuestion,replyTargets,openClarification,activeClarification,closeClarification]);
   if (!s.chatOpen) return null;
+  const topLevel:ReactElement[]=[];
+  // A live reply and its archived result share a key and a position below their original question.
+  const replies=new Map<string,ReactElement[]>(chatMessages.filter(m=>m.role==="user").map(m=>[m.id,[]]));
+  const append=(row:ReactElement,replyTo?:string)=>(replies.get(replyTo ?? "") ?? topLevel).push(row);
+  const activeIds=new Set(s.activeChats.map(chat=>chat.id));
+  for(const [i,message] of chatMessages.entries()){
+    if(message.failed && activeIds.has(message.id))continue;
+    append(renderedMessages[i],message.role==="assistant"?message.replyTo:undefined);
+  }
+  const settledIds=new Set(s.messages.filter(message=>!message.failed).map(message=>message.id));
+  for(const chat of s.activeChats){
+    if(settledIds.has(chat.id))continue;
+    const question=s.messages.find(message=>message.id===chat.userMessageId);
+    append(<article className="message chat-reply-pending" id={"message-"+chat.id} key={chat.id}
+      data-chat-id={chat.id} data-chat-phase={chat.phase} data-runtime-phase={chat.taskLifecycle?.runtimePhase?.phase} data-reply-to={chat.userMessageId}>
+      <small className="answer-author"><AnswerAuthor/></small>
+      <ChatTaskStatus lifecycle={chat.taskLifecycle} active/>
+      <div className="live-search pending" role="status">
+        {question && <button type="button" className="activity-link" onClick={()=>locateQuestion(question.id)}
+          aria-controls={"message-"+question.id}>{chat.phase==="research" ? "研究" : "回复"} · {question.text}</button>}
+        <RunDetails working trace={chat.trace} stage={chat.stage} runs={chat.searches}
+          openFinding={id=>void loadRemoteAssetIds([id]).then(()=>inspectAsset(id,chat.scope.filters,chat.scope.selection)).catch(()=>patch({error:"暂时无法打开这条线索。"}))}/>
+        {chat.accepted && <button type="button" className="activity-link" disabled={chat.cancelling}
+          onClick={()=>void cancelChat(chat.id)}>{chat.cancelling?"正在取消本轮":"取消本轮"}</button>}
+        {chat.cancelError && <p role="alert">{chat.cancelError}</p>}
+      </div>
+      {chat.draftText && <div className="chat-stream-draft" data-stream-message-id={chat.id} aria-live="off">
+        {chat.draftText.split(/(\n{2,})/).map((part,index)=>index%2 ? part : part && <p key={index}>{part}</p>)}
+      </div>}
+    </article>,chat.userMessageId);
+  }
+  const transcript=topLevel.flatMap(row=>[row,...(replies.get(String(row.key)) ?? [])]);
   const examples =
     c?.id === "wind"
       ? ["切换到 250 hPa 高空风", "查看风场原网格内容"]
@@ -527,60 +583,70 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
           ))}
         </section>
       )}
-      <div className="chat-scroll" onClick={previewWeb}>
-        {!s.messages.length && <div className="chat-greeting">
-          <h2>{c ? c.title : "你想研究什么问题？"}</h2>
-          <p>
-            {c
-              ? "讨论本题的数据、方法与依据，也可继续限定区域和时段。"
-              : "可以讨论数据的含义、差异与关系，也可以查找资料或在地球上查看。"}
-          </p>
-        </div>}
-        {s.messages.length === 0 && !c && (
-          <div className="suggested-queries">
-            {(home.config?.questions || []).map(question=><button key={question} onClick={() => send(question)}>
-              <span>{question}</span>
-              <ArrowUpRight size={14} aria-hidden="true" />
-            </button>)}
-            {!home.config && <p className="suggested-queries-status" role={home.error?"alert":"status"}>
-              {home.error?"首页问题暂时无法读取。":"正在读取首页问题…"}
-              {home.error && <button type="button" onClick={()=>void reloadChatHome()}>重试</button>}
-            </p>}
+      <div className="chat-scroll" ref={scrollViewport} onClick={previewWeb} onWheel={event=>{
+        const viewport=event.currentTarget;
+        if(!follow.current || event.deltaY>=0 || viewport.scrollTop<=0 || event.ctrlKey)return;
+        // A nested progress log consumes its own scroll first.
+        let target=event.target instanceof Element ? event.target : null;
+        while(target && target!==viewport){
+          if(target.scrollTop>0 && /^(auto|scroll)$/.test(getComputedStyle(target).overflowY))return;
+          target=target.parentElement;
+        }
+        follow.current=false;
+        viewport.dataset.following="false";
+      }} onScroll={event=>{
+        const viewport=event.currentTarget;
+        const previous=lastScroll.current;
+        const next=chatScrollPosition(viewport);
+        if(isAtChatBottom(viewport))follow.current=true;
+        // Draft replacement and the sources row can resize the scroller in
+        // separate commits. Clamping during those commits is not user input.
+        else if(previous && previous.height===next.height && previous.viewportHeight===next.viewportHeight &&
+          next.top<previous.top-1)follow.current=false;
+        viewport.dataset.following=String(follow.current);
+        lastScroll.current=next;
+      }}>
+        <div className="chat-scroll-content" ref={scrollContent}>
+          {!s.messages.length && <div className="chat-greeting">
+            <h2>{c ? c.title : "你想研究什么问题？"}</h2>
+            <p>
+              {c
+                ? "讨论本题的数据、方法与依据，也可继续限定区域和时段。"
+                : "可以讨论数据的含义、差异与关系，也可以查找资料或在地球上查看。"}
+            </p>
+          </div>}
+          {s.messages.length === 0 && !c && (
+            <div className="suggested-queries">
+              {(home.config?.questions || []).map(question=><button key={question} onClick={() => send(question)}>
+                <span>{question}</span>
+                <ArrowUpRight size={14} aria-hidden="true" />
+              </button>)}
+              {!home.config && <p className="suggested-queries-status" role={home.error?"alert":"status"}>
+                {home.error?"首页问题暂时无法读取。":"正在读取首页问题…"}
+                {home.error && <button type="button" onClick={()=>void reloadChatHome()}>重试</button>}
+              </p>}
+            </div>
+          )}
+          <div
+            ref={conversation}
+            className="messages"
+            role="log"
+            aria-live="polite"
+          >
+            {transcript}
           </div>
-        )}
-        <div
-          ref={conversation}
-          className="messages"
-          role="log"
-          aria-live="polite"
-        >
-          {renderedMessages}
+          <NeedList />
+          {c && (
+            <div className="followup-suggestions">
+              {examples.map((q) => (
+                <button key={q} disabled={s.attachingMapScope} onClick={() => send(q)}>
+                  {q}
+                  <ArrowUpRight size={12} />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-        {s.activeChats.map(chat=>{
-          const question=s.messages.find(message=>message.id===chat.userMessageId);
-          return <div className="live-search pending" role="status" key={chat.id}
-              data-chat-id={chat.id} data-chat-phase={chat.phase} data-runtime-phase={chat.taskLifecycle?.runtimePhase?.phase} data-reply-to={chat.userMessageId}>
-            {question && <button type="button" className="activity-link" onClick={()=>locateQuestion(question.id)}
-              aria-controls={"message-"+question.id}>{chat.phase==="research" ? "研究" : "回复"} · {question.text}</button>}
-            <ChatTaskStatus lifecycle={chat.taskLifecycle} active/>
-            <RunDetails working trace={chat.trace} stage={chat.stage} runs={chat.searches}
-              openFinding={id=>void loadRemoteAssetIds([id]).then(()=>inspectAsset(id,chat.scope.filters,chat.scope.selection)).catch(()=>patch({error:"暂时无法打开这条线索。"}))}/>
-            {chat.accepted && <button type="button" className="activity-link" disabled={chat.cancelling}
-              onClick={()=>void cancelChat(chat.id)}>{chat.cancelling?"正在取消本轮":"取消本轮"}</button>}
-            {chat.cancelError && <p role="alert">{chat.cancelError}</p>}
-          </div>;
-        })}
-        <NeedList />
-        {c && (
-          <div className="followup-suggestions">
-            {examples.map((q) => (
-              <button key={q} disabled={s.attachingMapScope} onClick={() => send(q)}>
-                {q}
-                <ArrowUpRight size={12} />
-              </button>
-            ))}
-          </div>
-        )}
       </div>
       <div className="chat-compose">
         {s.sessionError && <p className="session-storage-error" role="alert">{s.sessionError} <button onClick={() => void retrySessionSave()}>重试保存会话</button></p>}

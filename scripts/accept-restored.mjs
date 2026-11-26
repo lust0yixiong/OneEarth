@@ -10,9 +10,10 @@ assert.ok(firstId && followId);
 const evidence=process.env.ONEEARTH_EVIDENCE_DIR || "evidence/a4-restore";
 await mkdir(evidence,{recursive:true});
 async function restored(id){
-  const res=await fetch(new URL("/api/tasks/"+id+"/events",base));
+  const res=await fetch(new URL("/api/tasks/"+id+"/record",base));
   assert.ok(res.ok);
-  const done=(await res.text()).split("\n").filter(line=>line.trim()).map(JSON.parse).at(-1);
+  const done=await res.json();
+  assert.equal(done.id,id);
   assert.ok(done.result);
   return done.result;
 }

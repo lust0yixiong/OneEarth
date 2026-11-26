@@ -4,31 +4,9 @@ import {validBrowserWorkspaceReceipt,type BrowserWorkspaceReceipt,type Workspace
 import {createClarificationPrompt,validClarificationPrompt} from "./clarification";
 
 export const chatMessagesPath = "/api/chat/messages";
-export async function submitChatTask(id:string,body:string,signal:AbortSignal,legacy=false) {
-  const created=await fetch(legacy ? "/api/tasks" : chatMessagesPath,{
-    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id,input:JSON.parse(body)}),signal,
-  });
-  if(created.status===202){
-    const receipt=await created.json();
-    if(receipt?.id===id)return;
-  }
-  if(created.ok)throw Error("暂未核实本轮是否受理。");
-  return chatTransportResponse(created);
-}
-
-export async function openTaskEvents(id:string,after:number,signal:AbortSignal) {
-  const response=await fetch("/api/tasks/"+encodeURIComponent(id)+"/events?after="+after,{signal,cache:"no-store"});
-  return chatTransportResponse(response);
-}
-
-function chatTransportResponse(response:Response) {
-  if (response.status===408 || response.status===429 || response.status>=500)
-    throw Error("连接暂不可用，可接回本轮请求。");
-  return response;
-}
 
 export async function cancelChatRequest(id:string,signal:AbortSignal) {
-  const response=await fetch("/api/tasks/"+encodeURIComponent(id),{method:"DELETE",signal});
+  const response=await fetch("/api/tasks/"+encodeURIComponent(id),{method:"DELETE",signal,redirect:"error"});
   if (response.status!==204 && response.status!==409) throw Error("暂时无法取消本轮，请重试。");
   return response.status===204;
 }
@@ -90,9 +68,11 @@ interface ResearchRecord {
   taskLifecycle?:TaskLifecycle;
 }
 
-export async function loadResearchRecord(id:string):Promise<ResearchRecord>{
+export async function loadResearchRecord(id:string,signal?:AbortSignal):Promise<ResearchRecord>{
   if(!researchRecordId.test(id))throw Error("研究记录编号无效。");
-  const response=await fetch("/api/tasks/"+id+"/record",{cache:"no-store",signal:AbortSignal.timeout(10000)});
+  const timeout=AbortSignal.timeout(10000);
+  const response=await fetch("/api/tasks/"+id+"/record",{cache:"no-store",redirect:"error",
+    signal:signal ? AbortSignal.any([signal,timeout]) : timeout});
   if(!response.ok)throw Error("没有找到已完成的研究记录。");
   const record:ResearchRecord=await response.json();
   if(record.id!==id||typeof record.question!=="string"||typeof record.conversationId!=="string"||

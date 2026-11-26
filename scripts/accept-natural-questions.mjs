@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 import { mkdir, writeFile } from "node:fs/promises";
+import {isNativeChatSubmission,nativeChatSubmission,readNativeChatRecord} from "./read-native-chat.mjs";
 
 const base = new URL(process.env.ONEEARTH_URL || "http://127.0.0.1:5474");
 assert.notEqual(base.port, "5174");
@@ -23,33 +24,31 @@ try{
       page.on("request",request=>{if(new URL(request.url()).port==="5174")calls.push(request.url());});
       await page.goto(base.href);
       await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(scenario.question);
-      const submitted=page.waitForRequest(request=>request.method()==="POST"&&["/api/chat/messages","/api/tasks"].includes(new URL(request.url()).pathname));
+      const submitted=page.waitForRequest(isNativeChatSubmission);
       const started=Date.now();
       await page.getByLabel("发送消息",{exact:true}).click();
-      const id=(await submitted).postDataJSON().id;
-      const response=await page.request.get(new URL("/api/tasks/"+id+"/events",base).href,{timeout:300000});
-      assert.ok(response.ok());
-      const events=(await response.text()).split("\n").filter(line=>line.trim()).map(JSON.parse);
-      const terminal=events.at(-1);
-      const traces=terminal.result?.runTrace || terminal.runTrace;
+      const input=nativeChatSubmission(await submitted),id=input.runId;
+      const {state,record}=await readNativeChatRecord(base,input);
+      const answer=record?.result;
+      const traces=answer?.runTrace;
       const plan=traces?.calls?.find(call=>call.id==="turn-action"&&call.status==="done");
       const action=plan ? JSON.parse(plan.output).action : undefined;
       const discoveries=traces?.calls?.filter(call=>call.name==="独立数据发现服务"&&call.status==="done").length || 0;
-      const refs=terminal.result?.answerNotes?.references || [];
-      const result={kind:scenario.kind,question:scenario.question,id,status:terminal.result?"complete":"failed",code:terminal.code,
+      const refs=answer?.answerNotes?.references || [];
+      const result={kind:scenario.kind,question:scenario.question,id,status:state.status,
         action,discoveries,proofCount:refs.length,channels:[...new Set(refs.map(ref=>ref.sourceChannel).filter(Boolean))],
         actualExecutors:(traces?.timings || []).map(t=>({executor:t.executor,model:t.model,elapsedMs:t.elapsedMs})),
         elapsedMs:Date.now()-started,prototypeRequests:calls.length};
       results.push(result);
       await writeFile(output+"/results.json",JSON.stringify({entry:base.origin,browser:browser.version(),results},null,2)+"\n");
       console.log(JSON.stringify(result));
-      assert.ok(terminal.result,scenario.kind+" 要得到答复或澄清。");
+      assert.ok(answer,scenario.kind+" 要得到答复或澄清。");
       assert.equal(action,scenario.action,scenario.kind+" 要走适当动作。");
       assert.equal(discoveries,scenario.discoveries);
       assert.ok(result.actualExecutors.length,scenario.kind+" 要经过真实执行器。");
       assert.deepEqual(calls,[]);
-      if(scenario.check)assert.match(terminal.result.message,scenario.check);
-      if(scenario.kind==="ambiguity")assert.ok(terminal.result.clarification);
+      if(scenario.check)assert.match(answer.message,scenario.check);
+      if(scenario.kind==="ambiguity")assert.ok(answer.clarification);
       if(scenario.kind==="discovery")assert.ok(refs.some(ref=>ref.sourceChannel==="assertion"||ref.sourceChannel==="web"));
       await page.locator(".message.assistant").first().waitFor();
       await page.screenshot({path:output+"/"+scenario.kind+".png"});

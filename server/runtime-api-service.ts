@@ -1,19 +1,18 @@
 import express from "express";
 import { mkdirSync } from "node:fs";
 import { resultSnapshots } from "./result-snapshots";
-import { validateTurn } from "./runtime-input";
-import { taskRoutes } from "./task-store";
+import { taskStatusRoutes } from "./task-store";
 import { postgresTaskStore } from "./postgres-task-store";
 import { runtimePaperRoutes } from "./runtime-paper-routes";
 import { queryHainaCatalog, queryPapers } from "./discovery-a2a-client";
 import { runtimeWorkbenchQueries } from "./runtime-workbench-queries";
-import { authorizeObservationDigest } from "./observation-execution";
-import { prepareObservationInput, hasObservationCheck, recoverObservationRecord } from "./runtime-observation";
-import { hasObservationResearch, prepareObservationResearch, observationMaterialsRoutes } from "./runtime-observation-authority";
+import { recoverObservationRecord } from "./runtime-observation";
+import { observationMaterialsRoutes } from "./runtime-observation-authority";
 import { recoverObservationResearchRecord } from "./runtime-observation-research";
 import { runtimeWebToolStore } from "./runtime-web-tool-store";
 import { runtimeWebToolChannel } from "./runtime-web-tool-router";
-import { runtimeChatChannel } from "./runtime-chat-channel";
+import { agUiWorkbench } from "./ag-ui-workbench";
+import { nativeAgUiPath } from "../src/domain/native-ag-ui";
 import { prepareRuntimeChat } from "./runtime-chat-turn";
 import { runtimeServices } from "./runtime-services";
 import { closeRuntimeModelCapacity } from "./runtime-model-capacity";
@@ -65,15 +64,14 @@ export async function createRuntimeApi(state: string) {
     // Coverage and feed routes own their streaming formats and body limits.
     business.use(queries.router);
     business.use("/api/results", snapshots.router);
-    business.use(["/api/paper-records", "/api/tasks", "/api/chat/messages"], express.json({limit:"256kb"}));
+    business.use(["/api/paper-records", nativeAgUiPath], express.json({limit:"256kb"}));
     business.use("/api/paper-records", runtimePaperRoutes());
     business.use(observationMaterialsRoutes());
-    const chat = await runtimeChatChannel(business, tasks, (id,input) =>
-      prepareRuntimeChat(services, id, input, tasks.chat.latestCompleted));
+    const chat = await agUiWorkbench(business, tasks, (id,input) =>
+      prepareRuntimeChat(services, id, input, tasks.chat.latestCompleted, {publicAnswer:true}));
     stopWork.push(() => chat.close());
-    taskRoutes(business, "/api/tasks", tasks, input => validateTurn(tasks,input),
-      {researchRecords:true, prepareWhen:input=>hasObservationCheck(input)||hasObservationResearch(tasks,input),
-        prepare:(id,input)=>hasObservationCheck(input)?prepareObservationInput(tasks,id,input,authorizeObservationDigest):prepareObservationResearch(tasks,id,input),
+    taskStatusRoutes(business, "/api/tasks", tasks,
+      {researchRecords:true,chatIdentity:true,
         recoverRecord:async task=>(await recoverObservationRecord(tasks,task))??recoverObservationResearchRecord(tasks,task),
         onCancelled:id=>chat.cancel(id)});
     business.use(badRequest);

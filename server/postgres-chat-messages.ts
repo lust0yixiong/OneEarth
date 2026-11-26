@@ -1,3 +1,4 @@
+import {agUiSchema,admitAgUi,appendAgUiText,finishAgUi,type AgUiAdmission} from "./ag-ui-persistence";
 import {createHash} from "node:crypto";
 import {isDeepStrictEqual} from "node:util";
 import type {Pool, PoolClient} from "pg";
@@ -61,7 +62,7 @@ export const chatSchema = `
     task_id uuid PRIMARY KEY REFERENCES runtime_chat_messages(id),
     receipt jsonb NOT NULL
   );
-`;
+` + agUiSchema;
 
 export const submissionFingerprint = (raw: string) => createHash("sha256").update(raw).digest("hex");
 
@@ -105,6 +106,7 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
     const updated = await db.query("UPDATE runtime_chat_messages SET status=$2,terminal=$3,updated=$4 WHERE id=$1 AND status='planning'",
       [id, status, payload, now]);
     if (!updated.rowCount) return false;
+    await finishAgUi(db,id,status,payload);
     await write(db, id, payload, now);
     return true;
   }
@@ -204,7 +206,7 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
         owner = client;
       } catch (error) { client.release(true); throw error; }
     },
-    async admit(id: string, body: unknown, limit: number) {
+    async admit(id: string, body: unknown, limit: number, agUi?:AgUiAdmission) {
       return transaction(async db => {
         await db.query("SELECT pg_advisory_xact_lock(7142532)");
         await lockRuntimeSubmission(db, id);
@@ -223,10 +225,16 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
         const {rows: [saved]} = await db.query<ChatRow>(`
           INSERT INTO runtime_chat_messages(id,body,fingerprint,status,created,updated)
           VALUES ($1,$2,$3,'planning',$4,$4) RETURNING ${columns}`, [id, raw, fingerprint, now]);
+        if(agUi)await admitAgUi(db,id,agUi);
         await write(db, id, {chatPhase: "foreground"}, now);
         return {task: view(saved), started: true};
       });
     },
+    async agUiEvents(id:string,after=0){return (await pool.query<{seq:string;event:Payload}>("SELECT seq,event FROM runtime_agui_events WHERE run_id=$1 AND seq>$2 ORDER BY seq LIMIT 128",[id,after])).rows.map(row=>({seq:Number(row.seq),event:row.event}));},
+    async appendAgUiText(id:string,delta:string){return transaction(async db=>{
+      if(!(await db.query("SELECT id FROM runtime_chat_messages WHERE id=$1 AND status='planning' FOR UPDATE",[id])).rowCount)return false;
+      return appendAgUiText(db,id,delta);
+    });},
     async append(id: string, event: Payload) {
       await transaction(async db => {
         const result = await db.query("SELECT id FROM runtime_chat_messages WHERE id=$1 AND status='planning' FOR UPDATE", [id]);

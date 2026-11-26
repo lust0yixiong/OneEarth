@@ -167,8 +167,8 @@
 .question-meta button {display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:24px;min-height:24px;color:inherit;}
 .question-meta button small {font-size:10px;}
 .question-meta button small:empty {display:none;}
-.messages .message.assistant {border:0;padding:0 2px 8px;margin-bottom:20px;line-height:1.65}
-.messages .message.assistant > small {color:#37634f;font-size:11px;font-weight:650;margin-bottom:5px}
+.messages .message:is(.assistant,.chat-reply-pending) {border:0;padding:0 2px 8px;margin-bottom:20px;line-height:1.65}
+.messages .message:is(.assistant,.chat-reply-pending) > small {color:#37634f;font-size:11px;font-weight:650;margin-bottom:5px}
 .answer-run {color:#5b6e64;font-size:12px;margin-bottom:12px}
 .answer-run summary {display:flex;align-items:center;gap:6px;width:fit-content;cursor:pointer;list-style:none}
 .answer-run summary::-webkit-details-marker {display:none}
@@ -211,6 +211,8 @@
 .answer-note p {font-size:13px;margin:3px 0;line-height:1.65}
 .answer-question {margin-top:12px}
 .chat-panel .chat-scroll {margin-top:39px;padding-top:3px}
+.chat-scroll[data-following="true"] {overflow-anchor:none}
+.chat-scroll-content {display:flow-root}
 .chat-panel .messages {margin-top:8px}
 .compose-bottom .web-mode {margin-left:auto;height:28px;padding:2px 5px;font-size:12px;color:#595959;border:1px solid transparent;border-radius:6px;background:transparent;max-width:104px}
 .search-steps {margin:6px 0;padding:0;list-style:none}
@@ -232,7 +234,7 @@
 .live-search {padding:8px 12px;background:#f4f7f4;border-radius:8px}
 .live-search .pending {margin:4px 0}
 .chat-author-mark {display:inline-block;width:72px;height:auto;background:#fff;vertical-align:middle}
-.messages .message.assistant > .answer-author {display:flex;align-items:center;gap:6px;min-width:0;}
+.messages .message:is(.assistant,.chat-reply-pending) > .answer-author {display:flex;align-items:center;gap:6px;min-width:0;}
 .answer-author .chat-author-mark {flex:none;}
 .chat-answer-scope {display:inline-flex;align-items:center;gap:4px;min-width:0;font-weight:400;white-space:nowrap;}
 .chat-answer-scope [aria-label="空间位置"] {min-width:0;overflow:hidden;text-overflow:ellipsis;}
@@ -490,3 +492,12 @@
 .oe-observation-source-actions {display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 12px;padding:8px 0;font-size:12px;color:#315947;}
 .oe-observation-source-actions small {flex-basis:100%;overflow-wrap:anywhere;}
 .oe-observation-source-actions button,.oe-observation-source-actions a {text-decoration:underline;}
+
+.chat-stream-draft p {
+  margin: 0 0 12px;
+  color: #203c30;
+  font-size: 14px;
+  line-height: 25px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

@@ -8,13 +8,11 @@ import {samePublishedRaster,type PublishedRasterPresentation,type PublishedRaste
 import {availableChatOperations, chatCandidateBatch, chatCandidateItems, chatCandidateKey, saveChatResearchList} from "./chat-workspace-operations";
 import {validWorkspaceOperationKind, workspaceCandidateOperationAllowed} from "./workspace-operations";
 import {projectWorkspaceView, workspaceActionState, type WorkspaceSurfaceReading, type WorkspacePanelReading} from "./workspace-view-projection";
-import {authorizesWorkspaceViewAction, workspaceViewActionAllowed, type WorkspaceViewPublication} from "./workspace-view-context";
-import { answeredClarificationIds, messageClarificationPrompt, discoveryClarificationResult, loadResearchRecord, openTaskEvents, submitChatTask, chatMessagesPath, researchRecordId, cancelChatRequest, readWorkspaceReceipt, reportWorkspaceReceipt, requestWorkspaceRecovery, isClarificationAttempt } from "./runtime-client";
+import {workspaceViewActionAllowed, type WorkspaceViewPublication} from "./workspace-view-context";
+import { answeredClarificationIds, messageClarificationPrompt, discoveryClarificationResult, loadResearchRecord, researchRecordId, cancelChatRequest, readWorkspaceReceipt, reportWorkspaceReceipt, requestWorkspaceRecovery, isClarificationAttempt } from "./runtime-client";
 import {clarificationAnswerText,validClarificationPrompt,type ClarificationAnswer} from "./clarification";
-import {datasetScope,mergeScope,scopedQuestionContext,scopeDetail,scopeLabel,type ScopeItem} from "./question-scope";
+import {datasetScope,mergeScope,scopedQuestionContext,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
-import {rememberReadEvidence} from "./read-evidence";
-import {conversationReferenceMemory,modelHistoryMessages} from "./reference-memory";
 import {researchRegionCamera,validResearchRegion,sameResearchRegion,type ResearchRegion,type ResearchRegionLayer} from "./research-region";
 import {answerMapBatch,answerFilters,initialAnswerCamera,gridCamera,evidenceCamera,evidenceSelection} from "./answer-map";
 import { globeCases,layerFrameCount,datasetLayers,isForestDate,type RegionalId } from "./regional-cases";
@@ -24,9 +22,11 @@ import {isRainYear} from "./rain-catalog";
 import { paperId } from "./paper-record";
 import { readPaperCatalogStatus, type PaperCatalogStatus } from "./paper-catalog-client";
 import { randomId } from "./id";
-import { ChatResponseError, readChatResponse, type ChatPhase } from "./chat-response";
+import { ChatResponseError, type ChatPhase } from "./chat-response";
+import {recoverNativeChat,submitNativeChat} from "./native-chat-client";
+import {nativeAgUiPath} from "./native-ag-ui";
 import {mergeTaskLifecycle,readCancelledTaskLifecycle,type TaskLifecycle} from "./task-lifecycle-client";
-import {readDeepSeekTools,loadDeepSeekTools} from "./deepseek-tools";
+import {loadDeepSeekTools} from "./deepseek-tools";
 import { readChatModel } from "./chat-model";
 import {geoBounds,geoCentroid} from "d3-geo";
 import {checkedScenes} from "./product-distribution";
@@ -37,7 +37,7 @@ import type {ClarificationReply, QuestionDecision} from "./types";
 import {validAccessSection,initialAccessSection} from "./data-access";
 import { registerHaina, registerObservations, registerPapers, loadRemoteAssetIds } from "./datasets";
 import {loadHainaCatalog,type HainaCatalogStatus} from "./haina-catalog-client";
-import { type ChatDelivery, claimWorkspaceEffect, saveChatDelivery, checkpointChatDelivery, unfinishedChatDeliveries, removeChatDelivery, legacySession, mergeMessages, readFavorites, readSession, readSessionMessage, sessionMessages, sessionSummaries, writeFavorite, writeSession } from "./session-storage";
+import { type ChatDelivery, claimWorkspaceEffect, saveChatDelivery, unfinishedChatDeliveries, removeChatDelivery, legacySession, mergeMessages, readFavorites, readSession, readSessionMessage, sessionMessages, sessionSummaries, writeFavorite, writeSession } from "./session-storage";
 import { sampleCamera } from "./earth-search";
 import { catalogResults, type SearchState } from "./results";
 import { catalogBatch } from "./batch-context";
@@ -166,6 +166,7 @@ type ActiveChat = {
   accepted?:boolean;
   cancelling?:boolean;
   cancelError?:string;
+  draftText?:string;
   trace:import("./types").RunTrace;
   searches:import("./types").SearchRun[];
 };
@@ -684,7 +685,7 @@ function useWorkspaceValue(initialState: State) {
     return {...projectWorkspaceView(s,reading),operations:[...operations.keys()],
       ...(items.length ? {candidateItems:items} : {})};
   },[]);
-  const requests = useRef(new Map<string,{controller:AbortController;progress:ActiveChat;finishCancellation:()=>Promise<void>}>());
+  const requests = useRef(new Map<string,{controller:AbortController;transport:AbortController;progress:ActiveChat;finishCancellation:()=>Promise<void>}>());
   const localBatchIds=useRef(new Map<string,string>());
   const chatRequestSnapshot=useCallback((s:State,batch:CandidateSet|null,parentId?:string)=>{
     const reading=readWorkspaceSurface();
@@ -1472,11 +1473,15 @@ function useWorkspaceValue(initialState: State) {
     update({cancelling:true,cancelError:undefined});
     try {
       const cancelled=await cancelChatRequest(id,AbortSignal.any([entry.controller.signal,AbortSignal.timeout(8000)]));
-      if (cancelled) await entry.finishCancellation();
-      else update({stage:"正在核对本轮终态"});
-    } catch (error) {
-      update({cancelling:false,cancelError:error instanceof Error ? error.message : "暂时无法取消本轮。"});
+      if (cancelled) {
+        await entry.finishCancellation();
+        return;
+      }
+      update({stage:"正在核对本轮终态"});
+    } catch {
+      update({stage:"正在核对本轮终态",cancelError:"取消结果待确认，正在读取原任务状态。"});
     }
+    entry.transport.abort();
   },[publishChatProgress]);
   const stopWatchIds=state.chatOpen ? state.messages.filter(message=>{
     const lifecycle=message.taskLifecycle;
@@ -1489,9 +1494,12 @@ function useWorkspaceValue(initialState: State) {
     const session=state.sessionId,controller=new AbortController();
     const timers=new Map<string,ReturnType<typeof setTimeout>>();
     async function check(id:string,attempt=0){
+      const turnId=latest.current.messages.find(message=>message.id===id)?.replyTo;
+      if(!turnId)return;
       let shouldCheckAgain=attempt<2;
       try{
-        const facts=await readCancelledTaskLifecycle(id,AbortSignal.any([controller.signal,AbortSignal.timeout(5_000)]));
+        const facts=await readCancelledTaskLifecycle({id,conversationId:session,turnId},
+          AbortSignal.any([controller.signal,AbortSignal.timeout(5_000)]));
         if(controller.signal.aborted || latest.current.sessionId!==session)return;
         const message=latest.current.messages.find(item=>item.id===id);
         if(!message || message.taskLifecycle?.runtimePhase?.phase!=="cancelled")return;
@@ -1599,37 +1607,14 @@ function useWorkspaceValue(initialState: State) {
       const current = latest.current;
       const until = current.messages.findIndex(m => m.id === attempt.userMessageId);
       const preceding = until < 0 ? current.messages : current.messages.slice(0,until);
-      const promptMessages=modelHistoryMessages(preceding);
-      const assistantHistory=promptMessages.filter(m=>m.role==="assistant");
-      let conversationEvidence:import("./types").ReadEvidence[]=[];
-      for(const message of assistantHistory)
-        conversationEvidence=message.conversationEvidence ?? rememberReadEvidence(conversationEvidence,message.answerNotes?.searches);
-      const latestAssistant=assistantHistory.at(-1)?.id;
-      const conversationAssertionEvidence=assistantHistory.filter(m=>m.conversationAssertionEvidence!==undefined).at(-1)?.conversationAssertionEvidence;
-      const conversationReferences=conversationReferenceMemory(promptMessages);
       const previousTaskId=attempt.context.browserTurnFrame
         ? attempt.context.browserTurnFrame.related?.find(entry=>entry.relation==="reply")?.taskId
         : previousChatAnswer(preceding)?.id;
-      const payload = {query:q, context:attempt.context, config:readChatModel(), deepseekTools:readDeepSeekTools(),
-        conversationId:current.sessionId, turnId:attempt.userMessageId,
+      const submission = {context:attempt.context,config:readChatModel(),
         previousTaskId:attempt.clarificationReply ? undefined : attempt.clarificationAnswer?.parentTaskId ?? previousTaskId,
         ...(attempt.clarificationAnswer?{clarificationAnswer:attempt.clarificationAnswer}:{}),
         ...(attempt.questionDecision?{questionDecision:attempt.questionDecision}:{}),
-        ...(attempt.clarificationReply?{clarificationReply:attempt.clarificationReply}:{}),
-        history:promptMessages.slice(-8).map(m=>{
-          const notes=m.answerNotes;
-          const text=notes?.references
-            ? m.text.replace(/〔(\d+)〕/g,(marker,n)=>notes.references?.[Number(n)-1] ? marker+"（"+notes.references[Number(n)-1].title+"）" : marker)
-            : [m.text,...(notes?.sources || []).map(source=>(assetById.get(source.id)?.title || source.id)+" "+source.reason),...(notes?.webSources || []).map(h=>h.title+" "+h.url),notes?.limitation,notes?.followUp].filter(Boolean).join("\n");
-          const attached=m.attachedScope?.filter(i=>i.kind!=="observation").map(i=>scopeLabel(i)+"（"+scopeDetail(i)+"）").join("；");
-          return {role:m.role,text:(attached?text.slice(0,950)+"\n当轮用户引用："+attached:text).slice(0,1600),
-            ...(m.role==="assistant" && m.conversationContext!==undefined?{conversationContext:m.conversationContext}:{}),
-            ...(m.role==="assistant" && m.researchIntent?{researchIntent:m.researchIntent}:{}),
-            ...(m.id===latestAssistant && (conversationEvidence.length || m.conversationEvidence!==undefined)?{conversationEvidence}:{}),
-            ...(m.id===latestAssistant && conversationAssertionEvidence!==undefined?{conversationAssertionEvidence}:{}),
-            ...(m.id===latestAssistant && conversationReferences.length?{conversationReferences}:{}),
-            ...(m.role==="assistant" ? {assetIds:[...new Set(notes?.sources.map(source=>source.id) || [])].slice(0,100)} : {})};
-        })};
+        ...(attempt.clarificationReply?{clarificationReply:attempt.clarificationReply}:{})};
       const workspaceKey=(state:State)=>attempt.context.browserTurnFrame
         ? frozenWorkspaceKey(state,readWorkspaceSurface()) : requestWorkspaceKey(state);
       const detached = retrying && workspaceKey(current) !== attempt.workspaceKey;
@@ -1639,18 +1624,16 @@ function useWorkspaceValue(initialState: State) {
         dataView: attempt.context.dataView ?? null, visualization: attempt.context.visualization ?? null,
       };
       const controller = new AbortController();
-      const delivery: ChatDelivery = saved || {id: randomId(), attempt, body: JSON.stringify(payload), route:"chat"};
+      const transport = new AbortController();
+      controller.signal.addEventListener("abort",()=>transport.abort(),{once:true});
+      const delivery: ChatDelivery = saved ?? {id: randomId(), attempt};
       const session = current.sessionId;
-      const savedAfter=delivery.acceptedAfter;
-      let accepted=typeof savedAfter==="number" && Number.isSafeInteger(savedAfter) && savedAfter>=0;
-      let after=0;
+      const run = {threadId:session,runId:delivery.id,turnId:attempt.userMessageId};
       const priorReasoning=saved && current.messages.find(message=>message.id===saved.id)?.runTrace?.providerReasoning;
-      const retiredReasoning=new Set<string>(); // Preserve evictions on a stream reconnect for this task.
-      const legacy = delivery.route !== "chat";
       const clarificationAttempt=isClarificationAttempt(attempt);
-      const entry = {controller,finishCancellation,progress:{id:delivery.id,userMessageId:attempt.userMessageId,
-        scope:{filters:attempt.context.filters,selection:attempt.context.selection},accepted,
-        stage:saved ? "正在接回本轮回答" : "正在提交问题",phase:legacy ? "research" as const : "foreground" as const,
+      const entry = {controller,transport,finishCancellation,progress:{id:delivery.id,userMessageId:attempt.userMessageId,
+        scope:{filters:attempt.context.filters,selection:attempt.context.selection},accepted:false,
+        stage:saved ? "正在读取原任务状态" : "正在提交问题",phase:"foreground" as const,
         trace:{started:Date.now(),stages:[],calls:[],...(priorReasoning?{providerReasoning:priorReasoning}:{})},
         searches:[]} as ActiveChat};
       requests.current.set(delivery.id,entry);
@@ -1666,7 +1649,7 @@ function useWorkspaceValue(initialState: State) {
         publishChatProgress();
       };
       const complete = (message:string, extra:Partial<Message>) =>
-        add("assistant",message,{taskLifecycle:entry.progress.taskLifecycle,...extra,chatMessage:!legacy});
+        add("assistant",message,{taskLifecycle:entry.progress.taskLifecycle,...extra,chatMessage:true});
       async function finishCancellation(trace?:Message["runTrace"]){
         if(!isCurrent())return;
         const taskLifecycle=mergeTaskLifecycle(entry.progress.taskLifecycle,{runtimePhase:{phase:"cancelled"}});
@@ -1745,57 +1728,39 @@ function useWorkspaceValue(initialState: State) {
           .join(" · ") || "全球视图";
       publishChatProgress();
       if (!saved) patch({error:null,chatOpen:true});
-      let lifecycleSequence=0,appliedStage="";
       try {
-        if (!saved) {
-          payload.deepseekTools = await loadDeepSeekTools(controller.signal);
-          delivery.body = JSON.stringify(payload);
-        }
-        if (!saved) await saveChatDelivery(session, delivery).catch(() => patch({sessionError:sessionFailure}));
-        async function checkpoint(seq:number){
-          if(!isCurrent())return;
-          if(!accepted){
-            accepted=true;
-            updateProgress({accepted:true});
-          }
-          after=seq;
-          if((delivery.acceptedAfter??-1)>=seq)return;
-          delivery.acceptedAfter=seq;
-          await checkpointChatDelivery(session,delivery.id,seq).catch(()=>{
-            if(isCurrent())patch({sessionError:sessionFailure});
-          });
-        }
-        const receive = async (verifyFirst=false) => {
-          let response=accepted || verifyFirst
-            ? await openTaskEvents(delivery.id,after,controller.signal) : undefined;
-          if(!response || !accepted && response.status===404){
-            const rejected=await submitChatTask(delivery.id,delivery.body,controller.signal,legacy);
-            if(rejected)return readChatResponse(rejected,()=>{});
-            await checkpoint(0);
-            response=await openTaskEvents(delivery.id,after,controller.signal);
-          }
-          if(!response.ok || !response.headers.get("content-type")?.includes("application/x-ndjson"))
-            throw Error("暂时无法接回原任务事件。");
-          if(!accepted)await checkpoint(0);
-          return readChatResponse(response, (stage, searches, trace, phase) => {
-            if(stage)appliedStage=stage;
-            if (isCurrent()) updateProgress({...(stage ? {stage} : phase==="research" ? {stage:"研究已进入队列"} : {}),
-              ...(searches ? {searches} : {}),...(trace ? {trace} : {}),...(phase ? {phase} : {})});
-          },receiveRegion,entry.progress.trace.providerReasoning,retiredReasoning,(facts,seq)=>{
-            if(!isCurrent() || seq!==undefined && seq<=lifecycleSequence)return;
-            if(seq!==undefined)lifecycleSequence=seq;
+        const progress = {
+          onAccepted:()=>{
+            if(isCurrent() && !entry.progress.accepted)updateProgress({accepted:true,stage:"正在生成回答"});
+          },
+          onDraft:(draftText:string)=>{
+            if(isCurrent())updateProgress({draftText});
+          },
+          onStep:(stage:string)=>{
+            if(isCurrent())updateProgress({stage});
+          },
+          onLifecycle:(facts:TaskLifecycle)=>{
+            if(!isCurrent())return;
             const merged=mergeTaskLifecycle(entry.progress.taskLifecycle,facts);
             if(merged!==entry.progress.taskLifecycle)updateProgress({taskLifecycle:merged});
-          },{taskId:delivery.id,after,stage:appliedStage,
-            trace:after?entry.progress.trace:undefined,checkpoint});
+          },
         };
-        let r: DiscoveryResponse;
-        try { r = await receive(!!saved); }
-        catch (error) {
-          if (!isCurrent() || error instanceof ChatResponseError) throw error;
-          updateProgress({stage:"正在重新连接本轮回答"});
-          r = await receive(true);
+        let liveResult: DiscoveryResponse | undefined;
+        if(!saved){
+          const deepseekTools=await loadDeepSeekTools(controller.signal);
+          await saveChatDelivery(session,delivery).catch(()=>{
+            patch({sessionError:sessionFailure});
+            throw new ChatResponseError("浏览器无法保存本轮编号。","local_storage_unavailable");
+          });
+          if(!isCurrent())return;
+          try {
+            liveResult=await submitNativeChat(run,q,{...submission,deepseekTools},transport,progress);
+          } catch(error) {
+            if(!transport.signal.aborted || !isCurrent())throw error;
+          }
         }
+        if(!liveResult && isCurrent() && !entry.progress.cancelling)updateProgress({stage:"正在读取原任务状态"});
+        const r=liveResult ?? await recoverNativeChat(run,controller.signal,progress);
         if (!isCurrent()) return;
         if(entry.progress.taskLifecycle?.runtimePhase?.phase==="cancelled"){
           await finishCancellation(r.runTrace);
@@ -1821,7 +1786,7 @@ function useWorkspaceValue(initialState: State) {
         }
         effect=workspaceEffectFor(r,delivery.id);
         const proposed=r.workspaceLayerOpen ?? r.workspaceAction ?? r.workspaceOperation ?? effect;
-        if(proposed && restoring){
+        if(proposed && (restoring || !liveResult)){
           const local=await readSessionMessage(session,delivery.id).catch(()=>null);
           if(local && !local.failed){
             if(local.workspaceReceipt && !("taskId" in local.workspaceReceipt))uploadReceipt(delivery.id,local.workspaceReceipt);
@@ -1888,7 +1853,7 @@ function useWorkspaceValue(initialState: State) {
           const staleTarget=!!target && validWorkspaceOperationKind(kind) && attempt.workspaceOperationKeys?.[kind]!==target.key;
           let stale=staleWorkspace() || staleTarget,applied=false;
           let message="当前工作台无法应用这项操作。";
-          if (!stale && !legacy && operation && "ids" in operation) {
+          if (!stale && operation && "ids" in operation) {
             const {ids,kind}=operation;
             const candidateKey=attempt.workspaceCandidateKey;
             stale=!!candidateKey && candidateKey!==chatCandidateKey(batch);
@@ -1916,7 +1881,7 @@ function useWorkspaceValue(initialState: State) {
                 message="当前候选资料暂时无法读取。";
               }
             }
-          } else if (!stale && target && !legacy) {
+          } else if (!stale && target) {
             try {
               if (kind==="open-saved") {
                 patch({view:"discover",search:{...emptySearch,savedOnly:true},listLibraryOpen:false,inspector:null,evidence:null});
@@ -1959,7 +1924,7 @@ function useWorkspaceValue(initialState: State) {
             !== workspaceActionState(currentView);
           const isPublishedChoice = (publication:WorkspaceViewPublication, valueId:string) =>
             !!surface?.resolvePublishedChoice?.(publication, valueId);
-          const allowed = (!legacy || authorizesWorkspaceViewAction(q)) && workspaceViewActionAllowed(original, action, isPublishedChoice)
+          const allowed = workspaceViewActionAllowed(original, action, isPublishedChoice)
             && workspaceViewActionAllowed(currentView, action, isPublishedChoice);
           const control = !stale && allowed && surface?.surface === latestState.view
             ? currentView.activeLayer?.controls.find(item => item.id === action.controlId) : undefined;
@@ -2268,7 +2233,7 @@ function useWorkspaceValue(initialState: State) {
                   {
                     title: "获得服务响应",
                     detail:
-                      "POST " + (legacy ? "/api/tasks" : chatMessagesPath) +
+                      (liveResult ? "POST " + nativeAgUiPath : "读取原任务 " + delivery.id) +
                       "\n" +
                       r.message,
                   },
@@ -2306,7 +2271,7 @@ function useWorkspaceValue(initialState: State) {
                 language: "json",
                 body: JSON.stringify(
                   {
-                    request: JSON.parse(delivery.body),
+                    request: {...run,message:q,...(liveResult ? {submission} : {})},
                     response: r,
                   },
                   null,
@@ -2337,7 +2302,11 @@ function useWorkspaceValue(initialState: State) {
           ? (keepDelivery ? "与原追问的回复暂时断开，可以重新连接。" : "这次追问的回复未能完成。")
           : error instanceof ChatResponseError && error.code==="invalid_answer_references"
             ? "这次回答的资料引用未通过核对，可按原条件重试。"
-            : "这次请求没有完成，可按此轮原始条件重试。";
+            : error instanceof ChatResponseError && error.code==="answer_prefix_mismatch"
+              ? "终稿与已收到的正文不一致，本轮未提交回答。"
+              : keepDelivery
+              ? "暂时无法读取原任务，可按本轮编号重新查询。"
+              : "这次请求没有完成，可按此轮原始条件重试。";
         await complete(message, {
           runTrace:error instanceof ChatResponseError ? error.runTrace || entry.progress.trace : entry.progress.trace,
           id:delivery.id,failed:true,...(mayRetry?{retry:attempt}:{}),replyTo:attempt.userMessageId,
@@ -2400,16 +2369,14 @@ function useWorkspaceValue(initialState: State) {
         const answer = latest.current.messages.find(m => m.id === delivery.id);
         if (answer && !answer.failed) {
           await removeChatDelivery(session, delivery.id);
-        } else if (!answer) {
+        } else {
           void executeDiscovery(delivery.attempt, true, delivery, true);
-        } else if(isClarificationAttempt(delivery.attempt)){
-          rememberClarificationDelivery(delivery.id,delivery);
         }
       }
     }
     void restore().catch(() => { if (active) patch({sessionError:sessionFailure}); });
     return () => { active = false; };
-  }, [state.sessionId, executeDiscovery, patch,rememberClarificationDelivery]);
+  }, [state.sessionId, executeDiscovery, patch]);
   const openPublicLayer = useCallback((id:PublicLayerId) => {
     const current=latest.current;
     const existing=current.globeLayers.find(layer=>layer.kind==="public"&&layer.selection.id===id);

@@ -32,7 +32,7 @@ export type TurnHistory=Array<{role:"user"|"assistant";text:string;assetIds?:str
   conversationContext?:string;conversationReferences?:AnswerReference[];conversationEvidence?:ReadEvidence[];conversationAssertionEvidence?:import("../src/domain/assertion-evidence-memory").AssertionEvidenceMemory[]}>;
 export type TurnInput={question:string;context:DiscoveryContext;history:TurnHistory;conversationContext?:string;previousResearchIntent?:ResearchIntent;confirmedQuestion?:string;
   observationUnavailable?:true;
-  observationAvailable?:true;observationMaterials?:ObservationTurnMaterial[];semanticDecision?:true;
+  observationAvailable?:true;observationMaterials?:ObservationTurnMaterial[];semanticDecision?:true;publicAnswer?:true;
   pending?:RuntimeWorkspacePending;
   storedPlan?:true;
   turnContext?:RuntimeTurnContext;historicalTargets?:TurnTarget[];conversationHistory?:RuntimeConversationHistory;historyReadUsed?:boolean;
@@ -68,7 +68,7 @@ export const turnPlanSchema={type:"object",additionalProperties:false,
 
 export const gridTurnPlanSchema={...turnPlanSchema,required:[...turnPlanSchema.required,"gridIntent"],properties:{...turnPlanSchema.properties,
   gridIntent:{type:"string",enum:["none","count","catalogue","deeper"]}}};
-export function turnPlanningSchema(input:Pick<TurnInput,"gridCoverage"|"observationUnavailable"|"observationAvailable"|"semanticDecision"|"conversationHistory"|"historyReadUsed">&{workspaceView?:WorkspaceViewContext;context?:DiscoveryContext}){
+export function turnPlanningSchema(input:Pick<TurnInput,"gridCoverage"|"observationUnavailable"|"observationAvailable"|"semanticDecision"|"publicAnswer"|"conversationHistory"|"historyReadUsed">&{workspaceView?:WorkspaceViewContext;context?:DiscoveryContext}){
   const base=input.gridCoverage?.status==="ready"&&input.gridCoverage.summary?gridTurnPlanSchema:turnPlanSchema;
   const observation=input.observationUnavailable||input.observationAvailable?{...base,required:[...base.required,"observationUse"],properties:{...base.properties,
     observationUse:{type:"string",enum:["unrelated",...(input.observationUnavailable?["unavailable"]:[]),...(input.observationAvailable?["selected"]:[])]}}}:base;
@@ -86,7 +86,7 @@ export function turnPlanningSchema(input:Pick<TurnInput,"gridCoverage"|"observat
           type:"object",additionalProperties:false,required:["kind","layerId","controlId","mode","date"],properties:{kind:{type:"string",enum:["resolve-published-date"]},
             layerId:{type:"string",enum:["forest"]},controlId:{type:"string",enum:["time"]},mode:{type:"string",enum:["exact","next","previous"]},date:{type:["string","null"],maxLength:10}}}]:[])]}}}:observation;
   if(!input.semanticDecision)return expanded;
-  const properties:Record<string,unknown>={decide:foregroundDecisionSchema((expanded.properties as Record<string,any>).workspaceAction,input.observationAvailable,!!input.conversationHistory&&!input.historyReadUsed)};
+  const properties:Record<string,unknown>={decide:foregroundDecisionSchema((expanded.properties as Record<string,any>).workspaceAction,input.observationAvailable,!!input.conversationHistory&&!input.historyReadUsed,input.publicAnswer)};
   if(input.observationUnavailable||input.observationAvailable)properties.observationUse=(observation.properties as Record<string,unknown>).observationUse;
   if(input.gridCoverage?.status==="ready"&&input.gridCoverage.summary)properties.gridIntent=gridTurnPlanSchema.properties.gridIntent;
   return {type:"object",additionalProperties:false,required:Object.keys(properties),properties};
@@ -446,7 +446,11 @@ type PlanningDeps={run:(prompt:string,modelSignal?:AbortSignal,schema?:Record<st
 export async function prepareTurn(input:TurnInput,signal:AbortSignal,deps:PlanningDeps){
   signal.throwIfAborted();
   let available=turnPlanningTargets(input);
-  const instructions=input.semanticDecision?foregroundInstructions+
+  const foregroundPrompt=input.publicAnswer?foregroundInstructions
+    .replace('"reply":"这是当前显示状态。"','"reply":null')
+    .replace("无真实来源需要的respond直接reply。","本轮respond只分类，reply必须为null；对用户的正文由独立可公开通道生成。")
+    :foregroundInstructions;
+  const instructions=input.semanticDecision?foregroundPrompt+
     (input.context.workspaceView?.publishedLayerActions===true?"\npublishedLayers是已登记的可加载图层，即使当前activeLayer为空或为别的层也可用。明确要求加载其中资料时，workspace.action可用{kind:\"open-published-layer\",datasetId:该资料ID,selection:确切城市名称/稳定ID或ISO日期}；由运行时查固定发布目录、唯一核验并绑定修订后交网页加载及选择。selection不是URL，不从显示标签造原文/研究权限；城市可规范名称，日期必须完整，未知或缺选择先clarify。只适用于直接工作台操作；若用户要求先确认，不发加载动作，应先clarify询问，不能在追问中同时执行。询问/否定用respond/clarify，原活动图层控件切换仍用既有动作。":"")+
     (input.observationAvailable||input.observationUnavailable?"\nobservationUse: unrelated=不依赖观测文件（界面操作也属此）；"+
       (input.observationAvailable?"selected=本轮确需该获准材料读取/依据原读据回答，交观测流程；不能因附件/历史存在而选；":"")+

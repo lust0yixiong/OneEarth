@@ -16,6 +16,7 @@ import {authorizedFlashApi,runFlashApi} from "./flash-api";
 import type {ProviderReasoningSink} from "./provider-reasoning";
 
 export interface ExecutorOptions {
+  publicText?:{onDelta:(delta:string)=>void};
   singleRequest?:boolean;
   webSearch?: true;
   outputSchema?: Record<string, unknown>;
@@ -39,7 +40,9 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
   const schema=options?.outputSchema?modelSafeText(JSON.stringify(options.outputSchema)):undefined;
   if(schema!==undefined)assertModelContextSafe(schema);
   config=resolvedChatModel(config);
-  const execution=modelExecutionContext.getStore(),capacity=runtimeModelCapacity();
+  const execution=modelExecutionContext.getStore();
+  if(options?.publicText&&(!authorizedFlashApi(config)||execution?.role!=="foreground"))throw Error("此模型尚未接入经过审核的公开正文增量通道。");
+  const capacity=runtimeModelCapacity();
   const resource=capacity?await (await capacity).acquire(execution?.role??"background",execution?.taskId):undefined;
   const ownership=new AbortController();signal=AbortSignal.any([signal,ownership.signal]);
   let lost:ReturnType<typeof setTimeout>|undefined,checking=false;
@@ -60,7 +63,7 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
       const key=env.ONEEARTH_EXECUTOR_KEY||env.ANTHROPIC_API_KEY;
       if(!key)throw Error("The authorized model service is unavailable.");
       timing.transport="api";
-      const value=await runFlashApi(prompt,key,signal,{transport:providerTransport,reasoning:options?.providerReasoning,schema:options?.outputSchema});
+      const value=await runFlashApi(prompt,key,signal,{transport:providerTransport,reasoning:options?.providerReasoning,schema:options?.outputSchema,onOutputDelta:options?.publicText?.onDelta});
       timing.outputBytes=Buffer.byteLength(value);return value;
     }
     timing.transport="cli";

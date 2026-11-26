@@ -181,12 +181,53 @@ export type TaskStore = {
 };
 
 export type TaskPreparation={checkpoint?:Payload;error?:string};
-export function taskRoutes(router: Router, base: string, store: TaskStore, validate: (body: unknown) => string | undefined | Promise<string | undefined>, options:{researchRecords?:boolean;initialCheckpoint?:(id:string,input:unknown)=>Payload|undefined;recoverRecord?:(task:Task)=>Promise<unknown>;
-  prepareWhen?:(input:unknown)=>boolean|Promise<boolean>;prepare?:(id:string,input:unknown)=>Promise<TaskPreparation>;onCancelled?:(id:string)=>void}={}) {
+type TaskStatusRouteOptions = {
+  researchRecords?: boolean;
+  chatIdentity?: boolean;
+  recoverRecord?:(task:Task)=>Promise<unknown>;
+  onCancelled?:(id:string)=>void;
+};
+
+export function taskStatusRoutes(router: Router, base: string, store: TaskStore, options:TaskStatusRouteOptions={}) {
   router.param("taskId", (_req, res, next, id) => {
     if (!taskIdPattern.test(id)) { res.status(400).json({error:"无效的任务编号。"}); return; }
     next();
   });
+  router.get(base + "/:taskId", async (req, res) => {
+    const task = await store.get(String(req.params.taskId));
+    if (!task) { res.status(404).json({error:"任务不存在。"}); return; }
+    const identity: {conversationId?: string;turnId?: string} = {};
+    if (options.chatIdentity) {
+      const {conversationId,turnId} = JSON.parse(task.body);
+      if (typeof conversationId === "string") identity.conversationId = conversationId;
+      if (typeof turnId === "string") identity.turnId = turnId;
+    }
+    res.set("Cache-Control", "no-store").json({id:task.id, status:task.status, created:task.created, updated:task.updated,...identity,...await store.runtimeStatus?.(task.id)});
+  });
+  if(options.researchRecords)router.get(base+"/:taskId/record",async(req,res)=>{
+    const id=String(req.params.taskId);
+    const task=await store.get(id);
+    const result=(await store.terminal(id))?.result??(task?await options.recoverRecord?.(task):undefined);
+    if(!task||!result){res.status(404).json({error:"没有找到已完成的研究记录。"});return;}
+    const {query,turnId,conversationId}=JSON.parse(task.body);
+    const workspaceReceipt=await store.workspaceReceipt?.(id);
+    res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,result,workspaceReceipt});
+  });
+  router.delete(base + "/:taskId", async (req, res) => {
+    const id=String(req.params.taskId);
+    if (!await store.get(id)) { res.status(404).json({error:"任务不存在。"}); return; }
+    const cancelled = await store.finish(id, "cancelled", {error:"任务已取消。", code:"cancelled"});
+    if(cancelled)options.onCancelled?.(id);
+    res.sendStatus(cancelled ? 204 : 409);
+  });
+}
+
+export function taskRoutes(router: Router, base: string, store: TaskStore, validate: (body: unknown) => string | undefined | Promise<string | undefined>, options:TaskStatusRouteOptions & {
+  initialCheckpoint?:(id:string,input:unknown)=>Payload|undefined;
+  prepareWhen?:(input:unknown)=>boolean|Promise<boolean>;
+  prepare?:(id:string,input:unknown)=>Promise<TaskPreparation>;
+}={}) {
+  taskStatusRoutes(router,base,store,options);
   router.post(base, async (req, res) => {
     const {id, input} = req.body ?? {};
     if (typeof id !== "string" || !taskIdPattern.test(id)) { res.status(400).json({error:"无效的任务编号。"}); return; }
@@ -208,27 +249,6 @@ export function taskRoutes(router: Router, base: string, store: TaskStore, valid
       if (!(error instanceof TaskConflict)) throw error;
       res.status(409).json({error:error.message});
     }
-  });
-  router.get(base + "/:taskId", async (req, res) => {
-    const task = await store.get(String(req.params.taskId));
-    if (!task) { res.status(404).json({error:"任务不存在。"}); return; }
-    res.set("Cache-Control", "no-store").json({id:task.id, status:task.status, created:task.created, updated:task.updated,...await store.runtimeStatus?.(task.id)});
-  });
-  if(options.researchRecords)router.get(base+"/:taskId/record",async(req,res)=>{
-    const id=String(req.params.taskId);
-    const task=await store.get(id);
-    const result=(await store.terminal(id))?.result??(task?await options.recoverRecord?.(task):undefined);
-    if(!task||!result){res.status(404).json({error:"没有找到已完成的研究记录。"});return;}
-    const {query,turnId,conversationId}=JSON.parse(task.body);
-    const workspaceReceipt=await store.workspaceReceipt?.(id);
-    res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,result,workspaceReceipt});
-  });
-  router.delete(base + "/:taskId", async (req, res) => {
-    const id=String(req.params.taskId);
-    if (!await store.get(id)) { res.status(404).json({error:"任务不存在。"}); return; }
-    const cancelled = await store.finish(id, "cancelled", {error:"任务已取消。", code:"cancelled"});
-    if(cancelled)options.onCancelled?.(id);
-    res.sendStatus(cancelled ? 204 : 409);
   });
   router.get(base + "/:taskId/events", async (req, res) => {
     const id = String(req.params.taskId);

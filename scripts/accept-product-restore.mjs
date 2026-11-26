@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir,writeFile } from "node:fs/promises";
 import { chromium } from "playwright-core";
+import {isNativeChatSubmission,nativeChatSubmission,readNativeChatRecord} from "./read-native-chat.mjs";
 
 const source=new URL(process.env.ONEEARTH_SOURCE_URL || "http://127.0.0.1:5474");
 const restored=new URL(process.env.ONEEARTH_URL || "http://127.0.0.1:5574");
@@ -74,14 +75,14 @@ try{
     await page.locator(".message.user").getByText(data.question,{exact:true}).waitFor({timeout:25000});
     const question="For source #2 in your previous answer, which observations did the authors use? Please stay with that source.";
     await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(question);
-    const submitted=page.waitForRequest(request=>request.method()==="POST"&&["/api/chat/messages","/api/tasks"].includes(new URL(request.url()).pathname));
+    const submitted=page.waitForRequest(isNativeChatSubmission);
     await page.getByLabel("发送消息",{exact:true}).click();
-    const {id,input:{previousTaskId}}=(await submitted).postDataJSON();
+    const input=nativeChatSubmission(await submitted),id=input.runId;
+    const {previousTaskId}=input.forwardedProps.oneearth.submission;
     assert.equal(previousTaskId,followUpRecord);
-    const streamed=await page.request.get(new URL("/api/tasks/"+id+"/events",restored).href,{timeout:240000});
-    assert.ok(streamed.ok());
-    const events=(await streamed.text()).split("\n").filter(Boolean).map(JSON.parse);
-    const result=events.at(-1).result;
+    assert.equal(input.threadId,data.conversationId);
+    const {record}=await readNativeChatRecord(restored,input,{timeout:240000});
+    const result=record?.result;
     assert.ok(result?.runTrace.timings.some(timing=>timing.kind==="model-executor"));
     const ordinal=result.runTrace.calls.find(call=>call.id==="citation-ordinal");
     assert.equal(JSON.parse(ordinal.output).sourceId,selected.url);

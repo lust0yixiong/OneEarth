@@ -1,3 +1,4 @@
+import {plainPublicAnswer} from "./public-answer-stream";
 import {runtimeStepContext} from "./runtime-step";
 import {TaskParked} from "./task-store";
 import {literatureText,literatureDisplay} from "../src/domain/literature-label";
@@ -397,6 +398,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       question:decision?.dataQuestion||query,context,history,conversationContext,gridCoverage,workspacePublication:workspaceResolution?.proof,
       forestPublication:forestResolution?.proof,
       turnContext,conversationHistory:internal.conversationHistory,historicalTargets:internal.handoff?.historicalTargets,
+      ...(internal.publicAnswer?{publicAnswer:true as const}:{}),
       ...(internal.semanticDecision?{semanticDecision:true,pending:internal.pending??internal.handoff?.pending}:{}),...(internal.observationUnavailable?{observationUnavailable:true}:{}),
       ...(internal.observationAvailable?{observationAvailable:true,observationMaterials:internal.observationMaterials}:{}),
       previousResearchIntent:planningIntent,confirmedQuestion:decision?.dataQuestion,numbered:selected,
@@ -658,6 +660,8 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       }
       const hasSourceMaterial=turn.targets.length||context.citation||context.attachedScope?.some(item=>item.kind==="dataset"||item.kind==="reference")||
         conversationEvidence?.length||conversationAssertionEvidence?.length||prior?.answerNotes?.references?.length;
+      if(internal.foreground&&internal.publicAnswer&&turn.action==="respond"&&!hasSourceMaterial)
+        return complete({message:await plainPublicAnswer(body,{...internal,turnContext},executor,signal),...continuity});
       if(internal.foreground&&turn.action==="respond"&&turn.foregroundReply&&!hasSourceMaterial)
         return complete({message:turn.foregroundReply,...continuity});
       if(turn.workspaceOperation){

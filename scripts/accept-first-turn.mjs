@@ -1,6 +1,7 @@
 import { chromium } from "playwright-core";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
+import {isNativeChatSubmission,nativeChatSubmission,readNativeChatRecord} from "./read-native-chat.mjs";
 
 const base = new URL(process.env.ONEEARTH_URL || "http://127.0.0.1:5274");
 if (base.port === "5174" || !["localhost","127.0.0.1","[::1]"].includes(base.hostname)) throw Error("验收必须使用独立本机入口。");
@@ -9,13 +10,13 @@ await mkdir(output,{recursive:true});
 const browser = await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH ||
   (process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : undefined)});
 const page = await browser.newPage({viewport:{width:1512,height:859},deviceScaleFactor:1});
-let ids = [];
+const submissions = [];
 const requests = [];
 const notes = {entry:base.origin,browser:browser.version(),viewport:[1512,859],dpr:1,turns:[]};
 page.on("request",req=>{
   const url = new URL(req.url());
   if (url.port === "5174") requests.push(url.origin);
-  if(["/api/chat/messages","/api/tasks"].includes(url.pathname) && req.method() === "POST") ids.push(req.postDataJSON().id);
+  if(isNativeChatSubmission(req)) submissions.push(nativeChatSubmission(req));
 });
 try {
   await page.goto(base.href);
@@ -37,43 +38,42 @@ try {
       // Some source configurations report the first partial result only in the task stream.
       await page.waitForFunction(() => /找到|返回|已取得/.test(document.querySelector(".chat-scroll")?.innerText || ""),{},{timeout:45000});
     });
-    const activeId = [...new Set(ids)][number-1];
+    const activeId = submissions[number-1]?.runId;
+    assert.ok(activeId,"网页已提交标准 AG-UI 运行");
     const active = await page.request.get(new URL("/api/tasks/"+activeId,base).href);
     const activeStatus = (await active.json()).status;
     await page.screenshot({path:output+"/before-refresh.png"});
     await page.reload();
     await page.waitForFunction(() => document.querySelectorAll(".message.assistant").length > 0 || document.querySelector(".chat-error"),{},{timeout:300000});
     const result = await collect(number, started);
-    notes.refresh = {taskId:activeId, statusBefore:activeStatus, submissions:ids.filter(id=>id===activeId).length,
-      uniqueTaskIds:new Set(ids).size};
+    notes.refresh = {taskId:activeId, statusBefore:activeStatus, submissions:submissions.filter(input=>input.runId===activeId).length,
+      uniqueTaskIds:new Set(submissions.map(input=>input.runId)).size};
     await writeFile(output+"/task-evidence.json",JSON.stringify(notes,null,2)+"\n");
     assert.equal(activeStatus,"running","刷新必须发生在实际任务运行中");
     assert.equal(notes.refresh.uniqueTaskIds,1,"刷新继续同一个任务");
+    assert.equal(notes.refresh.submissions,1,"刷新不重新提交原运行");
     return result;
   }
   async function collect(number, started) {
     await page.waitForTimeout(500);
-    const id = [...new Set(ids)][number-1];
-    assert.ok(id,"网页提交了新版任务");
-    const res = await page.request.get(new URL("/api/tasks/"+id+"/events",base).href,{timeout:300000});
-    assert.ok(res.ok());
-    const events = (await res.text()).split("\n").filter(line=>line.trim()).map(JSON.parse);
-    const last = events.at(-1);
+    const input = submissions[number-1];
+    assert.ok(input,"网页提交了标准 AG-UI 运行");
+    const {runId:id} = input;
+    const {state,record} = await readNativeChatRecord(base,input);
+    const result = record?.result;
+    const trace = result?.runTrace;
     const evidence = {
-      id, elapsedMs:Date.now()-started, status:last.result ? "complete" : "failed",
-      errorCode:last.code, executor:last.result?.modelExecutor,
-      channelCalls:events.filter(e=>e.call && e.call.status!=="running")
-        .map(e=>({name:e.call.name,status:e.call.status,id:e.call.id,at:e.at})),
-      firstFindingAt:events.find(e=>e.finding?.items?.length)?.at,
-      finishedAt:last.at, createdAt:events[0].at, startedAt:events.find(e=>e.started)?.at,
-      referenceCount:last.result?.answerNotes?.references?.length || 0,
-      paperIds:last.result?.answerNotes?.references?.filter(ref=>ref.kind==="asset"&&ref.sourceChannel==="assertion").map(ref=>ref.id) || [],
-      timings:last.result?.runTrace?.timings?.map(t=>({kind:t.kind,model:t.model,executor:t.executor,elapsedMs:t.elapsedMs,firstStdoutMs:t.firstStdoutMs})),
+      id, elapsedMs:Date.now()-started, status:state.status, executor:result?.modelExecutor,
+      channelCalls:(trace?.calls??[]).filter(call=>call.status!=="running").map(({name,status,id})=>({name,status,id})),
+      finishedAt:state.updated, createdAt:state.created, startedAt:trace?.started,
+      referenceCount:result?.answerNotes?.references?.length || 0,
+      paperIds:result?.answerNotes?.references?.filter(ref=>ref.kind==="asset"&&ref.sourceChannel==="assertion").map(ref=>ref.id) || [],
+      timings:trace?.timings?.map(t=>({kind:t.kind,model:t.model,executor:t.executor,elapsedMs:t.elapsedMs,firstStdoutMs:t.firstStdoutMs})),
     };
     notes.turns.push(evidence);
     await writeFile(output+"/task-evidence.json",JSON.stringify(notes,null,2)+"\n");
-    console.log(JSON.stringify({turn:number,id,status:evidence.status,errorCode:evidence.errorCode,referenceCount:evidence.referenceCount,paperIds:evidence.paperIds,discovery:evidence.channelCalls.filter(c=>c.name==="独立数据发现服务")}));
-    assert.ok(last.result, "任务终态应返回结果");
+    console.log(JSON.stringify({turn:number,id,status:evidence.status,referenceCount:evidence.referenceCount,paperIds:evidence.paperIds,discovery:evidence.channelCalls.filter(c=>c.name==="独立数据发现服务")}));
+    assert.ok(result, "同一运行的归档应有结果");
     await page.waitForTimeout(700);
     return evidence;
   }

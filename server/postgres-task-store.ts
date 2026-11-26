@@ -1,3 +1,4 @@
+import {finishAgUi} from "./ag-ui-persistence";
 import type {RuntimePhase,RemoteStop} from "../src/domain/runtime-status";
 import {randomUUID} from "node:crypto";
 import {runtimeTaskLease,runtimeTaskLeaseMs,runtimeStepConcurrency,type RuntimeTaskLease} from "./runtime-task-lease";
@@ -143,6 +144,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         const retained=checkpoint?.[status==="cancelled"?"cancelledResult":"failedResult"];
         if(retained)payload={...payload,result:retained};
       }
+      if(namespace==="runtime")await finishAgUi(db,id,status,payload);
       await write(db,id,{...payload,...(namespace==="runtime"?{runtimePhase:{phase:status}}:{})},now);
       if(namespace==="runtime"&&status==="cancelled"){
         const {rows}=await db.query<{discoveryId:string;state:string}>(`SELECT binding->>'discoveryId' AS "discoveryId",binding->>'state' AS state FROM (

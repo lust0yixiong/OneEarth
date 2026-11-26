@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
 import {chromium} from "playwright-core";
 import {setTimeout as wait} from "node:timers/promises";
+import {isNativeChatSubmission,nativeChatSubmission,readNativeChatRecord} from "./read-native-chat.mjs";
 
 const origin=new URL(process.env.ONEEARTH_URL||"http://127.0.0.1:5474");
 assert.notEqual(origin.port,"5174");
@@ -32,23 +33,26 @@ async function save(){await writeFile(out+"/"+kind+".json",JSON.stringify(record
 page.on("request",request=>{
   const url=new URL(request.url());
   if(url.port==="5174")prototype.push(url.origin);
-  if(["/api/chat/messages","/api/tasks"].includes(url.pathname)&&request.method()==="POST")submits.push(request.postDataJSON().id);
+  if(isNativeChatSubmission(request))submits.push(nativeChatSubmission(request).runId);
 });
 try{
   const existing=process.env.ONEEARTH_REOPEN_TASK;
+  let submission,stored;
   await page.goto(existing?new URL("/?research="+existing,origin).href:origin.href);
   record.version=(await fetch(new URL("/api/health",origin)).then(response=>response.json())).version;
   if(existing){
     assert.match(existing,/^[a-f0-9-]{36}$/);
     record.taskId=existing;
     record.reopenedFromOriginalSubmission=true;
-    const stored=await fetch(new URL("/api/tasks/"+existing+"/record",origin)).then(response=>response.json());
+    stored=await fetch(new URL("/api/tasks/"+existing+"/record",origin)).then(response=>response.json());
+    assert.equal(stored.id,existing);
     assert.equal(stored.question,question);
   }else{
     await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(question);
-    const submitted=page.waitForRequest(request=>request.method()==="POST"&&["/api/chat/messages","/api/tasks"].includes(new URL(request.url()).pathname));
+    const submitted=page.waitForRequest(isNativeChatSubmission);
     await page.getByLabel("发送消息",{exact:true}).click();
-    record.taskId=(await submitted).postDataJSON().id;
+    submission=nativeChatSubmission(await submitted);
+    record.taskId=submission.runId;
   }
   const route="/api/tasks/"+record.taskId;
   let accepted=false;
@@ -58,7 +62,7 @@ try{
     assert.equal(status,404,"任务提交状态");
     await wait(100);
   }
-  assert.ok(accepted,"网页提交的任务应持久化后再读取事件。");
+  assert.ok(accepted,"网页提交的任务应持久化后再读取原记录。");
   await save();
   console.log(JSON.stringify({kind,taskId:record.taskId,accepted}));
   if(!existing&&kind==="additional"&&process.env.ONEEARTH_REFRESH!=="0"){
@@ -69,15 +73,14 @@ try{
     assert.equal(pending.status,"running");
     await page.reload();
   }
-  const response=await page.request.get(new URL(route+"/events",origin).href,{timeout:420000});
-  assert.ok(response.ok());
-  const events=(await response.text()).split("\n").filter(Boolean).map(JSON.parse);
-  const last=events.at(-1),result=last.result,traces=result?.runTrace||last.runTrace;
+  const finished=submission
+    ? await readNativeChatRecord(origin,submission,{timeout:420000})
+    : {record:stored,state:await fetch(new URL(route,origin)).then(response=>response.json())};
+  const {state}=finished,result=finished.record?.result,traces=result?.runTrace;
   const entries=[];
-  for(const event of events){
-    const c=event.call;
-    if(!c||c.status==="running")continue;
-    const common={seq:event.seq,at:event.at,id:c.id,status:c.status};
+  for(const [index,c] of (traces?.calls??[]).entries()){
+    if(c.status==="running")continue;
+    const common={order:index+1,id:c.id,status:c.status};
     const input=json(c.input),output=json(c.output);
     if(c.id==="turn-action")entries.push({...common,type:"initial-decision",action:output?.action});
     if(c.id.startsWith("research-decision-"))entries.push({...common,type:"evidence-decision",
@@ -91,10 +94,10 @@ try{
     if(c.id==="answer-generation")entries.push({...common,type:"retained-sources-fallback"});
   }
   if(existing)record.browserReopenedAt=record.startedAt;
-  record.startedAt=new Date(events[0].at).toISOString();
-  Object.assign(record,{result:result?"complete":last.code||"failed",elapsedMs:last.at-events[0].at,entries,
-    prototypeRequests:prototype.length,distinctBrowserTaskIds:[...new Set(submits)],findings:events.filter(e=>e.finding?.items?.length).map(e=>({seq:e.seq,
-      channel:e.finding.source,identities:e.finding.items.map(item=>item.assetId||publicAddress(item.url)).filter(Boolean)})),
+  record.startedAt=new Date(state.created).toISOString();
+  Object.assign(record,{result:state.status,elapsedMs:state.updated-state.created,entries,
+    prototypeRequests:prototype.length,distinctBrowserTaskIds:[...new Set(submits)],findings:(traces?.findings??[]).filter(finding=>finding.items.length).map(finding=>({id:finding.id,
+      channel:finding.source,identities:finding.items.map(item=>item.assetId||publicAddress(item.url)).filter(Boolean)})),
     executors:traces?.timings?.map(({model,executor,elapsedMs,startedAt})=>({model,executor,elapsedMs,startedAt})),
     references:result?.answerNotes?.references?.map(ref=>ref.kind==="asset"?{channel:ref.sourceChannel,id:ref.id}:{channel:ref.sourceChannel,url:publicAddress(ref.url)})});
   await save();
@@ -108,7 +111,7 @@ try{
   const firstDiscovery=entries.find(e=>e.type==="discovery"&&e.status==="done");
   assert.ok(firstDiscovery?.materials&&(firstDiscovery.materials.papers.length||firstDiscovery.materials.haina.length||firstDiscovery.materials.web.length));
   const decisions=entries.filter(e=>e.type==="evidence-decision");
-  assert.ok(decisions[0].seq>firstDiscovery.seq);
+  assert.ok(decisions[0].order>firstDiscovery.order);
   assert.equal(decisions.at(-1).action,"answer");
   if(kind==="direct"){
     assert.equal(decisions.length,1);
@@ -117,7 +120,7 @@ try{
   }else{
     const additional=decisions.find(e=>["read","discover"].includes(e.action));
     assert.ok(additional,"材料不足必须由模型实际选出下一次调用。");
-    assert.ok(entries.some(e=>e.seq>additional.seq&&e.seq<decisions.at(-1).seq&&e.status==="done"&&
+    assert.ok(entries.some(e=>e.order>additional.order&&e.order<decisions.at(-1).order&&e.status==="done"&&
       (additional.action==="read"?e.type==="exact-read"&&e.returnedHits>0:e.type==="discovery"&&e.previousId===firstDiscovery.childId)));
   }
   await page.locator(".message.assistant").waitFor({timeout:30000});

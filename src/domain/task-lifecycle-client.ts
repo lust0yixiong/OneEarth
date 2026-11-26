@@ -1,6 +1,13 @@
 import type {RemoteStop,RuntimePhase} from "./runtime-status";
 
 export type TaskLifecycle={runtimePhase?:RuntimePhase;remoteStops?:RemoteStop[]};
+type TaskIdentity={id:string;conversationId:string;turnId:string};
+
+export function matchesTaskIdentity(value:unknown, expected:TaskIdentity):boolean {
+  if(!value || typeof value!=="object")return false;
+  const task=value as Partial<TaskIdentity>;
+  return task.id===expected.id && task.conversationId===expected.conversationId && task.turnId===expected.turnId;
+}
 
 const phases=new Set<RuntimePhase["phase"]>([
   "queued","executing","waiting-discovery","resuming","cancel-pending","complete","failed","cancelled",
@@ -49,11 +56,11 @@ export function mergeTaskLifecycle(current:TaskLifecycle|undefined,incoming:Task
   return {...(runtimePhase?{runtimePhase}:{}),...(stops.size?{remoteStops:[...stops.values()]}:{})};
 }
 
-export async function readCancelledTaskLifecycle(id:string,signal:AbortSignal):Promise<TaskLifecycle|undefined> {
-  const response=await fetch("/api/tasks/"+encodeURIComponent(id),{signal,cache:"no-store"});
+export async function readCancelledTaskLifecycle(task:TaskIdentity,signal:AbortSignal):Promise<TaskLifecycle|undefined> {
+  const response=await fetch("/api/tasks/"+encodeURIComponent(task.id),{signal,cache:"no-store"});
   if(!response.ok)throw Error("原任务状态暂不可读。");
   const data=await response.json();
-  if(data?.id!==id || data.status!=="cancelled")return;
+  if(!matchesTaskIdentity(data,task) || data.status!=="cancelled")return;
   const facts=readTaskLifecycle(data);
   return {runtimePhase:{phase:"cancelled"},remoteStops:facts?.remoteStops};
 }

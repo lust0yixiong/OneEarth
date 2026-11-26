@@ -8,11 +8,11 @@ const question={type:"string",minLength:1,maxLength:500};
 const choices={type:["array","null"],minItems:2,maxItems:4,items:{type:"string",minLength:1,maxLength:100}};
 
 /** The model expresses one intent, never a platform authorization or parent ID. */
-export function foregroundDecisionSchema(actions:{anyOf:unknown[]},observationAvailable=false,historyAvailable=false){
+export function foregroundDecisionSchema(actions:{anyOf:unknown[]},observationAvailable=false,historyAvailable=false,publicAnswer=false){
   const controls=actions.anyOf.filter((branch:any)=>["set-control","resolve-control","resolve-published-date"].includes(branch?.properties?.kind?.enum?.[0]));
   const operations=actions.anyOf.filter((branch:any)=>branch?.type!=="null");
   return {anyOf:[...(historyAvailable?[historyReadSchema]:[]),
-    object({kind:kind("respond"),reply:{type:["string","null"],maxLength:8000},targets}),
+    object({kind:kind("respond"),reply:publicAnswer?{type:"null"}:{type:["string","null"],maxLength:8000},targets}),
     object({kind:kind("read"),targets:{...targets,minItems:observationAvailable?0:1,maxItems:3}}),
     object({kind:kind("search"),goal:{type:"string",minLength:1,maxLength:1200},targets}),
     object({kind:kind("workspace"),action:{anyOf:operations}}),
@@ -46,7 +46,7 @@ export function normalizeForegroundDecision(raw:string,input:TurnInput){
   let action=d.kind,goal=input.confirmedQuestion||input.question,targets:string[]=[],reply:string|null=null,
     clarification:string|null=null,workspaceAction:any=null,clarificationSubject:string|undefined,clarificationChoices:string[]|null=null;
   switch(d.kind){
-    case "respond":exact(d,["kind","reply","targets"]);if(d.reply!==null&&!text(d.reply,8000))throw Error("答复文字无效。");reply=d.reply;targets=d.targets;break;
+    case "respond":exact(d,["kind","reply","targets"]);if(d.reply!==null&&!text(d.reply,8000))throw Error("答复文字无效。");if(input.publicAnswer&&d.reply!==null)throw Error("本轮规划不得包含公开正文。");reply=d.reply;targets=d.targets;break;
     case "read":exact(d,["kind","targets"]);targets=d.targets;break;
     case "search":exact(d,["kind","goal","targets"]);if(!text(d.goal,1200))throw Error("新证据需要独立研究目的。");goal=d.goal.trim();targets=d.targets;break;
     case "workspace":exact(d,["kind","action"]);workspaceAction=d.action;break;

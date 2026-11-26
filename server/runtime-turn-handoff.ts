@@ -14,7 +14,7 @@ export type RuntimeTurnInput={query:string;conversationId:string;turnId:string;p
 export type ObservationTurnMaterial={artifactId:string;version:string;title:string;variables:string[]};
 export type RuntimeWorkspacePending={taskId:string;question:string;originalQuestion?:string;proposedAction?:import("../src/domain/workspace-view-context").WorkspaceViewAction;
   proposalOrigin?:{layerId:string;controlId:string;valueId:string};clarificationPrompt?:ClarificationPrompt;answer?:ClarificationAnswer};
-export type RuntimeTurnOptions={historicalTargets?:import("./turn-planning").TurnTarget[];conversationHistory?:RuntimeConversationHistory;observationUnavailable?:boolean;observationAvailable?:boolean;priorResult?:DiscoveryResponse|null;observationMaterials?:ObservationTurnMaterial[];pending?:RuntimeWorkspacePending;turnContext?:RuntimeTurnContext};
+export type RuntimeTurnOptions={publicAnswer?:true;historicalTargets?:import("./turn-planning").TurnTarget[];conversationHistory?:RuntimeConversationHistory;observationUnavailable?:boolean;observationAvailable?:boolean;priorResult?:DiscoveryResponse|null;observationMaterials?:ObservationTurnMaterial[];pending?:RuntimeWorkspacePending;turnContext?:RuntimeTurnContext};
 /** Private server record, never a browser input or a replacement for source authorization. */
 export type RuntimeTurnHandoff={version:1;kind:"runtime-turn-plan";inputFingerprint:string;plannedAt:number;historicalTargets?:import("./turn-planning").TurnTarget[];plan:TurnPlan;runTrace:RunTrace;
   observationUnavailable?:true;observationAvailable?:true;observationMaterials?:ObservationTurnMaterial[];pending?:RuntimeWorkspacePending;priorOverride?:true;turnContext?:RuntimeTurnContext};

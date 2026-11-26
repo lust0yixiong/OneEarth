@@ -1,3 +1,4 @@
+import {publicAnswerContext,PublicAnswerBuffer,PublicMessageExtractor} from "./public-answer-stream";
 import {TaskParked} from "./task-store";
 import {pickedSamples} from "./question-grid";
 import {sourceExcerpts,scopeSourceTabs} from "./evidence-excerpts";
@@ -13,7 +14,7 @@ import type {CalculationReport} from "./verified-calculation";
 import {reviewAnswerEvidence} from "./review-answer-evidence";
 import { paperRecords, type PaperRecord } from "../src/domain/paper-record";
 import { combinesSources, expandsSources,onlySource, refersToBatch } from "../src/domain/research-question";
-import { synthesizeAnswer, synthesisHistory, synthesisInstructions, synthesisResponseSchema,retainedSourceAnswer,type SynthesisAnswer,type SynthesisRepairDiagnostic } from "./scientific-answer";
+import { synthesizeAnswer, synthesisHistory, synthesisInstructions, synthesisResponseSchema,parseSynthesis,retainedSourceAnswer,type SynthesisAnswer,type SynthesisRepairDiagnostic } from "./scientific-answer";
 import type { AnswerReference, SearchRun, WebHit,ToolCall } from "../src/domain/types";
 import {webDocumentType,referenceChannel} from "../src/domain/citation-types";
 import { assets, assetById, discoverableAsset, type Asset } from "../src/domain/datasets";
@@ -376,7 +377,16 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
       const safe=modelSafeText(value),bytes=Buffer.byteLength(safe);
       if(bytes>packet.stats.limitBytes)throw Error("合成后续节点的输入超过本轮字节预算，未发出调用。");
       modelCalls++;sentPromptBytes.push(bytes);
-      return executor.model(safe,{outputSchema:schema},extraSignal?AbortSignal.any([modelSignal,extraSignal]):modelSignal);
+      const publicSink=publicAnswerContext.getStore();
+      let stream:PublicMessageExtractor|undefined;
+      if(publicSink&&modelCalls===1){
+        const display=new PublicAnswerBuffer(publicSink.onText,text=>{try{
+          const candidate=parseSynthesis(JSON.stringify({message:text}),references,webHits);
+          verifyExecutionAndReferences(candidate);return candidate.message;
+        }catch{return undefined;}});
+        stream=new PublicMessageExtractor(delta=>display.push(delta));
+      }
+      return executor.model(safe,{outputSchema:schema,...(stream?{publicText:{onDelta:(delta:string)=>stream!.feed(delta)}}:{})},extraSignal?AbortSignal.any([modelSignal,extraSignal]):modelSignal);
     });
     onTool?.({id:"synthesis-context-budget",kind:"tool",name:"核对合成整包输入预算",input:"仅记录UTF-8字节和来源数量，不记录原始提示",status:packet.blocked?"partial":"done",output:JSON.stringify(packet.stats)});
     try{

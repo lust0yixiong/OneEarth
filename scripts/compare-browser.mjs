@@ -1,6 +1,7 @@
 import { chromium } from "playwright-core";
 import { mkdir, writeFile } from "node:fs/promises";
 import assert from "node:assert/strict";
+import {isNativeChatSubmission,nativeChatSubmission,readNativeChatRecord} from "./read-native-chat.mjs";
 
 const targets = [
   ["baseline",process.env.ONEEARTH_BASELINE_URL || "http://127.0.0.1:5294"],
@@ -20,7 +21,7 @@ try {
     const context=await browser.newContext({viewport,deviceScaleFactor:1});
     const page=await context.newPage();
     const transfers=[];
-    let taskId;
+    let submission;
     page.on("response",async r=>{
       if(!r.url().includes("/precip-data/"))return;
       const fromSpatial=r.headers()["x-oneearth-service"]==="spatial";
@@ -31,7 +32,7 @@ try {
     page.on("request",request=>{
       const url=new URL(request.url());
       assert.notEqual(url.port,"5174");
-      if(request.method()==="POST"&&["/api/chat/messages","/api/tasks"].includes(url.pathname))taskId=request.postDataJSON().id;
+      if(isNativeChatSubmission(request))submission=nativeChatSubmission(request);
     });
     const canvas=page.locator("canvas[data-painted]");
     const pending=page.locator(".live-search.pending");
@@ -116,20 +117,14 @@ try {
     }
     await page.locator(".message.assistant").last().waitFor({timeout:300000});
     summary.answerShownMs=Date.now()-started;
-    if(taskId){
-      const response=await page.request.get(new URL("/api/tasks/"+taskId+"/events",base).href,{timeout:60000});
-      assert.ok(response.ok());
-      const events=(await response.text()).split("\n").filter(Boolean).map(JSON.parse);
-      const terminal=events.at(-1);
-      assert.ok(terminal?.result);
-      const requested=events[0].at;
-      const claimed=events.find(event=>event.started)?.at;
-      const firstFinding=events.find(event=>event.finding?.items?.length)?.at;
-      const traces=terminal.result.runTrace;
+    if(name==="next"){
+      assert.ok(submission,"The workbench used the native AG-UI route");
+      const {state,record}=await readNativeChatRecord(base,submission,{timeout:60000});
+      assert.ok(record?.result);
+      const traces=record.result.runTrace;
       const discovery=traces?.calls.find(call=>call.name==="独立数据发现服务");
       assert.equal(discovery?.status,"done");
-      summary.research={taskId,serverQueueMs:claimed===undefined?null:claimed-requested,
-        firstFindingMs:firstFinding===undefined?null:firstFinding-requested,terminalPersistedMs:terminal.at-requested,
+      summary.research={taskId:submission.runId,terminalPersistedMs:state.updated-state.created,
         synthesisRetainedSources:traces.calls.some(call=>call.id==="answer-generation"&&call.status==="failed"),
         actualExecutors:traces.timings.map(timing=>({executor:timing.executor,model:timing.model,elapsedMs:timing.elapsedMs}))};
     }
