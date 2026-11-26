@@ -104,7 +104,7 @@ text(437, 221, "OneEarth 运行时", 30, weight=710)
 card("workbench", 64, 249, 255, 185, "工作台")
 text(86, 322, "网页界面（React）", 22, MUTED)
 rule(86, 296, 343)
-text(86, 380, "同源入口（Express）", 22, MUTED)
+text(86, 380, "统一入口（Express）", 22, MUTED)
 
 card("runtime-api", 447, 241, 375, 125, "运行时 API",
      ("受理 Chat，按配置选择执行器", "判断与回复，研究任务入库"), body_size=21)
@@ -159,10 +159,8 @@ edge_label(1410, 552, "同步发布", "data", size=17, anchor="start")
 edge_label(1410, 576, "投影", "data", size=17, anchor="start")
 arrow("spatial-storage", "M1339 982 H1482", "data")
 edge_label(1410, 968, "索引与对象", "data")
-arrow("runtime-spatial-coverage", "M443 343 H393 Q377 343 377 359 V952 Q377 968 393 968 H998", "data")
-edge_label(913, 956, "查询覆盖范围", "data")
-arrow("workbench-map-resources", "M191 438 V1062 Q191 1078 207 1078 H1130 Q1146 1078 1146 1062 V1043", "data")
-edge_label(681, 1066, "获取已发布地图与图层", "data")
+arrow("workbench-spatial", "M191 438 V1062 Q191 1078 207 1078 H1130 Q1146 1078 1146 1062 V1043", "data")
+edge_label(681, 1066, "覆盖查询与地图图层", "data")
 
 arrow("data-processing-a2a", "M850 568 H905 Q921 568 921 584 V601 Q921 617 937 617 H998",
       "planned", planned=True, bidirectional=True)
