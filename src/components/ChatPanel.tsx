@@ -39,8 +39,8 @@ import { useWorkspace } from "../domain/store";
 import { caseById } from "../domain/catalog";
 import { emptyFilters } from "../domain/spatial";
 import type { SessionSummary } from "../domain/session-storage";
-import {answeredClarificationIds, messageClarificationPrompt, displayedChatMessages, isClarificationAttempt} from "../domain/runtime-client";
-import {validClarificationPrompt, type ClarificationAnswer} from "../domain/clarification";
+import {displayedChatMessages, isClarificationAttempt} from "../domain/runtime-client";
+import type {ClarificationAnswer} from "../domain/clarification";
 import type { Message } from "../domain/types";
 import "../styles/research-chat.css";
 import { assetById } from "../domain/datasets";
@@ -205,6 +205,8 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     attachScope,
     retry,
     recoverableClarifications,
+    verifiedInterrupts,
+    claimedReplyTerminals,
     switchSession,
     retrySessionSave,
     sessionSummaries,
@@ -254,15 +256,11 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     question.focus({preventScroll:true});
   },[]);
   const input = useRef<HTMLTextAreaElement>(null);
-  const replyTargets=useMemo(()=>{
-    const answered=answeredClarificationIds(s.messages,s.unansweredQuestionId);
-    return new Map(s.messages.flatMap(message=>{
-      const prompt=answered.has(message.id) ? undefined : messageClarificationPrompt(message);
-      return prompt ? [[message.id,{message,prompt}] as const] : [];
-    }));
-  },[s.messages,s.unansweredQuestionId]);
-  const legacyTarget=s.clarificationReply && replyTargets.get(s.clarificationReply.parentTaskId)?.message;
-  const clarificationTarget=legacyTarget && !validClarificationPrompt(legacyTarget.clarificationPrompt) ? legacyTarget : null;
+  const replyTargets=useMemo(()=>new Map(s.messages.flatMap(message=>{
+    const interrupt=message.nativeInterrupt;
+    return interrupt?.status==="pending" && interrupt.kind!=="question-check" && verifiedInterrupts.has(s.sessionId+"/"+message.id)
+      ? [[message.id,{message,prompt:interrupt.prompt}] as const] : [];
+  })),[s.messages,s.sessionId,verifiedInterrupts]);
   const clarificationCardId="chat-clarification-card";
   const [clarification,setClarification]=useState<{sessionId:string;parentTaskId:string;seed?:ClarificationAnswer;focusOnOpen:boolean}|null>(null);
   const handledClarifications=useRef(new Set<string>());
@@ -291,7 +289,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
   },[activeClarification,clarification,s.chatOpen]);
   useEffect(()=>{
     if (!s.chatOpen || clarification || historyOpen || composerSources || !!text.trim() || !latest
-      || latest.historicalReply || historyIds.has(latest.id) || !validClarificationPrompt(latest.clarificationPrompt)
+      || historyIds.has(latest.id) || !latest.nativeInterrupt
       || !replyTargets.has(latest.id) || handledClarifications.current.has(s.sessionId+"/"+latest.id)
       || document.querySelector("dialog:modal")) return;
     const newestQuestion=s.messages.slice().reverse().find(message=>message.role==="user");
@@ -338,6 +336,14 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
   },[s.messages,s.researchRegion]);
   const renderedMessages=useMemo(()=>chatMessages.map((m) => {
     const parent=m.replyTo && questions.get(m.id);
+    const resumedBy=m.nativeInterrupt?.resumedBy;
+    const replyTerminal=resumedBy ? claimedReplyTerminals.get(resumedBy) : undefined;
+    const nativeCheck=m.nativeInterrupt?.kind==="question-check" ? m.nativeInterrupt : undefined;
+    const decision=m.questionCheck && s.messages.find(next=>next.questionDecision?.checkMessageId===m.id &&
+      (!resumedBy || s.messages.some(answer=>answer.id===resumedBy && answer.replyTo===next.id) ||
+        s.activeChats.some(chat=>chat.id===resumedBy && chat.userMessageId===next.id)))?.questionDecision;
+    const checkClosed=nativeCheck?.status==="pending" ? undefined :
+      nativeCheck?.status==="resolved" ? decision ?? "resolved" : nativeCheck?.status ?? decision ?? "readonly";
     const clarificationFailure=m.failed && (isClarificationAttempt(m.retry) ||
       !!(parent && (parent.clarificationAnswer || parent.clarificationReply)));
     const retryAttempt=m.retry && (!clarificationFailure || recoverableClarifications.has(m.id)) ? m.retry : undefined;
@@ -348,6 +354,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
               data-message-id={m.id}
               data-runtime-phase={m.taskLifecycle?.runtimePhase?.phase}
               data-reply-to={m.replyTo}
+              data-interrupt-status={m.nativeInterrupt?.status}
               tabIndex={m.role==="user"?-1:undefined}
               className={"message " + m.role + (m.failed ? " failed" : "")}
             >
@@ -362,7 +369,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   {regionsByQuestion.get(m.id)!.status!=="located"?" · 待定位":regionsByQuestion.get(m.id)!.precision==="approximate"?" · 示意范围":""}
                 </button></>:m.role==="user" && m.context && " · " + m.context}
               </small>
-              {m.role==="assistant" && <ChatTaskStatus lifecycle={m.taskLifecycle}/>}
+              {m.role==="assistant" && !m.nativeInterrupt && <ChatTaskStatus lifecycle={m.taskLifecycle}/>}
               {m.role==="assistant" && (m.historicalReply || m.context?.startsWith("原问题 · ")) && <div className="answer-reply-context">
                 <span>保持当前地图</span><span aria-hidden="true">·</span>
                 <button disabled={!questions.has(m.id)} aria-controls={questions.has(m.id)?"message-"+questions.get(m.id)!.id:undefined}
@@ -408,13 +415,19 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
               )}
               {m.role==="assistant" && m.questionCheck && <>
                 {!!m.runTrace?.providerReasoning?.length && <RunDetails trace={m.runTrace}/>}
-                <QuestionCheck check={m.questionCheck} pending={s.activeChats.some(chat=>chat.userMessageId===m.replyTo)}
-                closed={s.messages.find(next=>next.role==="user" && next.time>m.time)?.questionDecision ||
-                  (s.messages.some(next=>next.role==="user" && next.time>m.time)?"superseded":undefined)}
-                onChoose={(choice,edited)=>void confirmQuestion(m.id,choice,edited)}/>
+                <QuestionCheck check={nativeCheck?.questionCheck ?? m.questionCheck}
+                  pending={!verifiedInterrupts.has(s.sessionId+"/"+m.id)}
+                  closed={checkClosed} terminal={nativeCheck?.status==="resolved" ? replyTerminal : undefined}
+                  onChoose={(choice,edited)=>confirmQuestion(m.id,choice,edited)}/>
               </>}
               {m.role==="assistant" && !m.questionCheck && <AnswerBody message={m} archived={historyIds.has(m.id)} animate={!historyIds.has(m.id) && Date.now()-m.time<3000} onReady={answerReady}
-                clarificationAction={replyTargets.has(m.id) && <button type="button" className="activity-link"
+                clarificationAction={m.nativeInterrupt && m.nativeInterrupt.status!=="pending" ?
+                  <p className="answer-reply-context" role="status">
+                    {m.nativeInterrupt.status==="resolved" ? "此追问已回答" : m.nativeInterrupt.status==="cancelled" ? "此追问已取消" : "此追问已不可回答"}
+                    {m.nativeInterrupt.status==="resolved" && replyTerminal && (
+                      replyTerminal==="failed" ? " · 续答失败" : " · 续答已取消"
+                    )}
+                  </p> : replyTargets.has(m.id) && <button type="button" className="activity-link"
                   aria-expanded={activeClarification?.message.id===m.id}
                   aria-controls={activeClarification?.message.id===m.id ? clarificationCardId : undefined}
                   onClick={event=>activeClarification?.message.id===m.id ? closeClarification() :
@@ -484,7 +497,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   onClick={() => void retry(retryAttempt,m.id)}>{clarificationFailure?"重新连接":"重试"}</button>
               ) : <small>{clarificationFailure?"可发送一条新问题继续。":"旧记录没有保存完整请求，可重新提问。"}</small>)}
             </article>
-          );}),[chatMessages,s.messages,recoverableClarifications,s.unansweredQuestionId,s.activeChats,s.camera,s.gridSystem,historyIds,questions,patch,confirmQuestion,attachScope,retry,inspectAsset,answerReady,regionsByQuestion,flyToResearchRegion,locateQuestion,replyTargets,openClarification,activeClarification,closeClarification]);
+          );}),[chatMessages,s.messages,recoverableClarifications,claimedReplyTerminals,verifiedInterrupts,s.sessionId,s.unansweredQuestionId,s.activeChats,s.camera,s.gridSystem,historyIds,questions,patch,confirmQuestion,attachScope,retry,inspectAsset,answerReady,regionsByQuestion,flyToResearchRegion,locateQuestion,replyTargets,openClarification,activeClarification,closeClarification]);
   if (!s.chatOpen) return null;
   const topLevel:ReactElement[]=[];
   // A live reply and its archived result share a key and a position below their original question.
@@ -662,22 +675,13 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
           prompt={activeClarification.prompt} seed={clarification.seed} focusOnOpen={clarification.focusOnOpen}
           openOrigin={activeClarification.message.replyTo && questions.has(activeClarification.message.id)
             ? ()=>locateQuestion(activeClarification.message.replyTo!) : undefined}
-          submit={answer=>{
-            if(!answerClarification(answer))return false;
+          submit={async answer=>{
+            if(!await answerClarification(answer))return false;
             closeClarification(true);
             return true;
           }} close={()=>closeClarification()}/> :
-        <div className={"chat-composer-input"+(clarificationTarget || s.citation || s.draftScope?.length ? " composer-with-reference" : "")}>
-        {clarificationTarget ? <div className="composer-references">
-          <div className="citation-attachment" role="group" aria-label="正在回复的澄清">
-            <Quote size={13} aria-hidden="true"/>
-            <span title={clarificationTarget.text}>回复澄清：{clarificationTarget.text.trim().replace(/\s+/g," ")}</span>
-            <button type="button" aria-label="取消回复此问题"
-              onClick={()=>{patch({clarificationReply:null});input.current?.focus();}}>
-              <X size={13}/>
-            </button>
-          </div>
-        </div> : (s.citation || !!s.draftScope?.length) && <div className="composer-references">
+        <div className={"chat-composer-input"+(s.citation || s.draftScope?.length ? " composer-with-reference" : "")}>
+        {(s.citation || !!s.draftScope?.length) && <div className="composer-references">
         <QuestionScope items={s.draftScope || []} remove={key=>patch({draftScope:(s.draftScope || []).filter(i=>scopeKey(i)!==key)})}/>
         {s.citation && (
           <div className="citation-attachment" role="group" aria-label="本次提问引用的材料">
@@ -696,7 +700,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
           onSubmit={(e) => {
             e.preventDefault();
             if (!text.trim() || s.attachingMapScope) return;
-            void send(text,clarificationTarget ? {parentTaskId:clarificationTarget.id} : undefined);
+            void send(text);
             setText("");
           }}
         >

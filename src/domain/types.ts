@@ -307,6 +307,7 @@ export interface Message {
   clarificationReply?: ClarificationReply;
   clarificationAnswer?: import("./clarification").ClarificationAnswer;
   clarificationPrompt?: import("./clarification").ClarificationPrompt;
+  nativeInterrupt?: import("./native-ag-ui").OneEarthAgUiInterruptRecord;
   discoveryClarification?: boolean;
   gridCoverage?: import("./grid-coverage").GridCoverageEvidence;
   researchRegion?:import("./research-region").ResearchRegion|null;
@@ -316,7 +317,7 @@ export interface Message {
   conversationEvidence?:ReadEvidence[];
   clarification?:boolean;
   conversationContext?:string;
-  questionCheck?: QuestionCheck & {attempt:DiscoveryAttempt};
+  questionCheck?: QuestionCheck & {attempt?:DiscoveryAttempt};
   questionDecision?: QuestionDecision;
   runTrace?:RunTrace;
   answerNotes?: AnswerNotes;
@@ -346,6 +347,8 @@ export interface VisualizationState {
   color: boolean;
 }
 export interface DiscoveryAttempt {
+  nativeResume?: boolean;
+  abandonedQuestionCheckId?: string;
   clarificationReply?: ClarificationReply;
   clarificationAnswer?: import("./clarification").ClarificationAnswer;
   questionDecision?:QuestionDecision;

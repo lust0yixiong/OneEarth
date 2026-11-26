@@ -9,7 +9,7 @@ import {availableChatOperations, chatCandidateBatch, chatCandidateItems, chatCan
 import {validWorkspaceOperationKind, workspaceCandidateOperationAllowed} from "./workspace-operations";
 import {projectWorkspaceView, workspaceActionState, type WorkspaceSurfaceReading, type WorkspacePanelReading} from "./workspace-view-projection";
 import {workspaceViewActionAllowed, type WorkspaceViewPublication} from "./workspace-view-context";
-import { answeredClarificationIds, messageClarificationPrompt, discoveryClarificationResult, loadResearchRecord, researchRecordId, cancelChatRequest, readWorkspaceReceipt, reportWorkspaceReceipt, requestWorkspaceRecovery, isClarificationAttempt } from "./runtime-client";
+import { discoveryClarificationResult, loadResearchRecord, researchRecordId, cancelChatRequest, readWorkspaceReceipt, reportWorkspaceReceipt, requestWorkspaceRecovery, isClarificationAttempt, type ResearchRecord } from "./runtime-client";
 import {clarificationAnswerText,validClarificationPrompt,type ClarificationAnswer} from "./clarification";
 import {datasetScope,mergeScope,scopedQuestionContext,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
@@ -22,9 +22,10 @@ import {isRainYear} from "./rain-catalog";
 import { paperId } from "./paper-record";
 import { readPaperCatalogStatus, type PaperCatalogStatus } from "./paper-catalog-client";
 import { randomId } from "./id";
+import type {ResumeEntry} from "@ag-ui/core";
 import { ChatResponseError, type ChatPhase } from "./chat-response";
-import {recoverNativeChat,submitNativeChat} from "./native-chat-client";
-import {nativeAgUiPath} from "./native-ag-ui";
+import {readClaimedNativeTurn,readNativeInterrupt,recoverNativeChat,submitNativeChat,type ChatRun} from "./native-chat-client";
+import {nativeAgUiPath,readOneEarthAgUiInterruptRecord,type OneEarthAgUiInterruptRecord,type OneEarthAgUiResumePayload,type OneEarthQuestionCheckResumePayload} from "./native-ag-ui";
 import {mergeTaskLifecycle,readCancelledTaskLifecycle,type TaskLifecycle} from "./task-lifecycle-client";
 import {loadDeepSeekTools} from "./deepseek-tools";
 import { readChatModel } from "./chat-model";
@@ -514,6 +515,41 @@ function restoreGlobeState(state:State, workspace:Partial<WorkspaceSnapshot>) {
   }
 }
 const sessionFailure = "浏览器未能保存会话。请检查本地存储空间或权限，保留此标签页以便重试。";
+function archivedChatMessages(saved:ResearchRecord):Message[] {
+  const reply=saved.result;
+  const nativeInterrupt=readOneEarthAgUiInterruptRecord(saved.interrupt,saved.id);
+  const questionCheck=nativeInterrupt?.kind==="question-check" ? nativeInterrupt.questionCheck : reply.questionCheck;
+  const clarificationPrompt=validClarificationPrompt(reply.clarificationPrompt) ? reply.clarificationPrompt : undefined;
+  const effect=workspaceEffectFor(reply,saved.id);
+  const receipt=effect && readWorkspaceReceipt(saved.workspaceReceipt,saved.id,saved.conversationId,saved.turnId);
+  const proposed=reply.workspaceLayerOpen ?? reply.workspaceAction ?? reply.workspaceOperation ?? effect;
+  const batch=boundResultBatch(reply.resultBatch,saved.id,saved.turnId,saved.conversationId);
+  return [
+    {id:saved.turnId,role:"user",text:saved.question,time:saved.created},
+    {id:saved.id,role:"assistant",text:reply.message,time:saved.updated,replyTo:saved.turnId,
+      chatMessage:true,...(proposed ? {historicalReply:true,
+        activity:workspaceEffectActivity(saved.id,proposed,receipt?.state ?? "proposed",reply.message,workspaceReceiptDetail(receipt?.state),receipt)} : {}),
+      workspaceEffect:effect,workspaceReceipt:receipt,taskLifecycle:saved.taskLifecycle,
+      ...(batch ? {candidates:{
+        resultBatch:batch,answerId:saved.id,title:batch.query,ids:resultBatchCandidates(batch,reply.modelIds??reply.catalogMatch?.ids),
+        caseId:reply.caseId ?? null,filters:answerFilters(emptyFilters(),reply.filters),
+        selection:reply.catalogMatch?.selection ?? null,layer:reply.layer ?? "all",
+        camera:reply.camera ?? defaultCamera,gridSystem:reply.gridSystem ?? "h3",
+        originKind:"chat",catalogConditions:batch.conditions,
+        researchRecord:{sessionId:saved.conversationId,messageId:saved.id,question:saved.question,
+          intent:reply.researchIntent,notes:reply.answerNotes?.researchNotes ?? []},
+      },historicalReply:true} : {}),
+      workspacePending:reply.workspacePending,researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
+      conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
+      answerNotes:reply.answerNotes,runTrace:reply.runTrace,researchRegion:reply.researchRegion,
+      gridCoverage:reply.gridCoverage,
+      ...(reply.clarification || clarificationPrompt ? {clarification:true} : {}),
+      clarificationPrompt,
+      nativeInterrupt,questionCheck,
+      ...(discoveryClarificationResult(reply)?{discoveryClarification:true}:{})},
+  ];
+}
+
 async function loadInitialSession(): Promise<State> {
   const url = new URL(location.href);
   const entry = history.state;
@@ -572,34 +608,7 @@ async function loadInitialSession(): Promise<State> {
         if(!cachedResearch){
           const stored=await readSession(saved.conversationId);
           state.clarificationReply=stored?.workspace.clarificationReply ?? null;
-          const clarificationPrompt=validClarificationPrompt(reply.clarificationPrompt) ? reply.clarificationPrompt : undefined;
-          const effect=workspaceEffectFor(reply,saved.id);
-          const receipt=effect && readWorkspaceReceipt(saved.workspaceReceipt,saved.id,saved.conversationId,saved.turnId);
-          const proposed=reply.workspaceLayerOpen ?? reply.workspaceAction ?? reply.workspaceOperation ?? effect;
-          const batch=boundResultBatch(reply.resultBatch,saved.id,saved.turnId,saved.conversationId);
-          const messages:Message[]=[
-            {id:saved.turnId,role:"user",text:saved.question,time:saved.created},
-            {id:saved.id,role:"assistant",text:reply.message,time:saved.updated,replyTo:saved.turnId,
-              chatMessage:true,...(proposed ? {historicalReply:true,
-                activity:workspaceEffectActivity(saved.id,proposed,receipt?.state ?? "proposed",reply.message,workspaceReceiptDetail(receipt?.state),receipt)} : {}),
-              workspaceEffect:effect,workspaceReceipt:receipt,taskLifecycle:saved.taskLifecycle,
-              ...(batch ? {candidates:{
-                resultBatch:batch,answerId:saved.id,title:batch.query,ids:resultBatchCandidates(batch,reply.modelIds??reply.catalogMatch?.ids),
-                caseId:reply.caseId ?? null,filters:answerFilters(emptyFilters(),reply.filters),
-                selection:reply.catalogMatch?.selection ?? null,layer:reply.layer ?? "all",
-                camera:reply.camera ?? defaultCamera,gridSystem:reply.gridSystem ?? "h3",
-                originKind:"chat",catalogConditions:batch.conditions,
-                researchRecord:{sessionId:saved.conversationId,messageId:saved.id,question:saved.question,
-                  intent:reply.researchIntent,notes:reply.answerNotes?.researchNotes ?? []},
-              },historicalReply:true} : {}),
-              workspacePending:reply.workspacePending,researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
-              conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
-              answerNotes:reply.answerNotes,runTrace:reply.runTrace,researchRegion:reply.researchRegion,
-              gridCoverage:reply.gridCoverage,
-              ...(reply.clarification || clarificationPrompt ? {clarification:true} : {}),
-              clarificationPrompt,
-              ...(discoveryClarificationResult(reply)?{discoveryClarification:true}:{})},
-          ];
+          const messages=archivedChatMessages(saved);
           state.sessionId=saved.conversationId;
           state.messages=mergeMessages(stored?.messages||[],messages);
           await writeSession(state.sessionId,saved.question,captureWorkspace(state),state.messages);
@@ -1600,8 +1609,58 @@ function useWorkspaceValue(initialState: State) {
       return next;
     });
   },[]);
+  const [verifiedInterrupts,setVerifiedInterrupts]=useState<ReadonlySet<string>>(()=>new Set());
+  const markInterrupt=useCallback((threadId:string,id:string,pending:boolean)=>{
+    const key=threadId+"/"+id;
+    setVerifiedInterrupts(previous=>{
+      if(previous.has(key)===pending)return previous;
+      const next=new Set(previous);
+      if(pending)next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  },[]);
+  const publishInterrupt=useCallback(async (parent:ChatRun,claim:OneEarthAgUiInterruptRecord)=>{
+    if(latest.current.sessionId!==parent.threadId)return;
+    markInterrupt(parent.threadId,parent.runId,claim.status==="pending");
+    const message=latest.current.messages.find(m=>m.id===parent.runId && m.replyTo===parent.turnId);
+    if(message && (message.nativeInterrupt?.status!==claim.status || message.nativeInterrupt?.resumedBy!==claim.resumedBy))
+      await add("assistant",message.text,{...message,nativeInterrupt:claim,
+        ...(claim.kind==="question-check" ? {} : {clarificationPrompt:claim.prompt})});
+  },[add,markInterrupt]);
+  const [claimedReplyTerminals,setClaimedReplyTerminals]=useState<ReadonlyMap<string,"failed"|"cancelled">>(()=>new Map());
+  const recoverClaimed=useCallback(async (parent:ChatRun,claim:OneEarthAgUiInterruptRecord,signal:AbortSignal,
+    attempted?:ChatRun,locationId?:string)=>{
+    const child=await readClaimedNativeTurn(parent,claim,signal,attempted,locationId);
+    if(!child || signal.aborted || latest.current.sessionId!==parent.threadId)return false;
+    const existing=latest.current.messages.find(m=>m.id===child.runId && m.replyTo===child.turnId && !m.failed);
+    if(existing)return true;
+    let recovered;
+    let taskLifecycle:TaskLifecycle|undefined;
+    try{
+      recovered=await recoverNativeChat(child,signal,{onAccepted:()=>{},onLifecycle:facts=>{taskLifecycle=facts;}});
+    }catch(error){
+      if(!(error instanceof ChatResponseError) || (error.code!=="run_failed" && error.code!=="cancelled"))throw error;
+      if(signal.aborted || latest.current.sessionId!==parent.threadId)return false;
+      const phase=error.code==="cancelled" ? "cancelled" : "failed";
+      setClaimedReplyTerminals(previous=>previous.has(child.runId) ? previous : new Map(previous).set(child.runId,phase));
+      return true;
+    }
+    if(!recovered.record || latest.current.sessionId!==parent.threadId || signal.aborted)return false;
+    const {record,response}=recovered;
+    if(response.paperRecords)registerPapers(response.paperRecords,false);
+    if(response.hainaRecords?.length&&response.hainaCatalog)
+      registerHaina(response.hainaRecords,response.hainaCatalog.synced,response.hainaCatalog.endpoint,false);
+    if(recovered.interrupt)markInterrupt(child.threadId,child.runId,recovered.interrupt.status==="pending");
+    const messages=archivedChatMessages({...record,taskLifecycle:taskLifecycle??record.taskLifecycle});
+    for(const message of messages){
+      if(signal.aborted || latest.current.sessionId!==parent.threadId)return false;
+      await add(message.role,message.text,message);
+    }
+    return true;
+  },[add,markInterrupt]);
   const executeDiscovery = useCallback(
-    async (attempt: DiscoveryAttempt, retrying: boolean, saved?: ChatDelivery, restoring=false) => {
+    async (attempt: DiscoveryAttempt, retrying: boolean, saved?: ChatDelivery, restoring=false, onResumeAccepted?:()=>void) => {
       if ([...requests.current.values()].some(({progress})=>progress.userMessageId===attempt.userMessageId)) return;
       const q = attempt.query;
       const current = latest.current;
@@ -1610,11 +1669,28 @@ function useWorkspaceValue(initialState: State) {
       const previousTaskId=attempt.context.browserTurnFrame
         ? attempt.context.browserTurnFrame.related?.find(entry=>entry.relation==="reply")?.taskId
         : previousChatAnswer(preceding)?.id;
-      const submission = {context:attempt.context,config:readChatModel(),
-        previousTaskId:attempt.clarificationReply ? undefined : attempt.clarificationAnswer?.parentTaskId ?? previousTaskId,
-        ...(attempt.clarificationAnswer?{clarificationAnswer:attempt.clarificationAnswer}:{}),
-        ...(attempt.questionDecision?{questionDecision:attempt.questionDecision}:{}),
-        ...(attempt.clarificationReply?{clarificationReply:attempt.clarificationReply}:{})};
+      const reply=attempt.nativeResume ? attempt.clarificationAnswer : undefined;
+      const decision=attempt.nativeResume ? attempt.questionDecision : undefined;
+      const abandon=attempt.nativeResume && attempt.abandonedQuestionCheckId;
+      const parentId=reply?.parentTaskId ?? decision?.checkMessageId ?? (abandon || undefined);
+      const parentMessage=current.messages.find(m=>m.id===parentId);
+      const parentInterrupt=parentMessage?.nativeInterrupt;
+      const parentRun=parentMessage?.replyTo && parentInterrupt
+        ? {threadId:current.sessionId,runId:parentMessage.id,turnId:parentMessage.replyTo} : undefined;
+      let resume:ResumeEntry|undefined;
+      if(parentRun && parentInterrupt?.kind==="question-check"){
+        if(abandon)resume={interruptId:parentRun.runId,status:"cancelled"};
+        else if(decision){
+          const payload:OneEarthQuestionCheckResumePayload=decision.choice==="edited"
+            ? {choice:"edited",dataQuestion:decision.dataQuestion} : {choice:decision.choice};
+          resume={interruptId:parentRun.runId,status:"resolved",payload};
+        }
+      }else if(parentRun && reply){
+        const payload:OneEarthAgUiResumePayload={...(reply.optionId?{optionId:reply.optionId}:{}),...(reply.text?{text:reply.text}:{})};
+        resume={interruptId:parentRun.runId,status:"resolved",payload};
+      }
+      if(!saved && (attempt.nativeResume ? !resume : isClarificationAttempt(attempt) || !!attempt.questionDecision))return;
+      const submission = {context:attempt.context,config:readChatModel(),previousTaskId:parentRun?.runId ?? previousTaskId};
       const workspaceKey=(state:State)=>attempt.context.browserTurnFrame
         ? frozenWorkspaceKey(state,readWorkspaceSurface()) : requestWorkspaceKey(state);
       const detached = retrying && workspaceKey(current) !== attempt.workspaceKey;
@@ -1653,7 +1729,8 @@ function useWorkspaceValue(initialState: State) {
       async function finishCancellation(trace?:Message["runTrace"]){
         if(!isCurrent())return;
         const taskLifecycle=mergeTaskLifecycle(entry.progress.taskLifecycle,{runtimePhase:{phase:"cancelled"}});
-        const written=complete("本地任务已取消。",{id:delivery.id,replyTo:attempt.userMessageId,runTrace:trace??entry.progress.trace,taskLifecycle});
+        const written=abandon ? undefined :
+          complete("本地任务已取消。",{id:delivery.id,replyTo:attempt.userMessageId,runTrace:trace??entry.progress.trace,taskLifecycle});
         closeProgress();
         controller.abort();
         await written;
@@ -1729,9 +1806,19 @@ function useWorkspaceValue(initialState: State) {
       publishChatProgress();
       if (!saved) patch({error:null,chatOpen:true});
       try {
+        let acceptedReplyWrite:Promise<void>|undefined;
         const progress = {
           onAccepted:()=>{
-            if(isCurrent() && !entry.progress.accepted)updateProgress({accepted:true,stage:"正在生成回答"});
+            if(!isCurrent() || entry.progress.accepted)return;
+            updateProgress({accepted:true,stage:"正在生成回答"});
+            if(!parentRun || !parentInterrupt || !resume)return;
+            if(resume.status==="resolved" && !latest.current.messages.some(m=>m.id===run.turnId)){
+              const text=decision ? (decision.choice==="original"?"按原问题继续：":"按确认的问题继续：")+decision.dataQuestion : q;
+              acceptedReplyWrite=add("user",text,{id:run.turnId,clarificationAnswer:reply,questionDecision:decision,
+                attachedScope:decision ? attempt.context.attachedScope : undefined,browserTurnFrame:attempt.context.browserTurnFrame});
+            }
+            void publishInterrupt(parentRun,{...parentInterrupt,status:resume.status,resumedBy:run.runId});
+            onResumeAccepted?.();
           },
           onDraft:(draftText:string)=>{
             if(isCurrent())updateProgress({draftText});
@@ -1745,7 +1832,7 @@ function useWorkspaceValue(initialState: State) {
             if(merged!==entry.progress.taskLifecycle)updateProgress({taskLifecycle:merged});
           },
         };
-        let liveResult: DiscoveryResponse | undefined;
+        let liveResult: Awaited<ReturnType<typeof submitNativeChat>>;
         if(!saved){
           const deepseekTools=await loadDeepSeekTools(controller.signal);
           await saveChatDelivery(session,delivery).catch(()=>{
@@ -1754,14 +1841,34 @@ function useWorkspaceValue(initialState: State) {
           });
           if(!isCurrent())return;
           try {
-            liveResult=await submitNativeChat(run,q,{...submission,deepseekTools},transport,progress);
+            liveResult=await submitNativeChat(run,q,{...submission,deepseekTools},transport,progress,resume);
           } catch(error) {
             if(!transport.signal.aborted || !isCurrent())throw error;
           }
         }
+        const conflict=liveResult && "conflict" in liveResult ? liveResult : undefined;
+        if(parentRun && (!liveResult || conflict) && isCurrent() && !entry.progress.cancelling){
+          updateProgress({stage:"正在核对原追问的回复"});
+          const claim=await readNativeInterrupt(parentRun,controller.signal,parentInterrupt?.kind).catch(error=>{
+            if(conflict)throw error;
+            return undefined;
+          });
+          if(!isCurrent())return;
+          if(claim){
+            await publishInterrupt(parentRun,claim);
+            const claimed=claim.status==="resolved" || (claim.kind==="question-check" && claim.status==="cancelled" && claim.resumedBy);
+            if(claimed && (conflict || claim.resumedBy!==run.runId)){
+              if(await recoverClaimed(parentRun,claim,controller.signal,run,conflict?.locationId))onResumeAccepted?.();
+              return;
+            }
+          }
+          if(conflict)return;
+        }
         if(!liveResult && isCurrent() && !entry.progress.cancelling)updateProgress({stage:"正在读取原任务状态"});
-        const r=liveResult ?? await recoverNativeChat(run,controller.signal,progress);
+        const result=liveResult && "response" in liveResult ? liveResult : await recoverNativeChat(run,controller.signal,progress);
+        await acceptedReplyWrite;
         if (!isCurrent()) return;
+        const {response:r,interrupt}=result;
         if(entry.progress.taskLifecycle?.runtimePhase?.phase==="cancelled"){
           await finishCancellation(r.runTrace);
           return;
@@ -1769,16 +1876,21 @@ function useWorkspaceValue(initialState: State) {
         if(entry.progress.taskLifecycle)entry.progress.taskLifecycle=mergeTaskLifecycle(
           entry.progress.taskLifecycle,{runtimePhase:{phase:"complete"}});
         completedTrace=r.runTrace;
-        const clarificationPrompt=validClarificationPrompt(r.clarificationPrompt) ? r.clarificationPrompt : undefined;
-        if (r.questionCheck || clarificationPrompt || r.clarification) {
+        const questionCheck=interrupt?.kind==="question-check" ? interrupt.questionCheck : r.questionCheck;
+        const clarificationPrompt=(interrupt?.kind!=="question-check" ? interrupt?.prompt : undefined) ??
+          (validClarificationPrompt(r.clarificationPrompt) ? r.clarificationPrompt : undefined);
+        if(interrupt?.kind==="question-check" && interrupt.questionCheck.originalQuestion!==q)
+          throw Error("归档问题确认与原提问不符。");
+        if(interrupt)markInterrupt(session,delivery.id,interrupt.status==="pending");
+        if (questionCheck || clarificationPrompt || r.clarification || interrupt) {
           if(r.researchRegion===null || validResearchRegion(r.researchRegion))receiveRegion(r.researchRegion);
-          if (r.questionCheck) {
+          if (questionCheck) {
             await complete(r.message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,
-              questionCheck:{...r.questionCheck,attempt},researchRegion:r.researchRegion,researchIntent:r.researchIntent,
+              nativeInterrupt:interrupt,questionCheck:{...questionCheck,attempt},researchRegion:r.researchRegion,researchIntent:r.researchIntent,
               conversationContext:r.conversationContext,conversationEvidence:r.conversationEvidence,conversationAssertionEvidence:r.conversationAssertionEvidence});
           } else {
             await complete(r.message,{id:delivery.id,replyTo:attempt.userMessageId,runTrace:r.runTrace,workspacePending:r.workspacePending,
-              clarification:true,clarificationPrompt,...(clarificationPrompt && !workspaceCurrent() ? {historicalReply:true} : {}),...(discoveryClarificationResult(r)?{discoveryClarification:true}:{}),
+              clarification:true,clarificationPrompt,nativeInterrupt:interrupt,...(clarificationPrompt && !workspaceCurrent() ? {historicalReply:true} : {}),...(discoveryClarificationResult(r)?{discoveryClarification:true}:{}),
               researchRegion:r.researchRegion,researchIntent:r.researchIntent,conversationContext:r.conversationContext,
               conversationEvidence:r.conversationEvidence,conversationAssertionEvidence:r.conversationAssertionEvidence});
           }
@@ -2283,6 +2395,11 @@ function useWorkspaceValue(initialState: State) {
         },receipt);
       } catch (error) {
         if (!isCurrent()) return;
+        if(attempt.nativeResume && !entry.progress.accepted){
+          keepDelivery=!(error instanceof ChatResponseError);
+          patch({error:"暂时无法确认这次追问回复。请查看原追问状态。"});
+          return;
+        }
         if(effect){
           const receipt=effectReceipt(workspaceCurrent()?"failed":"stale");
           await completeWorkspace("本轮工作台操作未提交。",{id:delivery.id,replyTo:attempt.userMessageId,runTrace:completedTrace ?? entry.progress.trace,
@@ -2322,7 +2439,7 @@ function useWorkspaceValue(initialState: State) {
         }
       }
     },
-    [add, inspectAsset, leaveDetail, patch, publishChatProgress,readWorkspaceSurface,uploadReceipt,rememberClarificationDelivery,openFieldLayer,chatRequestSnapshot,persistReceiptUpdate],
+    [add, inspectAsset, leaveDetail, patch, publishChatProgress,readWorkspaceSurface,uploadReceipt,rememberClarificationDelivery,openFieldLayer,chatRequestSnapshot,persistReceiptUpdate,publishInterrupt,recoverClaimed,markInterrupt],
   );
   const attachScope=(...items:ScopeItem[])=>{
     const previous=latest.current.draftScope || [];
@@ -2336,25 +2453,42 @@ function useWorkspaceValue(initialState: State) {
     patch({draftScope:merged,chatOpen:true,inspector:null,evidence:null});
   };
   const confirmingQuestions=useRef(new Set<string>());
-  const confirmQuestion = useCallback(async (messageId:string,choice:QuestionDecision["choice"],edited?:string)=>{
+  const confirmQuestion=useCallback(async (messageId:string,choice:QuestionDecision["choice"]|"abandon",edited?:string)=>{
     const current=latest.current;
-    const message=current.messages.find(m=>m.id===messageId),check=message?.questionCheck;
-    if(!message || !check || confirmingQuestions.current.has(messageId) ||
-      current.messages.some(m=>m.role==="user" && m.time>message.time))return;
-    let decision:QuestionDecision;
-    try{decision=makeQuestionDecision(check,messageId,choice,edited);}
-    catch(error){patch({error:error instanceof Error?error.message:"请核对问题内容。"});return;}
-    const {clarificationReply: _clarificationReply,clarificationAnswer: _clarificationAnswer,...checkedAttempt}=check.attempt;
-    const {workspaceView,browserTurnFrame,...snapshot}=chatRequestSnapshot(current,chatCandidateBatch(current),messageId);
-    const attempt={...checkedAttempt,...snapshot,query:check.originalQuestion,userMessageId:randomId(),questionDecision:decision,
-      view:current.view,context:structuredClone({...checkedAttempt.context,workspaceView,browserTurnFrame})};
-    confirmingQuestions.current.add(messageId);
+    const message=current.messages.find(m=>m.id===messageId);
+    const interrupt=message?.nativeInterrupt;
+    const key=current.sessionId+"/"+messageId;
+    if(interrupt?.kind!=="question-check" || interrupt.status!=="pending" || !message?.replyTo ||
+      !verifiedInterrupts.has(key) || confirmingQuestions.current.has(key))return false;
+    confirmingQuestions.current.add(key);
+    const parent={threadId:current.sessionId,runId:messageId,turnId:message.replyTo};
+    const signal=AbortSignal.timeout(15000);
     try{
-      await add("user",(choice==="original"?"按原问题继续：":"按确认的问题继续：")+decision.dataQuestion,
-        {id:attempt.userMessageId,questionDecision:decision,attachedScope:attempt.context.attachedScope,browserTurnFrame});
-      if(latest.current.sessionId===current.sessionId)await executeDiscovery(attempt,true);
-    }finally{confirmingQuestions.current.delete(messageId);}
-  },[add,patch,executeDiscovery,chatRequestSnapshot]);
+      const claim=await readNativeInterrupt(parent,signal,"question-check");
+      if(latest.current.sessionId!==parent.threadId || claim.kind!=="question-check")return false;
+      await publishInterrupt(parent,claim);
+      if(claim.status!=="pending")return await recoverClaimed(parent,claim,signal);
+      const check=claim.questionCheck;
+      if(check.originalQuestion!==interrupt.questionCheck.originalQuestion ||
+        check.proposedQuestion!==interrupt.questionCheck.proposedQuestion)return false;
+      if(choice==="edited" && edited?.includes("\0"))return false;
+      const decision=choice==="abandon" ? undefined : makeQuestionDecision(check,messageId,choice,edited);
+      const now=latest.current;
+      if(now.sessionId!==parent.threadId)return false;
+      const original=message.questionCheck?.attempt?.context ?? scopedQuestionContext([],null);
+      const {workspaceView,browserTurnFrame,...snapshot}=chatRequestSnapshot(now,chatCandidateBatch(now),messageId);
+      const attempt:DiscoveryAttempt={...snapshot,query:check.originalQuestion,userMessageId:randomId(),view:now.view,
+        context:structuredClone({...original,workspaceView,browserTurnFrame}),nativeResume:true,
+        ...(decision ? {questionDecision:decision} : {abandonedQuestionCheckId:messageId})};
+      return await new Promise<boolean>(resolve=>{
+        void executeDiscovery(attempt,false,undefined,false,()=>resolve(true)).then(()=>resolve(false),()=>resolve(false));
+      });
+    }catch{
+      return false;
+    }finally{
+      confirmingQuestions.current.delete(key);
+    }
+  },[chatRequestSnapshot,executeDiscovery,publishInterrupt,recoverClaimed,verifiedInterrupts]);
   useEffect(() => {
     let active = true;
     const session = state.sessionId;
@@ -2377,6 +2511,31 @@ function useWorkspaceValue(initialState: State) {
     void restore().catch(() => { if (active) patch({sessionError:sessionFailure}); });
     return () => { active = false; };
   }, [state.sessionId, executeDiscovery, patch]);
+  useEffect(()=>{
+    const controller=new AbortController();
+    const threadId=state.sessionId;
+    const refreshInterrupts=()=>{
+      for(const message of latest.current.messages){
+        const interrupt=message.nativeInterrupt;
+        if(!interrupt || !message.replyTo)continue;
+        const missingReply=interrupt.status==="resolved" &&
+          !latest.current.messages.some(m=>m.id===interrupt.resumedBy && !m.failed);
+        if(interrupt.status!=="pending" && !missingReply)continue;
+        const parent={threadId,runId:message.id,turnId:message.replyTo};
+        void readNativeInterrupt(parent,controller.signal,interrupt.kind).then(async claim=>{
+          if(controller.signal.aborted || latest.current.sessionId!==threadId)return;
+          await publishInterrupt(parent,claim);
+          if(claim.status==="resolved")await recoverClaimed(parent,claim,controller.signal);
+        }).catch(()=>{/* The next reconnect can recheck the archived card. */});
+      }
+    };
+    refreshInterrupts();
+    window.addEventListener("online",refreshInterrupts);
+    return ()=>{
+      window.removeEventListener("online",refreshInterrupts);
+      controller.abort();
+    };
+  },[state.sessionId,publishInterrupt,recoverClaimed]);
   const openPublicLayer = useCallback((id:PublicLayerId) => {
     const current=latest.current;
     const existing=current.globeLayers.find(layer=>layer.kind==="public"&&layer.selection.id===id);
@@ -2424,40 +2583,42 @@ function useWorkspaceValue(initialState: State) {
     [patch,openFieldLayer],
   );
   const answeringClarifications=useRef(new Set<string>());
-  const answerClarification=useCallback((reply:ClarificationAnswer)=>{
+  const answerClarification=useCallback(async (draft:ClarificationAnswer)=>{
     const s=latest.current;
-    const {parentTaskId}=reply;
-    const pendingKey=s.sessionId+"/"+parentTaskId;
-    if (answeringClarifications.current.has(pendingKey) || answeredClarificationIds(s.messages,s.unansweredQuestionId).has(parentTaskId))
+    const key=s.sessionId+"/"+draft.parentTaskId;
+    const parent=s.messages.find(m=>m.id===draft.parentTaskId);
+    if(answeringClarifications.current.has(key) || !verifiedInterrupts.has(key) ||
+      parent?.nativeInterrupt?.status!=="pending" || parent.nativeInterrupt.kind==="question-check" || !parent.replyTo)return false;
+    answeringClarifications.current.add(key);
+    const run={threadId:s.sessionId,runId:parent.id,turnId:parent.replyTo};
+    const signal=AbortSignal.timeout(15000);
+    try{
+      const claim=await readNativeInterrupt(run,signal);
+      if(latest.current.sessionId!==run.threadId || claim.kind==="question-check")return false;
+      await publishInterrupt(run,claim);
+      if(claim.status!=="pending")return await recoverClaimed(run,claim,signal);
+      const reply={...draft,...(draft.text?{text:draft.text.trim()}:{})};
+      const query=clarificationAnswerText(claim.prompt,reply);
+      if(!query)return false;
+      const now=latest.current;
+      if(now.sessionId!==run.threadId)return false;
+      const {workspaceView,browserTurnFrame,...snapshot}=chatRequestSnapshot(now,chatCandidateBatch(now),parent.id);
+      const attempt:DiscoveryAttempt={query,userMessageId:randomId(),view:now.view,
+        context:structuredClone({...scopedQuestionContext([],null),workspaceView,browserTurnFrame}),
+        ...snapshot,clarificationAnswer:reply,nativeResume:true};
+      return await new Promise<boolean>(resolve=>{
+        void executeDiscovery(attempt,false,undefined,false,()=>resolve(true)).then(()=>resolve(false),()=>resolve(false));
+      });
+    }catch{
       return false;
-    const parent=s.messages.find(message=>message.id===parentTaskId);
-    const prompt=messageClarificationPrompt(parent);
-    const query=prompt && clarificationAnswerText(prompt,reply);
-    if (!prompt || !query) return false;
-    const clarificationReply=prompt.kind==="research" ? {parentTaskId} : undefined;
-    const clarificationAnswer=validClarificationPrompt(parent?.clarificationPrompt) ? reply : undefined;
-    const {workspaceView,browserTurnFrame,...snapshot}=chatRequestSnapshot(s,chatCandidateBatch(s),parentTaskId);
-    const unsent=s.messages.find(message=>message.role==="user" && message.id===s.unansweredQuestionId);
-    const unsentParent=unsent?.clarificationAnswer?.parentTaskId ?? unsent?.clarificationReply?.parentTaskId;
-    const originalTurnId=unsentParent===parentTaskId && unsent?.text===query
-      && unsent.clarificationAnswer?.optionId===reply.optionId ? unsent.id : undefined;
-    const attempt:DiscoveryAttempt={query,userMessageId:originalTurnId ?? randomId(),view:s.view,
-      context:structuredClone({...scopedQuestionContext([],null),workspaceView,browserTurnFrame:unsent?.browserTurnFrame && originalTurnId
-        ? unsent.browserTurnFrame : browserTurnFrame}),...snapshot,clarificationReply,clarificationAnswer};
-    answeringClarifications.current.add(pendingKey);
-    if (!originalTurnId) void add("user",query,{id:attempt.userMessageId,clarificationReply,clarificationAnswer:reply,browserTurnFrame});
-    patch({unansweredQuestionId:null,...(s.clarificationReply?.parentTaskId===parentTaskId ? {clarificationReply:null} : {})});
-    void executeDiscovery(attempt,false).finally(()=>answeringClarifications.current.delete(pendingKey));
-    return true;
-  },[add,chatRequestSnapshot,executeDiscovery,patch]);
+    }finally{
+      answeringClarifications.current.delete(key);
+    }
+  },[chatRequestSnapshot,executeDiscovery,publishInterrupt,recoverClaimed,verifiedInterrupts]);
 
-  const send = useCallback(async (query:string, clarificationReply?:ClarificationReply) => {
+  const send = useCallback(async (query:string) => {
     const q = query.trim(), s = latest.current;
     if (!q || s.attachingMapScope) return;
-    if (clarificationReply) {
-      answerClarification({parentTaskId:clarificationReply.parentTaskId,text:q});
-      return;
-    }
     const batch=chatCandidateBatch(s);
     const {workspaceView,browserTurnFrame,...snapshot}=chatRequestSnapshot(s,batch);
     const turnId = randomId();
@@ -2487,7 +2648,7 @@ function useWorkspaceValue(initialState: State) {
       ...(s.citation?{citation:s.citation}:{})});
     patch({draftScope:null,citation:null,unansweredQuestionId:null});
     await executeDiscovery(attempt,false);
-  },[add,answerClarification,chatRequestSnapshot,executeDiscovery,patch]);
+  },[add,chatRequestSnapshot,executeDiscovery,patch]);
   const retry = useCallback(async (attempt:DiscoveryAttempt, id:string) => {
     const session=latest.current.sessionId;
     try {
@@ -2528,7 +2689,7 @@ function useWorkspaceValue(initialState: State) {
     send,
     attachScope,confirmQuestion,answerClarification,cancelChat,
     registerWorkspaceSurface, registerWorkspacePanel, noteManualNavigation, observePublishedRasters,
-    retry,recoverableClarifications,
+    retry,recoverableClarifications,verifiedInterrupts,claimedReplyTerminals,
     openCase,
     inspectAsset,
     openData,

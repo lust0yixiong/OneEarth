@@ -1,7 +1,6 @@
 import {readTaskLifecycle,type TaskLifecycle} from "./task-lifecycle-client";
 import type {DiscoveryAttempt,DiscoveryResponse,Message} from "./types";
 import {validBrowserWorkspaceReceipt,type BrowserWorkspaceReceipt,type WorkspaceReceipt,type WorkspaceRecoveryInput} from "./turn-context";
-import {createClarificationPrompt,validClarificationPrompt} from "./clarification";
 
 export const chatMessagesPath = "/api/chat/messages";
 
@@ -17,28 +16,8 @@ export function discoveryClarificationResult(result:Pick<DiscoveryResponse,"clar
   return result.clarification===true && result.discoveryClarification===true && !result.questionCheck;
 }
 
-export function canReplyToDiscoveryClarification(message?:Message):boolean {
-  return !!message && message.role==="assistant" && !message.failed &&
-    discoveryClarificationResult(message) && researchRecordId.test(message.id);
-}
-
-export function messageClarificationPrompt(message?:Message) {
-  if (!message || message.role!=="assistant" || message.failed || message.questionCheck || !researchRecordId.test(message.id)) return;
-  if (validClarificationPrompt(message.clarificationPrompt)) return message.clarificationPrompt;
-  if (!canReplyToDiscoveryClarification(message)) return;
-  const text=message.text.trim();
-  return createClarificationPrompt("research",text.length>500 ? text.slice(0,499)+"…" : text || "请补充研究所需的信息。");
-}
-
-export function answeredClarificationIds(messages:Message[],unansweredId:string|null) {
-  return new Set(messages.flatMap(message=>{
-    const id=message.clarificationAnswer?.parentTaskId ?? message.clarificationReply?.parentTaskId;
-    return message.role==="user" && message.id!==unansweredId && id ? [id] : [];
-  }));
-}
-
 export function isClarificationAttempt(attempt:DiscoveryAttempt|undefined) {
-  return !!(attempt?.clarificationAnswer || attempt?.clarificationReply);
+  return !!(attempt?.nativeResume || attempt?.clarificationAnswer || attempt?.clarificationReply);
 }
 
 export function displayedChatMessages(messages:Message[], recoverable:ReadonlySet<string>) {
@@ -56,7 +35,7 @@ export function displayedChatMessages(messages:Message[], recoverable:ReadonlySe
     (!finished.has(m.replyTo!) && failure.get(m.replyTo!)===m.id));
 }
 
-interface ResearchRecord {
+export interface ResearchRecord {
   id:string;
   question:string;
   conversationId:string;
@@ -64,6 +43,7 @@ interface ResearchRecord {
   created:number;
   updated:number;
   result:DiscoveryResponse;
+  interrupt?:unknown;
   workspaceReceipt?:WorkspaceReceipt;
   taskLifecycle?:TaskLifecycle;
 }

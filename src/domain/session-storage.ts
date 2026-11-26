@@ -64,6 +64,15 @@ function mergeCancelledLifecycle(previous:Message|undefined, incoming:Message) {
   return mergeTaskLifecycle(previous.taskLifecycle,incoming.taskLifecycle);
 }
 
+function mergeInterrupt(previous:Message,incoming:Message):Message["nativeInterrupt"] {
+  const next=incoming.nativeInterrupt, current=previous.nativeInterrupt;
+  if(previous.role!=="assistant" || incoming.role!=="assistant" || previous.replyTo!==incoming.replyTo
+    || !next || next.id!==previous.id)return current;
+  if(!current || (current.status==="pending" && next.status!=="pending") ||
+    (current.status==="unavailable" && next.status==="cancelled"))return next;
+  return current;
+}
+
 export function mergeMessages(existing: Message[], incoming: Message[]) {
   const messages = new Map(existing.map(message => [message.id, message]));
   let changed = false;
@@ -78,8 +87,10 @@ export function mergeMessages(existing: Message[], incoming: Message[]) {
       changed = true;
     }else if(previous){
       const taskLifecycle=mergeCancelledLifecycle(previous,message);
-      if(taskLifecycle && taskLifecycle!==previous.taskLifecycle){
-        messages.set(message.id,{...previous,taskLifecycle});
+      const nativeInterrupt=mergeInterrupt(previous,message);
+      if((taskLifecycle && taskLifecycle!==previous.taskLifecycle) || nativeInterrupt!==previous.nativeInterrupt){
+        messages.set(message.id,{...previous,taskLifecycle:taskLifecycle??previous.taskLifecycle,
+          nativeInterrupt,clarificationPrompt:nativeInterrupt?.kind==="question-check" ? previous.clarificationPrompt : nativeInterrupt?.prompt??previous.clarificationPrompt});
         changed=true;
       }
     }
@@ -133,13 +144,19 @@ export async function writeSession(
     for (const message of messages) {
       const records=tx.objectStore("messages");
       const row={session:id,id:message.id,message};
-      if(!message.workspaceEffect && message.taskLifecycle?.runtimePhase?.phase!=="cancelled"){
+      if(!message.nativeInterrupt && !message.workspaceEffect && message.taskLifecycle?.runtimePhase?.phase!=="cancelled"){
         records.put(row);
         continue;
       }
       const existing=records.get([id,message.id]);
       existing.onsuccess=()=>{
         const previous:Message|undefined=existing.result?.message;
+        if(previous && !previous.failed && message.nativeInterrupt){
+          const nativeInterrupt=mergeInterrupt(previous,message);
+          if(nativeInterrupt!==previous.nativeInterrupt)
+            records.put({...row,message:{...previous,nativeInterrupt,clarificationPrompt:nativeInterrupt?.kind==="question-check" ? previous.clarificationPrompt : nativeInterrupt?.prompt}});
+          return;
+        }
         const taskLifecycle=mergeCancelledLifecycle(previous,message);
         if(previous && taskLifecycle){
           if(taskLifecycle!==previous.taskLifecycle)records.put({...row,message:{...previous,taskLifecycle}});

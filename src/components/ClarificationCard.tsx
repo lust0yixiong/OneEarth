@@ -40,7 +40,7 @@ export function ClarificationCard({id,sessionId,parentTaskId,prompt,seed,focusOn
   seed?:Draft;
   focusOnOpen:boolean;
   close:()=>void;
-  submit:(answer:ClarificationAnswer)=>boolean;
+  submit:(answer:ClarificationAnswer)=>Promise<boolean>;
   openOrigin?:()=>void;
 }) {
   const questionId=useId();
@@ -48,6 +48,8 @@ export function ClarificationCard({id,sessionId,parentTaskId,prompt,seed,focusOn
   const key="oneearth.clarification-draft.v1."+sessionId+"."+parentTaskId;
   const [draft,setDraft]=useState(()=>readDraft(key,prompt,seed));
   const [error,setError]=useState("");
+  const [submitting,setSubmitting]=useState(false);
+  const submittingRef=useRef(false);
   const options=prompt.options || [];
   const confirming=prompt.kind==="confirmation";
   const text=draft.text?.trim();
@@ -75,11 +77,18 @@ export function ClarificationCard({id,sessionId,parentTaskId,prompt,seed,focusOn
         close();
       }
     }}>
-    <form onSubmit={event=>{
+    <form onSubmit={async event=>{
       event.preventDefault();
-      if (!ready) return;
-      if (submit(answer)) saveDraft(key);
-      else setError("此问题暂时无法回复，请回到原消息查看状态。");
+      if (!ready || submittingRef.current) return;
+      submittingRef.current=true;
+      setSubmitting(true);
+      try {
+        if(await submit(answer))saveDraft(key);
+        else setError("此问题暂时无法回复，请回到原消息查看状态。");
+      }finally{
+        submittingRef.current=false;
+        setSubmitting(false);
+      }
     }}>
       <div className="oe-clarification-body">
         <header>
@@ -114,7 +123,7 @@ export function ClarificationCard({id,sessionId,parentTaskId,prompt,seed,focusOn
       </div>
       <footer>
         <button type="button" onClick={close}>稍后回答</button>
-        <button type="submit" disabled={!ready}>提交回复</button>
+        <button type="submit" disabled={!ready || submitting}>提交回复</button>
       </footer>
     </form>
   </section>;
