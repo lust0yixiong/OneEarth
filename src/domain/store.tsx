@@ -9,7 +9,7 @@ import {availableChatOperations, chatCandidateBatch, chatCandidateItems, chatCan
 import {validWorkspaceOperationKind, workspaceCandidateOperationAllowed} from "./workspace-operations";
 import {projectWorkspaceView, workspaceActionState, type WorkspaceSurfaceReading, type WorkspacePanelReading} from "./workspace-view-projection";
 import {workspaceViewActionAllowed, type WorkspaceViewPublication} from "./workspace-view-context";
-import { discoveryClarificationResult, loadResearchRecord, researchRecordId, cancelChatRequest, readRecordWorkspaceReceipt, reportWorkspaceReceipt, isClarificationAttempt, type ResearchRecord } from "./runtime-client";
+import { discoveryClarificationResult, loadResearchRecord, researchRecordId, cancelChatRequest, readArchivedChatTrace, readRecordWorkspaceReceipt, reportWorkspaceReceipt, isClarificationAttempt, type ResearchRecord } from "./runtime-client";
 import {clarificationAnswerText,validClarificationPrompt,type ClarificationAnswer} from "./clarification";
 import {datasetScope,mergeScope,scopedQuestionContext,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
@@ -39,7 +39,7 @@ import type {ClarificationReply, QuestionDecision} from "./types";
 import {validAccessSection,initialAccessSection} from "./data-access";
 import { registerHaina, registerObservations, registerPapers, loadRemoteAssetIds } from "./datasets";
 import {loadHainaCatalog,type HainaCatalogStatus} from "./haina-catalog-client";
-import { type ChatDelivery, claimWorkspaceEffect, saveChatDelivery, unfinishedChatDeliveries, removeChatDelivery, legacySession, mergeMessages, readFavorites, readSession, readSessionMessage, sessionMessages, sessionSummaries, writeFavorite, writeSession } from "./session-storage";
+import { type ChatDelivery, attachArchivedRunTrace, claimWorkspaceEffect, saveChatDelivery, unfinishedChatDeliveries, removeChatDelivery, legacySession, mergeMessages, readFavorites, readSession, readSessionMessage, sessionMessages, sessionSummaries, writeFavorite, writeSession } from "./session-storage";
 import { sampleCamera } from "./earth-search";
 import { catalogResults, type SearchState } from "./results";
 import { catalogBatch } from "./batch-context";
@@ -1481,7 +1481,8 @@ function useWorkspaceValue(initialState: State) {
       entry.progress={...entry.progress,...change};
       publishChatProgress();
     };
-    update({cancelling:true,cancelError:undefined});
+    update({cancelling:true,cancelError:undefined,stage:"正在取消本地任务",
+      taskLifecycle:mergeTaskLifecycle(entry.progress.taskLifecycle,{runtimePhase:{phase:"cancel-pending"}})});
     try {
       const cancelled=await cancelChatRequest(id,AbortSignal.any([entry.controller.signal,AbortSignal.timeout(8000)]));
       if (cancelled) {
@@ -1661,6 +1662,19 @@ function useWorkspaceValue(initialState: State) {
     }
     return true;
   },[add,markInterrupt]);
+  const processReads=useRef(new Set<string>());
+  const hydrateRunProcess=useCallback(async ({runId,threadId,turnId}:ChatRun,text:string,saved?:ResearchRecord)=>{
+    const key=threadId+"/"+runId;
+    if(processReads.current.has(key))return;
+    processReads.current.add(key);
+    const record=saved ?? await loadResearchRecord(runId).catch(()=>undefined);
+    const trace=record && readArchivedChatTrace(record,{id:runId,conversationId:threadId,turnId},text);
+    if(!trace)return;
+    const updated=await attachArchivedRunTrace(threadId,runId,turnId,text,trace).catch(()=>undefined);
+    if(!updated)return;
+    dispatch({type:"messages",sessionId:threadId,messages:[updated]});
+    channel.current?.postMessage({sessionId:threadId,id:runId});
+  },[]);
   const workspaceAnchors=useRef(new Map<string,string>());
   const executeDiscovery = useCallback(
     async (attempt: DiscoveryAttempt, retrying: boolean, saved?: ChatDelivery, restoring=false, onResumeAccepted?:()=>void) => {
@@ -1727,8 +1741,14 @@ function useWorkspaceValue(initialState: State) {
         requests.current.delete(delivery.id);
         publishChatProgress();
       };
-      const complete = (message:string, extra:Partial<Message>) =>
-        add("assistant",message,{taskLifecycle:entry.progress.taskLifecycle,...extra,chatMessage:true});
+      let hydrateCompletedProcess=false;
+      const complete = (message:string, extra:Partial<Message>) =>{
+        const written=add("assistant",message,{taskLifecycle:entry.progress.taskLifecycle,...extra,chatMessage:true});
+        const lifecycle=extra.taskLifecycle??entry.progress.taskLifecycle;
+        if(hydrateCompletedProcess && !extra.failed && lifecycle?.runtimePhase?.phase==="complete" && message===canonicalResponse?.message)
+          void written.then(()=>hydrateRunProcess(run,message));
+        return written;
+      };
       async function finishCancellation(trace?:Message["runTrace"]){
         if(!isCurrent())return;
         const taskLifecycle=mergeTaskLifecycle(entry.progress.taskLifecycle,{runtimePhase:{phase:"cancelled"}});
@@ -1799,12 +1819,20 @@ function useWorkspaceValue(initialState: State) {
           onDraft:(draftText:string)=>{
             if(isCurrent())updateProgress({draftText});
           },
-          onStep:(stage:string)=>{
-            if(isCurrent())updateProgress({stage});
+          onStep:({stage,phase,runtimePhase}:{stage:string;phase:ChatPhase;runtimePhase:NonNullable<TaskLifecycle["runtimePhase"]>})=>{
+            const prior=entry.progress.taskLifecycle?.runtimePhase?.phase;
+            if(!isCurrent() || entry.progress.cancelling || prior==="cancel-pending" ||
+              prior==="complete" || prior==="failed" || prior==="cancelled")return;
+            const taskLifecycle=mergeTaskLifecycle(entry.progress.taskLifecycle,{runtimePhase});
+            if(entry.progress.stage!==stage || entry.progress.phase!==phase || taskLifecycle!==entry.progress.taskLifecycle)
+              updateProgress({stage,phase,taskLifecycle});
           },
           onLifecycle:(facts:TaskLifecycle)=>{
             if(!isCurrent())return;
-            const merged=mergeTaskLifecycle(entry.progress.taskLifecycle,facts);
+            const phase=facts.runtimePhase?.phase;
+            const update=entry.progress.cancelling && phase!=="complete" && phase!=="failed" && phase!=="cancelled"
+              ? {remoteStops:facts.remoteStops} : facts;
+            const merged=mergeTaskLifecycle(entry.progress.taskLifecycle,update);
             if(merged!==entry.progress.taskLifecycle)updateProgress({taskLifecycle:merged});
           },
         };
@@ -1861,8 +1889,11 @@ function useWorkspaceValue(initialState: State) {
         const result=liveResult && "response" in liveResult ? liveResult : await recoverNativeChat(run,controller.signal,progress);
         await acceptedReplyWrite;
         if (!isCurrent()) return;
-        const {response:r,interrupt}=result;
+        const {response,interrupt,record}=result;
+        const runTrace=record && readArchivedChatTrace(record,{id:run.runId,conversationId:run.threadId,turnId:run.turnId},response.message);
+        const r={...response,runTrace};
         canonicalResponse=r;
+        hydrateCompletedProcess=!!liveResult && "response" in liveResult && !record;
         if(entry.progress.taskLifecycle?.runtimePhase?.phase==="cancelled"){
           await finishCancellation(r.runTrace);
           return;
@@ -1897,7 +1928,7 @@ function useWorkspaceValue(initialState: State) {
         if(hasWorkspaceProposal && !effect){
           const local=await readSessionMessage(session,delivery.id).catch(()=>null);
           if(!isCurrent() || (local && !local.failed))return;
-          const saved:ResearchRecord=result.record ?? {id:run.runId,conversationId:session,turnId:run.turnId,
+          const saved:ResearchRecord=record ? {...record,result:r} : {id:run.runId,conversationId:session,turnId:run.turnId,
             question:q,created:Date.now(),updated:Date.now(),result:r};
           const [,{time:_time,...archived}]=archivedChatMessages(saved);
           await complete(r.message,{...archived,historicalReply:true,taskLifecycle:entry.progress.taskLifecycle});
@@ -2414,7 +2445,7 @@ function useWorkspaceValue(initialState: State) {
         }
       }
     },
-    [add, inspectAsset, leaveDetail, patch, publishChatProgress,readWorkspaceSurface,uploadReceipt,rememberClarificationDelivery,openFieldLayer,chatRequestSnapshot,persistReceiptUpdate,publishInterrupt,recoverClaimed,markInterrupt],
+    [add, inspectAsset, leaveDetail, patch, publishChatProgress,readWorkspaceSurface,uploadReceipt,rememberClarificationDelivery,openFieldLayer,chatRequestSnapshot,persistReceiptUpdate,publishInterrupt,recoverClaimed,markInterrupt,hydrateRunProcess],
   );
   const attachScope=(...items:ScopeItem[])=>{
     const previous=latest.current.draftScope || [];
@@ -2490,6 +2521,7 @@ function useWorkspaceValue(initialState: State) {
     const controller=new AbortController();
     const threadId=state.sessionId;
     const refreshInterrupts=()=>{
+      const refreshing=new Set<string>();
       for(const message of latest.current.messages){
         const interrupt=message.nativeInterrupt;
         if(!interrupt || !message.replyTo)continue;
@@ -2497,20 +2529,30 @@ function useWorkspaceValue(initialState: State) {
           !latest.current.messages.some(m=>m.id===interrupt.resumedBy && !m.failed);
         if(interrupt.status!=="pending" && !missingReply)continue;
         const parent={threadId,runId:message.id,turnId:message.replyTo};
-        void readNativeInterrupt(parent,controller.signal,interrupt.kind).then(async claim=>{
+        refreshing.add(message.id);
+        void readNativeInterrupt(parent,controller.signal,interrupt.kind,record=>{
+          if(!message.runTrace && message.taskLifecycle?.runtimePhase?.phase==="complete")
+            void hydrateRunProcess(parent,message.text,record);
+        }).then(async claim=>{
           if(controller.signal.aborted || latest.current.sessionId!==threadId)return;
           await publishInterrupt(parent,claim);
           if(claim.status==="resolved")await recoverClaimed(parent,claim,controller.signal);
         }).catch(()=>{/* The next reconnect can recheck the archived card. */});
       }
+      return refreshing;
     };
-    refreshInterrupts();
+    const refreshing=refreshInterrupts();
+    // Pending cards already read their archives to revalidate the reply action.
+    const last=latest.current.messages.filter(message=>message.role==="assistant" && message.chatMessage &&
+      !message.failed && message.taskLifecycle?.runtimePhase?.phase==="complete").at(-1);
+    if(last?.replyTo && !last.runTrace && researchRecordId.test(last.id) && !refreshing.has(last.id))
+      void hydrateRunProcess({runId:last.id,threadId,turnId:last.replyTo},last.text);
     window.addEventListener("online",refreshInterrupts);
     return ()=>{
       window.removeEventListener("online",refreshInterrupts);
       controller.abort();
     };
-  },[state.sessionId,publishInterrupt,recoverClaimed]);
+  },[state.sessionId,publishInterrupt,recoverClaimed,hydrateRunProcess]);
   const openPublicLayer = useCallback((id:PublicLayerId) => {
     const current=latest.current;
     const existing=current.globeLayers.find(layer=>layer.kind==="public"&&layer.selection.id===id);

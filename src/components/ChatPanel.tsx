@@ -414,7 +414,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   }}>这条问题未收到回答，重新提问</button>
               )}
               {m.role==="assistant" && m.questionCheck && <>
-                {!!m.runTrace?.providerReasoning?.length && <RunDetails trace={m.runTrace}/>}
+                {m.runTrace && <RunDetails trace={m.runTrace}/>}
                 <QuestionCheck check={nativeCheck?.questionCheck ?? m.questionCheck}
                   pending={!verifiedInterrupts.has(s.sessionId+"/"+m.id)}
                   closed={checkClosed} terminal={nativeCheck?.status==="resolved" ? replyTerminal : undefined}

@@ -1,5 +1,5 @@
-import {readTaskLifecycle,type TaskLifecycle} from "./task-lifecycle-client";
-import type {DiscoveryAttempt,DiscoveryResponse,Message} from "./types";
+import {matchesTaskIdentity,readTaskLifecycle,type TaskLifecycle} from "./task-lifecycle-client";
+import type {DiscoveryAttempt,DiscoveryResponse,Message,RunTrace} from "./types";
 import {validBrowserWorkspaceReceipt,type BrowserWorkspaceReceipt,type WorkspaceReceipt} from "./turn-context";
 
 import {workspaceToolCallId,workspaceToolReceiptPath} from "./native-workspace-tool";
@@ -63,6 +63,21 @@ export async function loadResearchRecord(id:string,signal?:AbortSignal):Promise<
   return {...record,taskLifecycle:readTaskLifecycle(record)};
 }
 
+
+/** Only the saved stages and invocation summaries feed the answer's process panel. */
+export function readArchivedChatTrace(record:ResearchRecord,identity:{id:string;conversationId:string;turnId:string},text:string):RunTrace|undefined {
+  if(!matchesTaskIdentity(record,identity) || record.result.message!==text)return;
+  const trace=record.result.runTrace;
+  if(!trace || !Number.isFinite(trace.started))return;
+  const stages=(Array.isArray(trace.stages)?trace.stages:[]).filter((stage):stage is string=>
+    typeof stage==="string" && !!stage.trim());
+  const calls=(Array.isArray(trace.calls)?trace.calls:[]).flatMap(call=>
+    call && typeof call.id==="string" && typeof call.name==="string" && !!call.name.trim() &&
+      (call.kind==="Skill" || call.kind==="MCP" || call.kind==="tool") &&
+      (call.status==="done" || call.status==="partial" || call.status==="failed")
+      ? [{id:call.id,kind:call.kind,name:call.name,status:call.status,input:""}] : []);
+  return stages.length || calls.length ? {started:trace.started,stages,calls} : undefined;
+}
 
 export function readWorkspaceReceipt(receipt:WorkspaceReceipt|undefined,taskId:string,conversationId:string,turnId:string) {
   if(!receipt || receipt.taskId!==taskId || !Number.isFinite(receipt.reportedAt) || receipt.turnId!==turnId ||

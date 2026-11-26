@@ -1,6 +1,6 @@
 import {mergeTaskLifecycle} from "./task-lifecycle-client";
 import {workspaceReceiptAdvances} from "./published-raster-observation";
-import type { Message } from "./types";
+import type { Message,RunTrace } from "./types";
 import type { WorkspaceSnapshot } from "./store";
 
 const databaseName = "oneearth.sessions.v1";
@@ -73,6 +73,17 @@ function mergeInterrupt(previous:Message,incoming:Message):Message["nativeInterr
   return current;
 }
 
+function withArchivedTrace(message:Message,source:Message|undefined) {
+  if(!source?.runTrace || !canAttachTrace(message,source) || source.failed || source.role!=="assistant")return message;
+  return {...message,runTrace:source.runTrace};
+}
+
+function canAttachTrace(message:Message,source:{id:string;replyTo?:string;text:string}) {
+  return message.role==="assistant" && !message.failed && !message.runTrace &&
+    message.taskLifecycle?.runtimePhase?.phase==="complete" &&
+    message.id===source.id && message.replyTo===source.replyTo && message.text===source.text;
+}
+
 export function mergeMessages(existing: Message[], incoming: Message[]) {
   const messages = new Map(existing.map(message => [message.id, message]));
   let changed = false;
@@ -83,13 +94,14 @@ export function mergeMessages(existing: Message[], incoming: Message[]) {
     if (!previous || (previous.failed && !message.failed) ||
       (previous.failed && previous.retry && message.failed && !message.retry && previous.replyTo===message.replyTo) ||
       (receipt && previous.replyTo===message.replyTo && (!prior || workspaceReceiptAdvances(prior,receipt)))) {
-      messages.set(message.id, message);
+      messages.set(message.id,withArchivedTrace(message,previous));
       changed = true;
     }else if(previous){
       const taskLifecycle=mergeCancelledLifecycle(previous,message);
       const nativeInterrupt=mergeInterrupt(previous,message);
-      if((taskLifecycle && taskLifecycle!==previous.taskLifecycle) || nativeInterrupt!==previous.nativeInterrupt){
-        messages.set(message.id,{...previous,taskLifecycle:taskLifecycle??previous.taskLifecycle,
+      const enriched=withArchivedTrace(previous,message);
+      if(enriched!==previous || (taskLifecycle && taskLifecycle!==previous.taskLifecycle) || nativeInterrupt!==previous.nativeInterrupt){
+        messages.set(message.id,{...enriched,taskLifecycle:taskLifecycle??previous.taskLifecycle,
           nativeInterrupt,clarificationPrompt:nativeInterrupt?.kind==="question-check" ? previous.clarificationPrompt : nativeInterrupt?.prompt??previous.clarificationPrompt});
         changed=true;
       }
@@ -144,7 +156,8 @@ export async function writeSession(
     for (const message of messages) {
       const records=tx.objectStore("messages");
       const row={session:id,id:message.id,message};
-      if(!message.nativeInterrupt && !message.workspaceEffect && message.taskLifecycle?.runtimePhase?.phase!=="cancelled"){
+      if(!message.nativeInterrupt && !message.workspaceEffect &&
+        message.taskLifecycle?.runtimePhase?.phase!=="cancelled" && message.taskLifecycle?.runtimePhase?.phase!=="complete"){
         records.put(row);
         continue;
       }
@@ -164,7 +177,7 @@ export async function writeSession(
         }
         const prior=previous&&matchingWorkspaceReceipt(previous),next=matchingWorkspaceReceipt(message);
         if(prior && (!next || !workspaceReceiptAdvances(prior,next)))return;
-        records.put(row);
+        records.put({...row,message:withArchivedTrace(message,previous)});
       };
     }
     if (migrate) for (const key of workspace?.saved || []) tx.objectStore("favorites").put(true, key);
@@ -173,6 +186,20 @@ export async function writeSession(
   };
   await completed(tx);
   return written;
+}
+
+export async function attachArchivedRunTrace(session:string,id:string,turnId:string,text:string,trace:RunTrace) {
+  const db=await database(),tx=db.transaction("messages","readwrite"),records=tx.objectStore("messages");
+  const existing=records.get([session,id]);
+  let updated:Message|undefined;
+  existing.onsuccess=()=>{
+    const previous:Message|undefined=existing.result?.message;
+    if(!previous || !canAttachTrace(previous,{id,replyTo:turnId,text}))return;
+    updated={...previous,runTrace:trace};
+    records.put({session,id,message:updated});
+  };
+  await completed(tx);
+  return updated;
 }
 
 export async function readFavorites(): Promise<string[]> {

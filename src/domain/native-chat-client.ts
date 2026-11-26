@@ -1,6 +1,8 @@
 import {HttpAgent, type AgentSubscriber} from "@ag-ui/client";
 import type {Message as AgUiMessage,ResumeEntry,ToolCall} from "@ag-ui/core";
-import {ChatResponseError} from "./chat-response";
+import {ChatResponseError,type ChatPhase} from "./chat-response";
+import {nativeAgUiStepLabel,type NativeAgUiStep} from "./native-agui-progress";
+import type {RuntimePhase} from "./runtime-status";
 import {nativeAgUiPath, nativeAgUiProtocolVersion, oneEarthAgUiVersion, readOneEarthAgUiInterruptRecord, readOneEarthAgUiResult,
   type OneEarthAgUiForwardedProps, type OneEarthAgUiInterruptRecord} from "./native-ag-ui";
 import {loadResearchRecord,readRecordWorkspaceReceipt,researchRecordId,type ResearchRecord} from "./runtime-client";
@@ -15,10 +17,19 @@ export type ChatRun = {threadId: string; runId: string; turnId: string};
 type CompletedChat = {response: DiscoveryResponse; interrupt?: OneEarthAgUiInterruptRecord; record?: ResearchRecord; workspaceCall?:ToolCall};
 type ResumeConflict = {conflict: true; locationId?: string};
 type WorkspaceConflict = {workspaceConflict:true; pendingRuns:string[]};
+type PublicStepProgress = {phase:ChatPhase;runtimePhase:RuntimePhase};
+const publicStepProgress:Record<NativeAgUiStep,PublicStepProgress> = {
+  foreground:{phase:"foreground",runtimePhase:{phase:"executing"}},
+  "research-queued":{phase:"research",runtimePhase:{phase:"queued"}},
+  "research-executing":{phase:"research",runtimePhase:{phase:"executing"}},
+  "discovery-wait":{phase:"research",runtimePhase:{phase:"waiting-discovery",operation:"discover"}},
+  "source-read-wait":{phase:"research",runtimePhase:{phase:"waiting-discovery",operation:"read"}},
+  "research-resuming":{phase:"research",runtimePhase:{phase:"resuming"}},
+};
 type ChatProgress = {
   onAccepted: () => void;
   onDraft: (text: string) => void;
-  onStep: (step: string) => void;
+  onStep: (step:PublicStepProgress & {stage:string}) => void;
   onLifecycle: (lifecycle: TaskLifecycle) => void;
 };
 
@@ -35,7 +46,10 @@ export async function submitNativeChat<T extends object>(
   let httpStatus: number | undefined;
   let conflictLocation: string | undefined;
   let workspaceConflict: WorkspaceConflict | undefined;
+  let startSeen = false;
   let started = false;
+  let sealed = false;
+  let openStep: string | undefined;
   let assistant = false;
   let textEnded = false;
   let draft = "";
@@ -71,6 +85,13 @@ export async function submitNativeChat<T extends object>(
   });
   const subscriber: AgentSubscriber = {
     onRunStartedEvent: ({event}) => {
+      // OneEarth binds this HTTP response to a single run.
+      if(startSeen){
+        started=false;
+        result=undefined;
+        return;
+      }
+      startSeen=true;
       started = event.threadId === threadId && event.runId === runId && event.protocolVersion === nativeAgUiProtocolVersion;
       if (started) {
         progress.onAccepted();
@@ -78,23 +99,31 @@ export async function submitNativeChat<T extends object>(
       }
     },
     onStepStartedEvent: ({event}) => {
-      if (started && event.stepName) progress.onStep(event.stepName);
+      if(!started || sealed || openStep)return;
+      const stage=nativeAgUiStepLabel(event.stepName);
+      if(!stage)return;
+      openStep=event.stepName;
+      progress.onStep({...publicStepProgress[event.stepName as NativeAgUiStep],stage});
+    },
+    onStepFinishedEvent: ({event})=>{
+      if(started && !sealed && event.stepName===openStep)openStep=undefined;
     },
     onTextMessageStartEvent: ({event}) => {
-      if (started && event.messageId === runId && event.role === "assistant") {
+      if (started && !sealed && event.messageId === runId && event.role === "assistant") {
         assistant = true;
         textEnded = false;
       }
     },
     onTextMessageContentEvent: ({event}) => {
-      if (!started || !assistant || event.messageId !== runId) return;
+      if (!started || sealed || !assistant || event.messageId !== runId) return;
       draft += event.delta;
       if (draft.length <= 8000) progress.onDraft(draft);
     },
     onTextMessageEndEvent: ({event}) => {
-      if (started && assistant && event.messageId === runId) textEnded = true;
+      if (started && !sealed && assistant && event.messageId === runId) textEnded = true;
     },
     onToolCallStartEvent: ({event})=>{
+      if(sealed)return;
       if(!started || !assistant || tool || event.parentMessageId!==runId ||
         event.toolCallId!==workspaceToolCallId(runId) || event.toolCallName!==nativeWorkspaceToolName){
         invalidTool=true;
@@ -103,6 +132,7 @@ export async function submitNativeChat<T extends object>(
       tool={id:event.toolCallId,args:"",ended:false};
     },
     onToolCallArgsEvent: ({event})=>{
+      if(sealed)return;
       if(!tool || tool.ended || tool.id!==event.toolCallId || tool.args.length+event.delta.length>32768){
         invalidTool=true;
         return;
@@ -110,6 +140,7 @@ export async function submitNativeChat<T extends object>(
       tool.args+=event.delta;
     },
     onToolCallEndEvent: ({event})=>{
+      if(sealed)return;
       if(!tool || tool.ended || tool.id!==event.toolCallId){
         invalidTool=true;
         return;
@@ -118,10 +149,11 @@ export async function submitNativeChat<T extends object>(
     },
     onToolCallResultEvent: ()=>{
       // This tool has no browser result on the original response stream.
-      invalidTool=true;
+      if(!sealed)invalidTool=true;
     },
     onRunFinishedEvent: terminal => {
-      if (!started || terminal.event.threadId !== threadId || terminal.event.runId !== runId) return;
+      if (!started || sealed || terminal.event.threadId !== threadId || terminal.event.runId !== runId) return;
+      sealed=true;
       if (terminal.outcome === "cancelled") failure = new ChatResponseError("本地任务已取消。", "cancelled");
       if (terminal.outcome === "interrupt") {
         const [item]=terminal.interrupts;
@@ -152,7 +184,11 @@ export async function submitNativeChat<T extends object>(
       result={response,workspaceCall};
     },
     onRunErrorEvent: ({event}) => {
-      if (started) failure = new ChatResponseError(event.message, event.code);
+      if(!started)return;
+      // An attributed late error invalidates the provisional result before it reaches the store.
+      sealed=true;
+      result=undefined;
+      failure=new ChatResponseError(event.message,event.code);
     },
   };
   try {
@@ -238,13 +274,16 @@ export async function loadNativeWorkspaceMessages(threadId:string,anchors:(strin
   return {anchor:undefined,messages:[],receipts:[]};
 }
 
-export async function readNativeInterrupt(run:ChatRun,signal:AbortSignal,expectedKind?:OneEarthAgUiInterruptRecord["kind"]) {
+export async function readNativeInterrupt(run:ChatRun,signal:AbortSignal,expectedKind?:OneEarthAgUiInterruptRecord["kind"],
+  onRecord?:(record:ResearchRecord)=>void) {
   const task=await readNativeTask(run.runId,signal);
   if(!matchesTaskIdentity(task,identityOf(run)) || task.status!=="complete")
     throw Error("暂时无法核对原追问状态。");
-  const interrupt=(await readNativeArchive(run,signal))?.interrupt;
+  const archive=await readNativeArchive(run,signal);
+  const interrupt=archive?.interrupt;
   if(!interrupt || (interrupt.kind==="question-check")!==(expectedKind==="question-check"))
     throw Error("原任务没有可核验的原生追问。");
+  if(archive?.record)onRecord?.(archive.record);
   return interrupt;
 }
 
