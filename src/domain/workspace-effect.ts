@@ -10,6 +10,7 @@ const label:Record<Status,string>={
   applied:"浏览器已应用",
   stale:"工作台已变化 · 未应用",
   failed:"浏览器无法应用",
+  declined:"用户已拒绝 · 未应用",
   "not-applied":"浏览器未应用",
   proposed:"运行时已提出 · 应用状态未知",
 };
@@ -75,6 +76,7 @@ export function workspaceReceiptDetail(state:BrowserWorkspaceReceipt["state"]|un
     case "applied": return "原浏览器已提交该操作。镜头到达与图层载入由工作台单独显示。";
     case "stale": return "收到操作时工作台或当前轮次已变化，原浏览器未应用。";
     case "failed": return "原浏览器无法应用运行时提出的工作台操作。";
+    case "declined": return "用户明确拒绝了这项操作，原浏览器未应用。";
     default: return "此记录未保存原浏览器的应用回执。";
   }
 }

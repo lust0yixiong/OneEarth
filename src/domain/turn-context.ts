@@ -72,7 +72,7 @@ export type BrowserWorkspaceReceipt = {
   effectId: string;
   conversationId: string;
   turnId: string;
-  state: "applied" | "stale" | "failed";
+  state: "applied" | "stale" | "failed" | "declined";
   reason?: WorkspaceRejectionReason;
   observation?: WorkspaceObservation;
 };
@@ -101,6 +101,7 @@ export function validBrowserWorkspaceReceipt(value: unknown): value is BrowserWo
   const {state,reason,observation}=value;
   if(state==="applied")return reason===undefined&&(observation===undefined||validWorkspaceObservation(observation));
   if(observation!==undefined)return false;
+  if(state==="declined")return reason===undefined;
   if(state==="stale")return reason===undefined||reason==="workspace-changed";
   return state==="failed"&&(reason===undefined||reason==="publication-unverified"||reason==="unsupported-action"||reason==="local-storage-unavailable");
 }

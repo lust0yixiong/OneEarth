@@ -9,6 +9,7 @@ import {validBrowserWorkspaceReceipt,validWorkspaceRecoveryInput,type WorkspaceE
 import type {DiscoveryResponse} from "../src/domain/types";
 import {runtimeTurnContext} from "./runtime-turn-context";
 import {reconcileWorkspaceRefusal} from "./workspace-recovery";
+import {workspaceActionFields,workspaceToolCallId} from "../src/domain/native-workspace-tool";
 
 export type ChatPreparation = {error: string} | {kind: "research"; checkpoint?: Payload} |
   {kind: "foreground"; run(id: string, signal: AbortSignal, emit: (event: Payload) => void): Promise<
@@ -16,18 +17,12 @@ export type ChatPreparation = {error: string} | {kind: "research"; checkpoint?: 
 
 const interrupted = {error: "服务中断了本轮消息。请重新发送以继续。", code: "chat_interrupted"};
 
-const workspaceFields = [
-  "workspaceAction", "workspaceLayerOpen", "workspaceOperation", "view", "catalogQuery", "inspectId", "camera",
-  "filters", "caseId", "dataView", "visualization", "mesh", "gridSystem", "layer",
-  "previewNeed", "previewCaseId", "visualizeNeed", "previewKind", "clearSelection", "selectCenter",
-] as const satisfies readonly (keyof DiscoveryResponse)[];
-
 export function workspaceReply(id: string, payload: Payload): Payload {
   const result = payload.result as DiscoveryResponse | undefined;
   if (payload.error || !result || result.clarification || result.clarificationPrompt || result.questionCheck) return payload;
-  const fields = workspaceFields.filter(field => result[field] !== undefined);
+  const fields = workspaceActionFields.filter(field => result[field] !== undefined);
   if (!fields.length) return payload;
-  const workspaceEffect: WorkspaceEffect = {effectId: "workspace:" + id, state: "proposed", fields};
+  const workspaceEffect: WorkspaceEffect = {effectId: workspaceToolCallId(id), state: "proposed", fields};
   return {...payload, result: {...result, workspaceEffect}};
 }
 

@@ -4,11 +4,11 @@ import {workspaceObservationTarget} from "../src/domain/workspace-published-laye
 import type {RuntimeTurnContext} from "./runtime-turn-context";
 import type {TaskStore} from "./task-store";
 import {modelSafeValue} from "./model-context-safety";
+import {workspaceActionFields} from "../src/domain/native-workspace-tool";
 
-const fields=["workspaceAction","workspaceLayerOpen","workspaceOperation","view","catalogQuery","inspectId","camera","filters","caseId","dataView","visualization","mesh","gridSystem","layer","previewNeed","previewCaseId","visualizeNeed","previewKind","clearSelection","selectCenter"] as const;
 type Target=NonNullable<ReturnType<typeof workspaceObservationTarget>>;
 type Owner={taskId:string;turnId:string;conversationId:string};
-export type RuntimeWorkspaceState={state:"proposed"|"applied"|"stale"|"failed"|"unknown";effectId?:string;
+export type RuntimeWorkspaceState={state:"proposed"|"unknown"|WorkspaceReceipt["state"];effectId?:string;
   operation?:{source:"server-terminal";fields:string[];values:Partial<DiscoveryResponse>;target?:Target};
   receipt?:{source:"original-operation-browser-receipt";state:WorkspaceReceipt["state"];reportedAt:number;reason?:WorkspaceReceipt["reason"];
     observation?:WorkspaceReceipt["observation"];observationReportedAt?:number;recovery?:WorkspaceReceipt["recovery"]};
@@ -40,7 +40,7 @@ export function runtimeWorkspaceState(owner:Owner,result:DiscoveryResponse|undef
   const effect=result?.workspaceEffect;
   let state:RuntimeWorkspaceState={state:effect?"proposed":"unknown",...(effect?{effectId:effect.effectId}:{})};
   if(effect&&Array.isArray(effect.fields)){
-    const selected=fields.filter(field=>effect.fields.includes(field)),target=workspaceObservationTarget(result);
+    const selected=workspaceActionFields.filter(field=>effect.fields.includes(field)),target=workspaceObservationTarget(result);
     state.operation={source:"server-terminal",fields:selected,values:Object.fromEntries(selected.filter(key=>result?.[key]!==undefined).map(key=>[key,result![key]])),...(target?{target}:{})};
     const layer=target&&frame?.globe?.layers.find(layer=>layer.id===target.datasetId);
     if(layer)state.atSubmission={source:"current-message-browser-frame",capturedAt:frame?.capturedAt,visible:layer.visible,
