@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import {isNativeChatSubmission,nativeChatSubmission,readNativeChatRecord} from "./read-native-chat.mjs";
 
 const base = new URL(process.env.ONEEARTH_URL || "http://127.0.0.1:5274");
-if (base.port === "5174" || !["localhost","127.0.0.1","[::1]"].includes(base.hostname)) throw Error("验收必须使用独立本机入口。");
+if (["5174","5474"].includes(base.port) || !["localhost","127.0.0.1","[::1]"].includes(base.hostname)) throw Error("验收必须使用独立本机入口。");
 const output = process.env.ONEEARTH_EVIDENCE_DIR || "evidence/a2";
 await mkdir(output,{recursive:true});
 const browser = await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH ||
@@ -33,13 +33,12 @@ try {
   async function ask(query, number) {
     const started = Date.now();
     await page.getByLabel("向 OneEarth 提问",{exact:true}).fill(query);
+    const sent = page.waitForRequest(isNativeChatSubmission);
     await page.getByLabel("发送消息",{exact:true}).click();
-    await page.locator(".oe-findings").first().waitFor({timeout:100000}).catch(async () => {
-      // Some source configurations report the first partial result only in the task stream.
-      await page.waitForFunction(() => /找到|返回|已取得/.test(document.querySelector(".chat-scroll")?.innerText || ""),{},{timeout:45000});
-    });
-    const activeId = submissions[number-1]?.runId;
-    assert.ok(activeId,"网页已提交标准 AG-UI 运行");
+    const activeId = nativeChatSubmission(await sent).runId;
+    assert.equal(submissions[number-1]?.runId,activeId);
+    await page.locator("#message-"+activeId+'[data-chat-phase="research"][data-runtime-phase="waiting-discovery"]')
+      .waitFor({timeout:145000});
     const active = await page.request.get(new URL("/api/tasks/"+activeId,base).href);
     const activeStatus = (await active.json()).status;
     await page.screenshot({path:output+"/before-refresh.png"});
