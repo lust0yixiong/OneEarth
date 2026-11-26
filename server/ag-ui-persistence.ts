@@ -1,3 +1,7 @@
+import {createHash} from "node:crypto";
+import {nativeAgUiSummaryPrefix} from "../src/domain/native-agui-summary";
+import {providerReasoningArchive,providerReasoningLimits} from "./provider-reasoning";
+import type {ProviderReasoningSnapshot} from "../src/domain/types";
 import {nativeAgUiStepLabel,type NativeAgUiStep} from "../src/domain/native-agui-progress";
 import {agUiWorkspaceSchema,bindAgUiWorkspaceReplies,type AgUiWorkspaceReply} from "./postgres-ag-ui-workspace";
 import {workspaceToolCall} from "../src/domain/native-workspace-tool";
@@ -50,6 +54,56 @@ export async function projectAgUiProgress(db:PoolClient,id:string,payload:Payloa
  if(run.public_step&&nativeAgUiStepLabel(run.public_step))await writeAgUiEvent(db,id,{type:"STEP_FINISHED",stepName:run.public_step});
  await writeAgUiEvent(db,id,{type:"STEP_STARTED",stepName:step});
  await db.query("UPDATE runtime_agui_runs SET public_step=$2 WHERE id=$1",[id,step]);
+}
+/** An explicitly public, completed provider summary is a display object,
+ * never model history. Unknown/private markers and raw thinking stay archived. */
+export function completeAgUiSummary(taskId:string,value:unknown):ProviderReasoningSnapshot|undefined{
+ if(!value||typeof value!=="object"||Array.isArray(value))return;
+ const s=value as Record<string,unknown>;
+ if(Object.keys(s).some(key=>!["id","revision","kind","text","complete","truncated"].includes(key))||
+  typeof s.id!=="string"||!s.id.startsWith(taskId+":")||s.id.length>160||
+  typeof s.revision!=="number"||!Number.isSafeInteger(s.revision)||s.revision<1||s.revision>providerReasoningLimits.revisions||
+  s.kind!=="summary"||s.complete!==true||s.truncated!==undefined&&s.truncated!==false||typeof s.text!=="string"||!s.text.trim()||Buffer.byteLength(s.text)>providerReasoningLimits.textBytes)return;
+ let filtered:ProviderReasoningSnapshot|undefined;
+ const archive=providerReasoningArchive(taskId,[],snapshot=>{filtered=snapshot;});
+ archive.accept(s as ProviderReasoningSnapshot);
+ if(!filtered||filtered.kind!=="summary"||filtered.complete!==true||filtered.truncated||!filtered.text.trim()||Buffer.byteLength(filtered.text)>providerReasoningLimits.textBytes)return;
+ return filtered;
+}
+/** Called after the original raw event INSERT, in that same transaction.
+ * The original run lock serializes dedupe, caps and the complete five frames. */
+export async function projectAgUiSummary(db:PoolClient,id:string,payload:Payload,sourceSeq:string){
+ if(payload.remoteStop!==undefined||payload.cancellationReceipt!==undefined)return;
+ const summary=completeAgUiSummary(id,payload.providerReasoning);if(!summary)return;
+ if(!(await db.query("SELECT id FROM runtime_agui_runs WHERE id=$1 AND NOT terminal FOR UPDATE",[id])).rowCount)return;
+ const messageId=nativeAgUiSummaryPrefix(id)+createHash("sha256").update(summary.id).digest("hex").slice(0,24);
+ if((await db.query("SELECT 1 FROM runtime_agui_events WHERE run_id=$1 AND event->>'type'='REASONING_START' AND event->>'messageId'=$2 LIMIT 1",[id,messageId])).rowCount)return;
+ // Read only revision/type flags from earlier original rows. Partial or stale
+ // revisions cannot be promoted by replaying an independently shaped value.
+ const {rows:prior}=await db.query<{revision:unknown;kind:string|null;complete:unknown;truncated:unknown}>(`SELECT snapshot->'revision' AS revision,snapshot->>'kind' AS kind,snapshot->'complete' AS complete,snapshot->'truncated' AS truncated FROM (
+   SELECT seq,payload->'providerReasoning' AS snapshot FROM runtime_chat_events WHERE id=$1 AND seq<$3 AND payload->'providerReasoning'->>'id'=$2
+   UNION ALL
+   SELECT seq,payload->'providerReasoning' AS snapshot FROM runtime_events WHERE id=$1 AND seq<$3 AND payload->'providerReasoning'->>'id'=$2
+  ) previous ORDER BY seq DESC LIMIT 25`,[id,summary.id,sourceSeq]);
+ if(prior.length>providerReasoningLimits.revisions)return;
+ let accepted:{revision:number;kind:string;complete:boolean;truncated:boolean}|undefined;
+ for(const old of [...prior].reverse()){
+  if(typeof old.revision!=="number"||!Number.isInteger(old.revision)||old.revision<1||old.revision>providerReasoningLimits.revisions||!old.kind||!["summary","deepseek-thinking"].includes(old.kind))continue;
+  if(accepted&&(old.revision<=accepted.revision||accepted.complete||old.kind!==accepted.kind))continue;
+  const truncated=old.truncated===true||!!accepted?.truncated;
+  accepted={revision:old.revision,kind:old.kind,complete:old.complete===true&&!truncated,truncated};
+ }
+ if(accepted&&(accepted.revision>=summary.revision||accepted.kind!=="summary"||accepted.complete||accepted.truncated))return;
+ const {rows:[used]}=await db.query<{count:number;bytes:number}>(`SELECT count(*)::int AS count,coalesce(sum(octet_length(event->>'delta')),0)::int AS bytes
+   FROM runtime_agui_events WHERE run_id=$1 AND event->>'type'='REASONING_MESSAGE_CONTENT'`,[id]);
+ if(used.count>=providerReasoningLimits.snapshots||used.bytes+Buffer.byteLength(summary.text)>providerReasoningLimits.totalBytes)return;
+ for(const event of [
+  {type:"REASONING_START",messageId},
+  {type:"REASONING_MESSAGE_START",messageId,role:"reasoning"},
+  {type:"REASONING_MESSAGE_CONTENT",messageId,delta:summary.text},
+  {type:"REASONING_MESSAGE_END",messageId},
+  {type:"REASONING_END",messageId},
+ ])await writeAgUiEvent(db,id,event);
 }
 export async function admitAgUi(db:PoolClient,id:string,input:AgUiAdmission){
  await claimAgUiResume(db,id,input.threadId,input.resume);

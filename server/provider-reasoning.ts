@@ -72,7 +72,7 @@ export class ProviderReasoningObserver{
   if(!kind){if(type==="response.completed")for(const state of this.states.values())this.publish(state,true);return;}
   if(typeof event.item_id!=="string"||event.item_id.length>160||!Number.isSafeInteger(event.output_index)||event.output_index<0)return;
   const part=kind==="summary"?event.summary_index:event.content_index;if(!Number.isSafeInteger(part)||part<0)return;
-  const text=type.endsWith(".delta")?event.delta:type==="response.reasoning_summary_part.done"&&event.part?.type==="summary_text"?event.part.text:event.text;
+  const text=type.endsWith(".delta")?event.delta:type==="response.reasoning_summary_part.done"?(event.part?.type==="summary_text"?event.part.text:undefined):event.text;
   if(typeof text!=="string")return;
   const key=kind+":"+event.item_id+":"+event.output_index+":"+part;let state=this.states.get(key);
   if(!state){if(this.states.size>=2)return;state={id:this.id+":"+this.states.size,kind,raw:"",bytes:0,at:0,complete:false,capped:false,segments:new Map()};this.states.set(key,state);}

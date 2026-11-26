@@ -1,4 +1,4 @@
-import {finishAgUi,projectAgUiProgress} from "./ag-ui-persistence";
+import {finishAgUi,projectAgUiProgress,projectAgUiSummary} from "./ag-ui-persistence";
 import type {RuntimePhase,RemoteStop} from "../src/domain/runtime-status";
 import {randomUUID} from "node:crypto";
 import {runtimeTaskLease,runtimeTaskLeaseMs,runtimeStepConcurrency,type RuntimeTaskLease} from "./runtime-task-lease";
@@ -86,7 +86,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   async function write(db:PoolClient,id:string,payload:Payload,at=Date.now()){
     const saved=await db.query(`INSERT INTO ${events}(id,at,payload) VALUES ($1,$2,$3::jsonb) RETURNING seq`,
       [id,at,JSON.stringify(payload)]);
-    if(namespace==="runtime")await projectAgUiProgress(db,id,payload);
+    if(namespace==="runtime"){await projectAgUiProgress(db,id,payload);await projectAgUiSummary(db,id,payload,String(saved.rows[0].seq));}
     if(namespace==="discovery"&&payload.finding){
       await db.query("INSERT INTO discovery_findings(task_id,seq,finding) VALUES ($1,$2,$3::jsonb)",
         [id,saved.rows[0].seq,JSON.stringify(payload.finding)]);
