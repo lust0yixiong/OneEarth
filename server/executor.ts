@@ -103,18 +103,46 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
       signal.throwIfAborted();
       const child=spawn(config.executor,args,{cwd:dir,stdio:"pipe",env,signal,killSignal:"SIGKILL"});
       child.once('spawn',()=>{timing.spawnMs=Date.now()-timing.startedAt;});
-      let out="",errors="",outputLimited=false,timedOut=false;const launched=Date.now();
+      let out="",errors="",outputLimited=false,timedOut=false,settled=false;const launched=Date.now();
+      let exit: {code:number|null;signal:NodeJS.Signals|null}|undefined;
       const deadline=setTimeout(()=>{timedOut=true;child.kill("SIGKILL");},110000);
+      const finish=(code:number|null,killed:NodeJS.Signals|null,spawnFailed=false,startupError?:Error)=>{
+        if(settled)return;
+        settled=true;
+        clearTimeout(deadline);
+        signal.removeEventListener("abort",finishCancelledExit);
+        if(startupError && !signal.aborted)reject(startupError);
+        else if(code===0 && !signal.aborted)resolve(out.trim());
+        else reject(new ExecutorFailure(executorDiagnostic({exitCode:code,signal:killed,elapsedMs:Date.now()-launched,
+          stdout:out,stderr:errors,aborted:signal.aborted,outputLimited,timedOut,spawnFailed})));
+      };
+      function finishCancelledExit(){
+        if(!exit || !signal.aborted || settled)return;
+        // The killed CLI can exit while another process still holds its pipes.
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+        finish(exit.code,exit.signal);
+      }
       child.stdin.on("error",()=>{});
       child.stdout.on("data",chunk=>{timing.firstStdoutMs??=Date.now()-timing.startedAt;timing.outputBytes+=Buffer.byteLength(chunk);out+=chunk;if(out.length>150000){outputLimited=true;child.kill("SIGKILL");}});
       child.stderr.on("data",chunk=>{errors=(errors+chunk).slice(-4096);});
-      child.on("error",()=>{if(child.pid)return;clearTimeout(deadline);reject(new ExecutorFailure(executorDiagnostic({exitCode:null,signal:null,elapsedMs:Date.now()-launched,stdout:out,stderr:errors,aborted:signal.aborted,spawnFailed:!signal.aborted})));});
-      child.on("close",(code,killed)=>{
-        clearTimeout(deadline);
-        if(code===0) resolve(out.trim());
-        else reject(new ExecutorFailure(executorDiagnostic({exitCode:code,signal:killed,elapsedMs:Date.now()-launched,stdout:out,stderr:errors,aborted:signal.aborted,outputLimited,timedOut})));
+      child.on("error",()=>{if(!child.pid)finish(null,null,!signal.aborted);});
+      child.once("exit",(code,killed)=>{
+        exit={code,signal:killed};
+        finishCancelledExit();
       });
-      void (async()=>{if(resource){if(!child.pid)throw Error("模型子进程未建立。");await resource.attachProcess(child.pid);}signal.throwIfAborted();child.stdin.end(prompt);})().catch(()=>{child.kill("SIGKILL");reject(Error("模型执行容量或子进程归属无法确认，未发送提示。"));});
+      child.once("close",finish);
+      signal.addEventListener("abort",finishCancelledExit,{once:true});
+      void (async()=>{
+        if(resource){if(!child.pid)throw Error("模型子进程未建立。");await resource.attachProcess(child.pid);}
+        signal.throwIfAborted();
+        child.stdin.end(prompt);
+      })().catch(()=>{
+        if(settled)return;
+        child.kill("SIGKILL");
+        if(!signal.aborted)finish(null,null,false,Error("模型执行容量或子进程归属无法确认，未发送提示。"));
+      });
     });
   } finally {clearTimeout(lost);clearInterval(heartbeat);await resource?.release().catch(()=>{});timing.elapsedMs=Date.now()-timing.startedAt;requestPerformance.getStore()?.push(timing);slots.active--;try{await relay?.close();}finally{if(dir) await rm(dir,{recursive:true,force:true});}}
 }
