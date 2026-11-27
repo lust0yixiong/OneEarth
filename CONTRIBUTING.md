@@ -9,6 +9,7 @@ GitHub 的 `lust0yixiong/OneEarth` 是产品代码与规范的主仓库，集成
 | 产品重构目标与所有权原则 | [目标与架构基线](docs/spec/01-目标与架构.md)和[目标图索引](docs/diagrams/README.md#目标与阶段设计) |
 | 两阶段交付、验收口径和界面基准 | [工程交付](docs/spec/02-工程交付.md)和[验收与证据](docs/spec/03-验收与证据.md) |
 | 当前端口、接口、提供方与消费方、已知缺口 | [架构与接口现状](docs/架构与接口现状.md)及[发现服务 A2A 契约](docs/发现服务-A2A.md) |
+| 工作台 AG-UI 及地图数据查询的接口细节 | [工作台 AG-UI 契约](docs/工作台-AG-UI.md) · [时空数据服务契约](docs/时空数据服务-接口.md) |
 | 如何构建、启动、恢复，以及哪个版本已实测 | [部署与恢复手册](docs/部署与恢复.md)和[产品验收记录](evidence/product/ACCEPTANCE.md) |
 | Logo、字标、应用图标的来源和校验 | [品牌素材说明](public/brand/README.md) |
 
