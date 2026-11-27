@@ -7,7 +7,7 @@ import { postgresTaskStore } from "./postgres-task-store";
 import { runExecutor } from "./executor";
 import { rememberConversationReferences } from "../src/domain/reference-memory";
 import { continuationSourcePolicy, dataSearchInstructions, dataSearchSchema, requiredDataSearch } from "./data-search";
-import { searchPapers } from "./earthnano";
+import {publishedPaperLookup} from "./literature-topic-search";
 import { paperCatalogRoutes } from "./paper-catalog";
 import { paperCatalogAccess } from "./paper-catalog-access";
 import { productDatabase } from "./product-database";
@@ -148,14 +148,7 @@ await workTasks(store, async ({id,body}: {id:string;body:DiscoveryInput|SourceRe
         references:rememberConversationReferences([],references),
         ...(correction ? {planningCorrection:correction, correctionRule:"只修正参数格式与检索短语，保留原问题和已确认的意图，不添加研究条件。"} : {}),
       }), signal, {outputSchema:dataSearchSchema}),
-    paper: async plan => {
-      const stamp=await papers.beginLookup();
-      signal.throwIfAborted();
-      const batch = await searchPapers(plan, signal, stage, call => emit({call}));
-      signal.throwIfAborted();
-      await papers.publishLookup(batch.records,stamp);
-      return batch;
-    },
+    paper:publishedPaperLookup(papers,signal,stage,call=>emit({call})),
     haina: queries => haina.search(queries, signal),
     refineWeb: (request, readSignal) => executeDiscoveryModel(config, webComplementInstructions + "\n" + JSON.stringify(request),
       readSignal, {outputSchema:complementSchema(request)}),

@@ -8,6 +8,8 @@ export const researchProgressAreas = {
 } as const;
 
 export const researchProgressStates = {
+  queued:"等待查询",
+  not_started:"本轮未查",
   running:"进行中",
   done:"已完成",
   partial:"部分完成",
@@ -17,7 +19,19 @@ export const researchProgressStates = {
 
 type Area = keyof typeof researchProgressAreas;
 type ActivityStatus = keyof typeof researchProgressStates;
-type ResearchAction = {id:string; order:number; area:Area; status:ActivityStatus; count?:number};
+export type ResearchProgressEvidence = {assetId:string;title:string};
+type ResearchAction = {
+  id:string; order:number; area:Area; status:ActivityStatus; count?:number;
+  topic?:string; evidence?:ResearchProgressEvidence[];
+};
+
+// Public labels are short plain text. Reject links, path fragments, opaque
+// tokens and control/format characters before they can become display data.
+export function publicResearchLabel(value:unknown,max:number):value is string {
+  return typeof value==="string" && value.length<=max && value===value.trim() &&
+    /[\p{L}\p{N}]/u.test(value) &&
+    !/[\p{C}\p{Zl}\p{Zp}<>\\`=]|(?:https?|file):\/\/|(?:data|javascript):\S|(?:^|\s)\/(?!\s)|(?:^|\W)(?:token|password|api[_ -]?key|authorization)\s*[:：]|[A-Za-z0-9_]{40}/iu.test(value);
+}
 
 export type ResearchProgress = {
   version:1;
@@ -47,9 +61,26 @@ export function readResearchProgress(value:unknown,runId:string):ResearchProgres
     if(count!==undefined && (!researchProgressAreas[area].unit ||
       (status!=="done" && status!=="partial") || typeof count!=="number" ||
       !Number.isSafeInteger(count) || count<0 || count>1_000_000))return;
+    const topic=action.topic;
+    if(topic!==undefined && (area!=="literature" || !publicResearchLabel(topic,100)))return;
+    if((status==="queued" || status==="not_started") && topic===undefined)return;
+    let evidence:ResearchProgressEvidence[]|undefined;
+    if(action.evidence!==undefined){
+      if(!topic || (status!=="done" && status!=="partial") || count===0 ||
+        !Array.isArray(action.evidence) || !action.evidence.length || action.evidence.length>4)return;
+      evidence=[];
+      const assets=new Set<string>();
+      for(const item of action.evidence){
+        if(!object(item) || typeof item.assetId!=="string" || !/^earthnano:[a-f0-9]{64}$/u.test(item.assetId) ||
+          assets.has(item.assetId) || !publicResearchLabel(item.title,180))return;
+        assets.add(item.assetId);
+        evidence.push({assetId:item.assetId,title:item.title});
+      }
+    }
     ids.add(action.id);
     previousOrder=action.order;
-    actions.push({id:action.id,order:action.order,area,status,...(count!==undefined ? {count} : {})});
+    actions.push({id:action.id,order:action.order,area,status,...(count!==undefined ? {count} : {}),
+      ...(topic!==undefined ? {topic} : {}),...(evidence ? {evidence} : {})});
   }
   return {version:1,runId,revision:value.revision,actions};
 }

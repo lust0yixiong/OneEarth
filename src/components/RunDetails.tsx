@@ -160,21 +160,35 @@ export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,worki
   }}>
     <summary><Clock3 size={14}/><span>{researchProgress ? "执行过程" : working ? "已用时 "+elapsed+" 秒" : "思考过程"}</span>
       {researchProgress && <span className="oe-research-progress-summary">{currentAction
-        ? researchProgressAreas[currentAction.area].label+" · "+elapsed+" 秒"
+        ? (currentAction.topic ?? researchProgressAreas[currentAction.area].label)+" · "+elapsed+" 秒"
         : researchProgress.actions.length+" 项操作"}</span>}
       <ChevronDown size={13}/>
     </summary>
     {!working && findings}
     {!!reasoning.length && <ProviderReasoning snapshots={reasoning}/>}
     {researchProgress && <ol className="oe-research-progress" aria-label="执行过程">
-      {researchProgress.actions.map(({id,area,status,count})=><li key={id} data-action-id={id} data-status={status}>
-        <span className="oe-research-action-marker" aria-hidden="true"/>
-        <span className="oe-research-action-body">
-          <span>{researchProgressAreas[area].label}</span>
-          {count!==undefined && <small>{count} {researchProgressAreas[area].unit}</small>}
-        </span>
-        <span className="oe-research-action-status">{!working && status==="running" ? "未返回结果" : researchProgressStates[status]}</span>
-      </li>)}
+      {researchProgress.actions.map(action => {
+        const {id,area,status,count,topic,evidence}=action;
+        const state = status==="queued" && !working ? "not_started" : status;
+        const statusLabel = topic && state==="done" && count===0 ? "未找到论文依据"
+          : !working && state==="running" ? "未返回结果" : researchProgressStates[state];
+        return <li key={id} data-action-id={id} data-status={state}>
+          <span className="oe-research-action-marker" aria-hidden="true"/>
+          <span className="oe-research-action-body">
+            <span>{topic ?? researchProgressAreas[area].label}</span>
+            {count!==undefined && (topic
+              ? count>0 && <small>已核实 {count} 篇论文</small>
+              : <small>{count} {researchProgressAreas[area].unit}</small>)}
+          </span>
+          <span className="oe-research-action-status">{statusLabel}</span>
+          {!!evidence?.length && <details className="oe-research-topic-evidence">
+            <summary>查看已核实出处 <ChevronDown size={12}/></summary>
+            <ul>{evidence.map(item=><li key={item.assetId}>{openFinding
+              ? <button type="button" className="activity-link" onClick={()=>openFinding(item.assetId)}>{item.title}</button>
+              : item.title}</li>)}</ul>
+          </details>}
+        </li>;
+      })}
     </ol>}
     {!!stages.length && <StageHistory stages={stages} working={working}/>}
     {!!calls.length && <div className="oe-call-group">

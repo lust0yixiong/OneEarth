@@ -2,7 +2,7 @@ import {createHash} from "node:crypto";
 import {readResearchProgress,type ResearchProgress} from "../src/domain/native-agui-research-progress";
 
 type ResearchAction = ResearchProgress["actions"][number];
-export type ResearchProgressFact = Pick<ResearchAction,"id"|"area"|"status"|"count">;
+export type ResearchProgressFact = Omit<ResearchAction,"order">;
 
 /** Internal producer facts carry only the opaque action identity and displayable state. */
 export function readResearchProgressFact(value:unknown):ResearchProgressFact|undefined {
@@ -11,8 +11,8 @@ export function readResearchProgressFact(value:unknown):ResearchProgressFact|und
   const runId="validation";
   const action=readResearchProgress({version:1,runId,revision:1,actions:[{...source,order:1}]},runId)?.actions[0];
   if(!action)return;
-  const {id,area,status,count}=action;
-  return {id,area,status,...(count!==undefined?{count}:{})};
+  const {order:_,...fact}=action;
+  return fact;
 }
 
 export function delegatedResearchProgress(messageId:string,value:unknown,areas:ReadonlySet<ResearchProgressFact["area"]>){
@@ -33,10 +33,21 @@ export function mergeResearchProgress(previous:ResearchProgress|undefined,runId:
     actions.push({...fact,order:(actions.at(-1)?.order??0)+1});
   }else{
     const current=actions[index];
-    if(current.area!==fact.area||current.status!=="running"||fact.status==="running")return;
+    if(current.area!==fact.area||current.topic!==fact.topic)return;
+    const advances=current.status==="queued" ? fact.status==="running"||fact.status==="not_started"
+      : current.status==="running" && fact.status!=="running" && fact.status!=="queued" && fact.status!=="not_started";
+    if(!advances)return;
     actions[index]={...fact,order:current.order};
   }
   return {version:1,runId,revision:(previous?.revision??0)+1,actions};
+}
+
+// An interrupted run can end before its delegation sends the remaining facts.
+export function settleResearchProgress(previous:ResearchProgress|undefined):ResearchProgress|undefined {
+  if(!previous || !previous.actions.some(action=>action.topic && (action.status==="queued" || action.status==="running")))return;
+  return {...previous,revision:previous.revision+1,actions:previous.actions.map(action=>
+    !action.topic ? action : action.status==="queued" ? {...action,status:"not_started"} :
+      action.status==="running" ? {...action,status:"failed"} : action)};
 }
 
 export function isResearchTimeout(error:unknown) {

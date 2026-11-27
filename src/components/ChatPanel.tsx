@@ -420,7 +420,13 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   }}>这条问题未收到回答，重新提问</button>
               )}
               {m.role==="assistant" && m.questionCheck && <>
-                {(m.runTrace || m.researchProgress) && <RunDetails initiallyOpen={initiallyOpenProcess} trace={m.runTrace} researchProgress={m.researchProgress}/>}
+                {(m.runTrace || m.researchProgress) && <RunDetails initiallyOpen={initiallyOpenProcess} trace={m.runTrace} researchProgress={m.researchProgress}
+                  openFinding={async id=>{
+                    if(!assetById.has(id))await loadRemoteAssetIds([id]).catch(()=>undefined);
+                    if(!assetById.has(id)){patch({error:"暂时无法打开这条线索。"});return;}
+                    if(matchMedia("(max-width: 600px)").matches)patch({chatOpen:false});
+                    inspectAsset(id,m.candidates?.filters,m.candidates?.selection,m.candidates);
+                  }}/>}
                 <QuestionCheck check={nativeCheck?.questionCheck ?? m.questionCheck}
                   pending={!verifiedInterrupts.has(s.sessionId+"/"+m.id)}
                   closed={checkClosed} terminal={nativeCheck?.status==="resolved" ? replyTerminal : undefined}
@@ -526,7 +532,12 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
         {question && <button type="button" className="activity-link" onClick={()=>locateQuestion(question.id)}
           aria-controls={"message-"+question.id}>{chat.phase==="research" ? "研究" : "回复"} · {question.text}</button>}
         <RunDetails working trace={chat.trace} researchProgress={chat.researchProgress} onOpenChange={open=>liveProcessOpen.current.set(chat.id,open)} stage={chat.stage} runs={chat.searches}
-          openFinding={id=>void loadRemoteAssetIds([id]).then(()=>inspectAsset(id,chat.scope.filters,chat.scope.selection)).catch(()=>patch({error:"暂时无法打开这条线索。"}))}/>
+          openFinding={async id=>{
+            await loadRemoteAssetIds([id]).catch(()=>undefined);
+            if(!assetById.has(id)){patch({error:"暂时无法打开这条线索。"});return;}
+            if(matchMedia("(max-width: 600px)").matches)patch({chatOpen:false});
+            inspectAsset(id,chat.scope.filters,chat.scope.selection);
+          }}/>
         {chat.accepted && <button type="button" className="activity-link" disabled={chat.cancelling}
           onClick={()=>void cancelChat(chat.id)}>{chat.cancelling?"正在取消本轮":"取消本轮"}</button>}
         {chat.cancelError && <p role="alert">{chat.cancelError}</p>}

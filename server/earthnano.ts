@@ -20,6 +20,8 @@ const str = (value: unknown) => typeof value === "string" ? value.trim() : "";
 const strings = (value: unknown) => Array.isArray(value) ? value.map(str).filter(Boolean) : [];
 const show = (v: unknown) => typeof v === "string" ? v : JSON.stringify(v) ?? "";
 export interface PaperPlan { name: string; requestedName?:string; facets: {need: string; queries: string[]}[]; region: string[]; scenario?: string[] }
+/** A bounded facet of a shared literature budget, distinct from user cancellation. */
+export type PaperTopicLookup = {deadline:AbortSignal};
 export interface PaperSearchResult {records:PaperRecord[];tools:Tool[];incomplete:Tool[];notices?:string[];truncated?:boolean;timedOut?:boolean}
 const shortEnglish=(value:string)=>/[a-z]/i.test(value) && !/\p{Script=Han}/u.test(value) && value.split(/\s+/).length<=3;
 
@@ -201,14 +203,14 @@ export function normalizePaperSpace(spatial: unknown) {
   return {points, area, coverage, world,broad:boxes.some(([w,,e])=>e-w>=180)};
 }
 
-export async function searchPapers(plan: PaperPlan, signal: AbortSignal, stage: (text:string)=>void, report?:(call:import("../src/domain/types").ToolCall)=>void):Promise<PaperSearchResult> {
+export async function searchPapers(plan: PaperPlan, signal: AbortSignal, stage: (text:string)=>void, report?:(call:import("../src/domain/types").ToolCall)=>void, topic?:PaperTopicLookup):Promise<PaperSearchResult> {
   const identity=paperNameIdentity(plan.name);
   if(identity.kind==="ambiguous")return {records:[],tools:[],incomplete:[],notices:["资料名称含多个不同 DOI，请明确本轮要核对的标识；未擅自选择其中一个或按泛标题替代。"]};
   const requestedName=plan.requestedName||plan.name;
   if(identity.kind==="unique")plan={...plan,name:identity.doi};
   if(!plan.name && !plan.facets.some(f=>f.queries.some(shortEnglish)))throw Error("文献资料未取得有效英文检索词，未发送整句中文查询。");
   const endpoint = process.env.ONEEARTH_EARTHNANO_URL || "http://10.11.140.149:8767/sse";
-  const timeout=AbortSignal.timeout(30000);
+  const timeout=topic?.deadline??AbortSignal.timeout(30000);
   const deadline = AbortSignal.any([signal,timeout]);
   let timedOut=false;
   const requestTimedOut=(error:unknown)=>timeout.aborted||isResearchTimeout(error)||
@@ -219,6 +221,7 @@ export async function searchPapers(plan: PaperPlan, signal: AbortSignal, stage: 
   });
   const toolsUsed = new Set<Tool>();
   async function call(name: Tool, args: Row): Promise<Row> {
+    if(topic)deadline.throwIfAborted();
     toolsUsed.add(name);
     const call = {id:crypto.randomUUID(), kind:"MCP" as const, name, input:JSON.stringify(args,null,2)};
     report?.({...call,status:"running"});
@@ -251,22 +254,37 @@ export async function searchPapers(plan: PaperPlan, signal: AbortSignal, stage: 
     }
   }
   try {
+    if(topic)deadline.throwIfAborted();
     stage("正在查询文献资料");
-    await client.connect(transport, {signal:deadline,timeout:6000});
+    if(topic){
+      // A legacy SSE transport can stall before it sends its endpoint event.
+      // The MCP request timeout starts only after that handshake.
+      let endpointAbort:()=>void=()=>{};
+      try{
+        const cancelled=new Promise<never>((_,reject)=>{
+          endpointAbort=()=>reject(deadline.reason);
+          deadline.addEventListener("abort",endpointAbort,{once:true});
+        });
+        await Promise.race([client.connect(transport,{signal:deadline,timeout:6000}),cancelled]);
+      }finally{deadline.removeEventListener("abort",endpointAbort);}
+    }else await client.connect(transport, {signal:deadline,timeout:6000});
     let searchTool:Tool = plan.name ? "resolve_dataset" : "find_dataset_by_task";
     let args:Row = plan.name ? {name:plan.name} : {facets:plan.facets, scenario_queries:plan.scenario || []};
     const records: PaperRecord[] = [];
     const priorities=new Map<string,number>();
     const notices:string[]=[];
     if(identity.kind==="unique" && requestedName!==plan.name)notices.push("已优先按资料名称中的唯一明确 DOI 检索，保留其完整后缀；标题中另行声明的版次仍需与发布元数据核对，精确 DOI 命中不自动证明该版次。");
-    const candidateLimit=Math.min(60,Math.max(24,plan.facets.length*8));
-    let checked=0,truncated=false,irrelevant=0,expandedPaths=0;
+    const candidateLimit=topic?6:Math.min(60,Math.max(24,plan.facets.length*8));
+    let checked=0,truncated=false,irrelevant=0,expandedPaths=0,pages=0;
     async function verify(h:Row): Promise<PaperRecord | undefined> {
       const dsKey = str(h.ds_key);
-      let [usage, meta, recipe] = await Promise.all([
-        call("search_dataset_usage",{ds_key:dsKey,...(plan.region.length ? {region:plan.region} : {})}),
-        optional("get_dataset_metadata",{ds_key:dsKey}), optional("search_recipes",{ds_key:dsKey}),
-      ]);
+      const scopedUsage={ds_key:dsKey,...(plan.region.length ? {region:plan.region} : {})};
+      const supplements=()=>[optional("get_dataset_metadata",{ds_key:dsKey}),optional("search_recipes",{ds_key:dsKey})] as const;
+      // A split topic can exhaust its budget after the candidate page. Read
+      // the primary usage first, before ancillary requests can compete with it.
+      let [usage,meta,recipe]:[Row,Row,Row]=topic
+        ? [await call("search_dataset_usage",scopedUsage),{},{}]
+        : await Promise.all([call("search_dataset_usage",scopedUsage),...supplements()]);
       let regionalFallback=false;
       if(!rows(usage.usages).length && plan.region.length && !deadline.aborted){
         // A paper's study location is not the data product's coverage footprint.
@@ -274,6 +292,7 @@ export async function searchPapers(plan: PaperPlan, signal: AbortSignal, stage: 
       }
       const usages = rows(usage.usages).filter(u=>u.ds_key===dsKey && str(u.paper_id) && str(u.dataset_id)).slice(0,12);
       if (!usages.length) return;
+      if(topic && !deadline.aborted)[meta,recipe]=await Promise.all(supplements());
       const isolated=isolatePaperMetadata(dsKey,meta),fields=isolated.fields;
       const space = normalizePaperSpace(fields.spatial);
       const tabs: EvidenceTab[] = [{
@@ -281,7 +300,7 @@ export async function searchPapers(plan: PaperPlan, signal: AbortSignal, stage: 
         rows:usages.map(u=>[u.paper_title,rows(u.roles).map(r=>[r.role,r.desc].filter(Boolean).join(" · ")).join("\n"),u.variables,u.study_context,u.paper_id,u.dataset_id,str(u.paper_doi)]),
       }];
       const evidenceLinks:AssertionEvidenceLinks[]=[];
-      for (const u of usages.slice(0,2)) {
+      for (const u of usages.slice(0,topic?1:2)) {
         let ev = await optional("get_evidence",{ds_key:dsKey,paper_id:u.paper_id,dataset_id:u.dataset_id});
         const row = obj(ev.row);
         if (row.ds_key!==dsKey || row.paper_id!==u.paper_id || row.dataset_id!==u.dataset_id) continue;
@@ -310,7 +329,7 @@ export async function searchPapers(plan: PaperPlan, signal: AbortSignal, stage: 
       const namedTarget=!plan.name || searchTool==="resolve_dataset" || paperNameMatches(plan.name,{
         ...h,matched_via:"contains",title_variants:[...strings(h.title_variants),...rows(obj(fields.title).values).map(v=>str(v.value))],
       });
-      if(selected && namedTarget && expandedPaths<3 && !deadline.aborted){
+      if(selected && namedTarget && expandedPaths<(topic?1:3) && !deadline.aborted){
         expandedPaths++;
         const detail=await optional("search_recipes",{paper_id:selected.paper_id,rq_id:selected.rq_id});
         const path=readResearchPath(detail,str(selected.paper_id),str(selected.rq_id),dsKey,usages);
@@ -359,6 +378,7 @@ export async function searchPapers(plan: PaperPlan, signal: AbortSignal, stage: 
     let offset = 0;
     while (!deadline.aborted) {
       const page = offset === 0 ? await call(searchTool,args) : await optional(searchTool,{...args,offset});
+      pages++;
       const entries = searchTool==="resolve_dataset" && page.status==="not_found" ? [] : rows(page.entities || page.candidates);
       const hits = entries.filter(h=>{
         const key = str(h.ds_key);
@@ -398,6 +418,7 @@ export async function searchPapers(plan: PaperPlan, signal: AbortSignal, stage: 
       }
       if(checked>=candidateLimit){truncated=truncated || (paging.has_more!==false && paging.next_offset!==null);break;}
       if (paging.has_more === false || paging.next_offset === null) break;
+      if(topic && pages>=2){truncated=true;break;}
       const next = typeof paging.next_offset === "number" ? paging.next_offset : offset + entries.length;
       if (!Number.isSafeInteger(next) || next<=offset) {incomplete.add(searchTool);break;}
       if (!hits.length && entries.every(e=>previousKeys.has(str(e.ds_key)))) {incomplete.add(searchTool);break;}
@@ -406,7 +427,8 @@ export async function searchPapers(plan: PaperPlan, signal: AbortSignal, stage: 
     }
     signal.throwIfAborted();
     if (deadline.aborted) incomplete.add(searchTool);
-    if(expandedPaths)notices.push("本轮按检索主题展开最多 3 条研究路径，数据角色与步骤均保留源标识；原文每份用法最多取两页 16 块，仍有后续页时在证据关系中标明。");
+    if(topic && records.length)notices.push("串行文献查询每个主题最多核对 6 个候选、读取 2 页检索结果；每个候选最多展开 1 条论文用法的原文，每个主题最多展开 1 条研究路径。");
+    else if(expandedPaths)notices.push("本轮按检索主题展开最多 3 条研究路径，数据角色与步骤均保留源标识；原文每份用法最多取两页 16 块，仍有后续页时在证据关系中标明。");
     if(truncated)notices.push("本轮已核对相关性靠前的 "+checked+" 个候选，结果不是全库总量。");
     if(irrelevant)notices.push("指定资料的主题回退中有 "+irrelevant+" 项候选的标题/别名未支持其与指定资料或检索主题相关，未继续读取论文用法、元数据或原文；未将它们当作指定资料的替代身份。");
     records.sort((a,b)=>(priorities.get(a.dsKey)||0)-(priorities.get(b.dsKey)||0));

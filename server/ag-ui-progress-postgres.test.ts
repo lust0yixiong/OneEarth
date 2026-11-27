@@ -103,9 +103,38 @@ test("native HTTP streams only persisted lifecycle steps across park, recovery a
  const failed=await begin();await queued(failed);const failedClaim=await claim(failed.id);await runtimeTaskLease.run(failedClaim.lease,()=>tasks.park!(failed.id,{kind:"controlled-checkpoint"},Date.now()+10000,{runtimePhase:{phase:"waiting-discovery",operation:"read"},stage:"PRIVATE_READ"}));await until(()=>failed.stream.frames.at(-1)?.stepName==="source-read-wait");await tasks.finish(failed.id,"failed",{error:"PRIVATE_INTERNAL_FAILURE",code:"controlled_failure"});await failed.stream.done;assertBalanced(failed.stream.frames);assert.equal(failed.stream.frames.at(-1).type,"RUN_ERROR");assert.equal((await tasks.terminal(failed.id))?.code,"controlled_failure");
  // DELETE has one original ending. Late remote-stop rows never reopen STEP,
  // replace the business terminal or add another standard ending.
- const cancelled=await begin();await queued(cancelled);const cancelClaim=await claim(cancelled.id),remote=randomUUID();await runtimeTaskLease.run(cancelClaim.lease,async()=>{await tasks.append(cancelled.id,{researchProgressFact:{id:"waiting-read",area:"reading",status:"running"}});await tasks.append(cancelled.id,{discoveryBinding:{transport:"a2a",messageId:cancelled.id,discoveryId:remote,state:"TASK_STATE_WORKING"}});await tasks.park!(cancelled.id,{kind:"controlled-checkpoint"},Date.now()+10000,{runtimePhase:{phase:"waiting-discovery",operation:"discover"}});});
- await until(()=>cancelled.stream.frames.at(-1)?.stepName==="discovery-wait");assert.equal((await fetch(origin+"/api/tasks/"+cancelled.id,{method:"DELETE"})).status,204);await cancelled.stream.done;assertBalanced(cancelled.stream.frames);assert.deepEqual(cancelled.stream.frames.at(-1).outcome,{type:"cancelled"});const terminal=await tasks.terminal(cancelled.id),publicCount=(await tasks.chat.agUiEvents(cancelled.id)).length;assert.equal((await tasks.runtimeStatus!(cancelled.id)).remoteStop?.state,"pending");await tasks.recordRemoteStop!(cancelled.id,{discoveryTaskId:remote,state:"confirmed",remoteState:"TASK_STATE_CANCELED"});assert.deepEqual(await tasks.terminal(cancelled.id),terminal);assert.equal((await tasks.chat.agUiEvents(cancelled.id)).length,publicCount);assert.equal((await tasks.runtimeStatus!(first.id)).remoteStop,undefined);
- assert.deepEqual((await getProgress(cancelled.id)).researchProgress.actions,[{id:"waiting-read",order:1,area:"reading",status:"running"}]);
+ const cancelled=await begin();await queued(cancelled);const cancelClaim=await claim(cancelled.id),remote=randomUUID();
+ const doneTopic={id:"paper-done",area:"literature",topic:"海温"};
+ const queuedTopic={id:"paper-queued",area:"literature",topic:"海平面"};
+ const runningTopic={id:"paper-running",area:"literature",topic:"海浪"};
+ const evidence=[{assetId:"earthnano:"+"a".repeat(64),title:"原已发表论文"}];
+ await runtimeTaskLease.run(cancelClaim.lease,async()=>{
+  await tasks.append(cancelled.id,{researchProgressFact:{id:"waiting-read",area:"reading",status:"running"}});
+  for(const [fact,status] of [[doneTopic,"queued"],[runningTopic,"queued"],[queuedTopic,"queued"],[doneTopic,"running"]] as const)
+   await tasks.append(cancelled.id,{researchProgressFact:{...fact,status}});
+  await tasks.append(cancelled.id,{researchProgressFact:{...doneTopic,status:"done",count:1,evidence}});
+  await tasks.append(cancelled.id,{researchProgressFact:{...runningTopic,status:"running"}});
+  await tasks.append(cancelled.id,{discoveryBinding:{transport:"a2a",messageId:cancelled.id,discoveryId:remote,state:"TASK_STATE_WORKING"}});
+  await tasks.park!(cancelled.id,{kind:"controlled-checkpoint"},Date.now()+10000,{runtimePhase:{phase:"waiting-discovery",operation:"discover"}});
+ });
+ await until(()=>cancelled.stream.frames.at(-1)?.stepName==="discovery-wait");
+ assert.equal((await fetch(origin+"/api/tasks/"+cancelled.id,{method:"DELETE"})).status,204);
+ await cancelled.stream.done;assertBalanced(cancelled.stream.frames);assert.deepEqual(cancelled.stream.frames.at(-1).outcome,{type:"cancelled"});
+ const terminal=await tasks.terminal(cancelled.id),publicCount=(await tasks.chat.agUiEvents(cancelled.id)).length;
+ assert.equal((await tasks.runtimeStatus!(cancelled.id)).remoteStop?.state,"pending");
+ await tasks.recordRemoteStop!(cancelled.id,{discoveryTaskId:remote,state:"confirmed",remoteState:"TASK_STATE_CANCELED"});
+ assert.deepEqual(await tasks.terminal(cancelled.id),terminal);
+ assert.equal((await tasks.chat.agUiEvents(cancelled.id)).length,publicCount);
+ assert.equal((await tasks.runtimeStatus!(first.id)).remoteStop,undefined);
+ const cancelledProgress=(await getProgress(cancelled.id)).researchProgress;
+ assert.deepEqual(cancelledProgress.actions,[
+  {id:"waiting-read",order:1,area:"reading",status:"running"},
+  {...doneTopic,order:2,status:"done",count:1,evidence},
+  {...runningTopic,order:3,status:"failed"},
+  {...queuedTopic,order:4,status:"not_started"},
+ ]);
+ const terminalSnapshot=cancelled.stream.frames.filter(frame=>frame.type==="STATE_SNAPSHOT").at(-1);
+ assert.deepEqual(readResearchProgressState(terminalSnapshot?.snapshot,cancelled.id),cancelledProgress);
  // The old early-interruption branch has no checkpoint to resume. Its exact
  // failed business update must also close the native stream in that transaction.
  const interrupted=await begin("no-checkpoint");await queued(interrupted);await claim(interrupted.id);await until(()=>interrupted.stream.frames.at(-1)?.stepName==="research-executing");await db.query("UPDATE runtime_tasks SET lease_until=0 WHERE id=$1",[interrupted.id]);await other.recoverInterrupted();await Promise.race([interrupted.stream.done,delay(1500).then(()=>assert.fail("failed original native stream remained open"))]);assertBalanced(interrupted.stream.frames);assert.equal(interrupted.stream.frames.at(-1).type,"RUN_ERROR");assert.equal(interrupted.stream.frames.at(-1).code,"worker_interrupted");assert.equal((await tasks.get(interrupted.id))?.status,"failed");assert.equal((await tasks.terminal(interrupted.id))?.code,"worker_interrupted");const ended=(await tasks.chat.agUiEvents(interrupted.id)).length;await other.recoverInterrupted();assert.equal((await tasks.chat.agUiEvents(interrupted.id)).length,ended);

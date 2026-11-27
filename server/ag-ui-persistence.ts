@@ -10,8 +10,8 @@ import {agUiInterruptSchema,claimAgUiResume,saveAgUiInterrupt,saveAgUiQuestionCh
 import {validClarificationPrompt} from "../src/domain/clarification";
 import {assertPublicAnswerSafe} from "./public-answer-stream";
 import type {Pool,PoolClient} from "pg";
-import {readResearchProgress} from "../src/domain/native-agui-research-progress";
-import {mergeResearchProgress,readResearchProgressFact} from "./research-progress";
+import {readResearchProgress,type ResearchProgress} from "../src/domain/native-agui-research-progress";
+import {mergeResearchProgress,readResearchProgressFact,settleResearchProgress} from "./research-progress";
 import {EventSchema} from "@ag-ui/core/schemas";
 import {nativeAgUiProtocolVersion} from "../src/domain/native-ag-ui";
 import type {DiscoveryResponse} from "../src/domain/types";
@@ -72,6 +72,9 @@ export async function projectAgUiResearchProgress(db:PoolClient,id:string,payloa
  if(!run)return;
  const progress=mergeResearchProgress(readResearchProgress(run.research_progress,id),id,fact);
  if(!progress)return;
+ await writeResearchProgress(db,id,progress);
+}
+async function writeResearchProgress(db:PoolClient,id:string,progress:ResearchProgress){
  await db.query("UPDATE runtime_agui_runs SET research_progress=$2 WHERE id=$1",[id,progress]);
  await writeAgUiEvent(db,id,{type:"STATE_SNAPSHOT",snapshot:{oneearth:{researchProgress:progress}}});
 }
@@ -150,8 +153,10 @@ export async function appendAgUiText(db:PoolClient,id:string,delta:string){
 /** Called from the original finish/cancel transaction. There is no second
  * task status: this row only records delivery of that same business ending. */
 export async function finishAgUi(db:PoolClient,id:string,status:"complete"|"failed"|"cancelled",payload:Payload){
- const {rows:[run]}=await db.query<{thread_id:string;message_open:boolean;public_text:string;workspace_tool:boolean;public_step:string|null}>("SELECT thread_id,message_open,public_text,workspace_tool,public_step FROM runtime_agui_runs WHERE id=$1 AND NOT terminal FOR UPDATE",[id]);
+ const {rows:[run]}=await db.query<{thread_id:string;message_open:boolean;public_text:string;workspace_tool:boolean;public_step:string|null;research_progress:unknown}>("SELECT thread_id,message_open,public_text,workspace_tool,public_step,research_progress FROM runtime_agui_runs WHERE id=$1 AND NOT terminal FOR UPDATE",[id]);
  if(!run)return;
+ const progress=settleResearchProgress(readResearchProgress(run.research_progress,id));
+ if(progress)await writeResearchProgress(db,id,progress);
  if(run.public_step&&nativeAgUiStepLabel(run.public_step))await writeAgUiEvent(db,id,{type:"STEP_FINISHED",stepName:run.public_step});
  const result=payload.result as DiscoveryResponse|undefined;
  if(status==="complete"&&result){
