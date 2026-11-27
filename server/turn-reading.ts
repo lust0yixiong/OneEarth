@@ -2,6 +2,7 @@ import {locatorIndexNotice} from "./locator-labels.mjs";
 import type {SourceReadLocator} from "../src/domain/source-read-locator";
 import type {SearchRun,ToolCall,WebHit} from "../src/domain/types";
 import type {TurnPlan,TurnTarget} from "./turn-planning";
+import {isResearchTimeout} from "./research-progress";
 import type {DiscoveryWebTools} from "./discovery-web-tools";
 
 /** Exact public identities only. The existing transport pins DNS and redirects.
@@ -41,7 +42,7 @@ export async function readTurnSource(target:ReadTarget,question:string,signal:Ab
 }
 
 export async function readPlannedSources(plan:{action:TurnPlan["action"];targets:ReadTarget[]},question:string,signal:AbortSignal,deps:{
-  read:TurnSourceReader;configuredFetch?:boolean;callPrefix?:string;stage:(text:string,searches?:SearchRun[])=>void;report:(call:ToolCall)=>void;
+  read:TurnSourceReader;configuredFetch?:boolean;callPrefix?:string;stage:(text:string,searches?:SearchRun[])=>void;report:(call:ToolCall)=>void;onTimeout?:()=>void;
 }){
   if(plan.action!=="read")return [];
   const targets=[...new Map(plan.targets.filter(t=>t.url).map(t=>[t.url!,t])).values()].slice(0,3),runs:SearchRun[]=[];
@@ -51,15 +52,18 @@ export async function readPlannedSources(plan:{action:TurnPlan["action"];targets
     signal.throwIfAborted();const started=Date.now(),call={id:(deps.callPrefix||"read-target-")+i,kind:"tool" as const,name:"读取指定来源",input:target.url!};
     const row:SearchRun={engine:/\.pdf/i.test(target.url!)?"PDF 原文":"原站读取",query:target.url!,status:"running",hits:[],startedAt:new Date(started).toISOString()};
     runs.push(row);deps.report({...call,status:"running"});deps.stage("正在读取本轮指定的来源",runs);
+    const timeout=AbortSignal.timeout(18000);
     try{
-      const result=await deps.read(target,question,AbortSignal.any([signal,AbortSignal.timeout(18000)]),deps.configuredFetch);signal.throwIfAborted();
+      const result=await deps.read(target,question,AbortSignal.any([signal,timeout]),deps.configuredFetch);signal.throwIfAborted();
       Object.assign(row,result,{status:"done",hits:result.hits.map(h=>({...h,discoveredBy:target.discoveredBy,readAt:new Date().toISOString(),stage:h.pageExcerpt?(result.engine==="PDF 原文"?"pdf-excerpt":"page-excerpt"):"search-snippet"}))});
       const locations=row.hits.flatMap(h=>h.locatorResults?.map(({kind,value,status})=>({kind,value,status}))||[]);
       deps.report({...call,status:locations.some(location=>location.status!=="found")?"partial":"done",
         output:JSON.stringify({url:row.requestUrl||target.url,hits:row.hits.length,engine:row.engine,warning:row.warning,
           configuredFetchIssue:result.fetchIssue,...(locations.length?{locations}:{})})});
     }catch(error){
-      signal.throwIfAborted();row.status="failed";row.error=error instanceof Error?error.message:"指定来源读取失败。";
+      signal.throwIfAborted();
+      if(timeout.aborted||isResearchTimeout(error))deps.onTimeout?.();
+      row.status="failed";row.error=error instanceof Error?error.message:"指定来源读取失败。";
       deps.report({...call,status:"failed",error:row.error});
     }
     row.elapsedMs=Date.now()-started;deps.stage("已完成本轮指定来源的读取尝试",runs);

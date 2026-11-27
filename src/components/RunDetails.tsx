@@ -1,3 +1,4 @@
+import {researchProgressAreas,researchProgressStates,type ResearchProgress} from "../domain/native-agui-research-progress";
 import {literatureDisplay, literatureText} from "../domain/literature-label";
 import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from "react";
 import {Clock3,Copy,Check,ChevronDown} from "lucide-react";
@@ -128,7 +129,7 @@ function ProviderReasoning({snapshots}:{snapshots:ProviderReasoningSnapshot[]}) 
     </div>;
   });
 }
-export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,working=false,failed=false,openFinding,initiallyOpen,onOpenChange}:{trace?:RunTrace;stage?:string;runs?:SearchRun[];working?:boolean;failed?:boolean;openFinding?:(id:string)=>void;initiallyOpen?:boolean;onOpenChange?:(open:boolean)=>void}) {
+export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,working=false,failed=false,openFinding,initiallyOpen,onOpenChange,researchProgress}:{trace?:RunTrace;stage?:string;runs?:SearchRun[];working?:boolean;failed?:boolean;openFinding?:(id:string)=>void;initiallyOpen?:boolean;onOpenChange?:(open:boolean)=>void;researchProgress?:ResearchProgress}) {
   const trace=useMemo(()=>literatureDisplay(rawTrace),[rawTrace]);
   const reported=useMemo(()=>literatureDisplay(rawReported),[rawReported]);
   const reasoning=useMemo(()=>mergeProviderReasoning(undefined,rawTrace?.providerReasoning) ?? [],[rawTrace?.providerReasoning]);
@@ -140,8 +141,10 @@ export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,worki
     id:"search-"+i,kind:"tool" as const,name:r.engine+(r.cacheStoredAt?"（本地缓存）":""),input:r.query,status:r.status,error:r.error,
     output:r.status==="done"?JSON.stringify({returned:r.hits.length,total:r.total,hits:r.hits,warning:r.warning,cacheStoredAt:r.cacheStoredAt},null,2):undefined,
   }))];
-  const stages=trace?.stages?.length?trace.stages:stage?[stage]:[];
-  if(!working && !calls.length && !stages.length && !reasoning.length)return null;
+  const stages=trace?.stages?.length?trace.stages:stage && !researchProgress?[stage]:[];
+  const currentAction=working && researchProgress?.actions.slice().reverse().find(action=>action.status==="running");
+  const elapsed=Math.max(0,Math.floor((now-(trace?.started||now))/1000));
+  if(!researchProgress && !working && !calls.length && !stages.length && !reasoning.length)return null;
   const findings=trace?.findings?.length ? <section className="oe-findings" aria-label="阶段发现" aria-live={working?"polite":"off"}>
     {trace.findings.map(f=><div key={f.id}>
       <p><strong>{f.source}</strong> · {f.summary}</p>
@@ -155,9 +158,24 @@ export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,worki
     setOpen(expanded);
     onOpenChange?.(expanded);
   }}>
-    <summary><Clock3 size={14}/><span>{working?"Working for "+Math.max(0,Math.floor((now-(trace?.started||now))/1000))+"秒":"思考过程"}</span><ChevronDown size={13}/></summary>
+    <summary><Clock3 size={14}/><span>{researchProgress ? "执行过程" : working ? "已用时 "+elapsed+" 秒" : "思考过程"}</span>
+      {researchProgress && <span className="oe-research-progress-summary">{currentAction
+        ? researchProgressAreas[currentAction.area].label+" · "+elapsed+" 秒"
+        : researchProgress.actions.length+" 项操作"}</span>}
+      <ChevronDown size={13}/>
+    </summary>
     {!working && findings}
     {!!reasoning.length && <ProviderReasoning snapshots={reasoning}/>}
+    {researchProgress && <ol className="oe-research-progress" aria-label="执行过程">
+      {researchProgress.actions.map(({id,area,status,count})=><li key={id} data-action-id={id} data-status={status}>
+        <span className="oe-research-action-marker" aria-hidden="true"/>
+        <span className="oe-research-action-body">
+          <span>{researchProgressAreas[area].label}</span>
+          {count!==undefined && <small>{count} {researchProgressAreas[area].unit}</small>}
+        </span>
+        <span className="oe-research-action-status">{!working && status==="running" ? "未返回结果" : researchProgressStates[status]}</span>
+      </li>)}
+    </ol>}
     {!!stages.length && <StageHistory stages={stages} working={working}/>}
     {!!calls.length && <div className="oe-call-group">
     <CallHistory calls={calls} runs={runs} working={working} failed={failed}/></div>}

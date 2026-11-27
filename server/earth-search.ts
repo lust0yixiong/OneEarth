@@ -1,9 +1,10 @@
 import { pointFromQuery, sceneDocument } from "../src/domain/earth-search";
 import type { DiscoveryResponse } from "../src/domain/types";
+import {isResearchTimeout,type ResearchProgressFact} from "./research-progress";
 import { querySceneCatalogue } from "./discovery-a2a-client";
 import { sceneCatalogAssets, type SceneCatalogAsset, type SceneCatalogResult } from "./discovery-materials-contract";
 
-export async function resolveSceneQuery(q: string, answer: DiscoveryResponse, signal: AbortSignal) {
+export async function resolveSceneQuery(q: string, answer: DiscoveryResponse, signal: AbortSignal,progress?:(fact:ResearchProgressFact)=>void) {
   const match = answer.catalogMatch;
   const point = pointFromQuery(q);
   if (!match || !point || !match.period) return answer;
@@ -11,13 +12,17 @@ export async function resolveSceneQuery(q: string, answer: DiscoveryResponse, si
     sceneCatalogAssets.some(asset => asset === id)))];
   if (!assetIds.length) return answer;
 
+  const action={id:"scene-catalogue",area:"catalog"} as const;
+  progress?.({...action,status:"running"});
   let result: SceneCatalogResult;
+  let timedOut=false;
   try {
     result = await querySceneCatalogue({
       assetIds, point, years: match.period, ...(match.utcWindow ? { utcWindow: match.utcWindow } : {}),
     }, signal);
-  } catch {
+  } catch(error) {
     signal.throwIfAborted();
+    timedOut=isResearchTimeout(error);
     result = { lookups: [], failures: assetIds.map(assetId => ({
       assetId, url: "https://earth-search.aws.element84.com/v1/collections/" + assetId.slice("earth-search:".length),
     })) };
@@ -29,6 +34,9 @@ export async function resolveSceneQuery(q: string, answer: DiscoveryResponse, si
     return collection + " 查询未完成，匹配数未知，可通过发布方链接重查。";
   });
   const lookups = result.lookups.sort((a, b) => match.ids.indexOf(a.assetId) - match.ids.indexOf(b.assetId));
+  const status=result.failures.length?(lookups.length?"partial":timedOut?"timeout":"failed"):"done";
+  const count=lookups.reduce((total,lookup)=>total+lookup.matched,0);
+  progress?.({...action,status,...((status==="done"||status==="partial")&&count<=1_000_000?{count}:{})});
   const summaries = lookups.map(lookup => sceneDocument(lookup).scope);
   const rejected = match.conditions.filter(condition => condition.includes("与所问时段无交集") || condition.includes("年限依据"));
   const scopeNote = "本次按所选时段和坐标查询，云量、传感器型号及其他条件需逐景筛选。";

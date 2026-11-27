@@ -9,7 +9,9 @@ import {agUiInterruptDefinition,agUiQuestionCheckDefinition,validAgUiQuestionChe
 import {agUiInterruptSchema,claimAgUiResume,saveAgUiInterrupt,saveAgUiQuestionCheck,lockAgUiThread} from "./postgres-ag-ui-interrupt";
 import {validClarificationPrompt} from "../src/domain/clarification";
 import {assertPublicAnswerSafe} from "./public-answer-stream";
-import type {PoolClient} from "pg";
+import type {Pool,PoolClient} from "pg";
+import {readResearchProgress} from "../src/domain/native-agui-research-progress";
+import {mergeResearchProgress,readResearchProgressFact} from "./research-progress";
 import {EventSchema} from "@ag-ui/core/schemas";
 import {nativeAgUiProtocolVersion} from "../src/domain/native-ag-ui";
 import type {DiscoveryResponse} from "../src/domain/types";
@@ -27,6 +29,7 @@ export const agUiSchema=`
  );
  CREATE INDEX IF NOT EXISTS runtime_agui_events_run ON runtime_agui_events(run_id,seq);
  ALTER TABLE runtime_agui_runs ADD COLUMN IF NOT EXISTS public_step text;
+ ALTER TABLE runtime_agui_runs ADD COLUMN IF NOT EXISTS research_progress jsonb;
 ` + agUiInterruptSchema + agUiWorkspaceSchema;
 export async function writeAgUiEvent(db:PoolClient,id:string,value:unknown){
  const event=EventSchema.parse(value);
@@ -55,6 +58,24 @@ export async function projectAgUiProgress(db:PoolClient,id:string,payload:Payloa
  await writeAgUiEvent(db,id,{type:"STEP_STARTED",stepName:step});
  await db.query("UPDATE runtime_agui_runs SET public_step=$2 WHERE id=$1",[id,step]);
 }
+export async function readAgUiResearchProgress(db:Pool|PoolClient,id:string){
+ const {rows:[run]}=await db.query<{research_progress:unknown}>("SELECT research_progress FROM runtime_agui_runs WHERE id=$1",[id]);
+ return readResearchProgress(run?.research_progress,id);
+}
+
+/** The original task append transaction persists the public state and its
+ * standard snapshot together. The existing run lock also fences termination. */
+export async function projectAgUiResearchProgress(db:PoolClient,id:string,payload:Payload){
+ if(payload.remoteStop!==undefined||payload.cancellationReceipt!==undefined)return;
+ const fact=readResearchProgressFact(payload.researchProgressFact);if(!fact)return;
+ const {rows:[run]}=await db.query<{research_progress:unknown}>("SELECT research_progress FROM runtime_agui_runs WHERE id=$1 AND NOT terminal FOR UPDATE",[id]);
+ if(!run)return;
+ const progress=mergeResearchProgress(readResearchProgress(run.research_progress,id),id,fact);
+ if(!progress)return;
+ await db.query("UPDATE runtime_agui_runs SET research_progress=$2 WHERE id=$1",[id,progress]);
+ await writeAgUiEvent(db,id,{type:"STATE_SNAPSHOT",snapshot:{oneearth:{researchProgress:progress}}});
+}
+
 /** An explicitly public, completed provider summary is a display object,
  * never model history. Unknown/private markers and raw thinking stay archived. */
 export function completeAgUiSummary(taskId:string,value:unknown):ProviderReasoningSnapshot|undefined{

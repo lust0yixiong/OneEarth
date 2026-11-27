@@ -1,6 +1,7 @@
 import {plainPublicAnswer} from "./public-answer-stream";
 import {runtimeStepContext} from "./runtime-step";
 import {TaskParked} from "./task-store";
+import {delegatedResearchProgress,isResearchTimeout,type ResearchProgressFact} from "./research-progress";
 import {literatureText,literatureDisplay} from "../src/domain/literature-label";
 import {providerReasoningArchive} from "./provider-reasoning";
 import {isDeepStrictEqual} from "node:util";
@@ -108,6 +109,8 @@ export async function resumePlannedTurn(services:RuntimeServices,taskId:string,b
     observationAvailable:checkpoint.observationAvailable,observationMaterials:checkpoint.observationMaterials,semanticDecision:true,handoff:checkpoint});
 }
 
+const discoveryProgressAreas:ReadonlySet<ResearchProgressFact["area"]>=new Set(["literature","haina","web"]);
+
 export async function executeTurn(services:RuntimeServices,taskId:string,body:RuntimeTurnInput,signal:AbortSignal,
   publish:(payload:Record<string,unknown>)=>void,internal:RuntimeTurnOptions&{foreground?:boolean;semanticDecision?:boolean;handoff?:RuntimeTurnHandoff;approvedConfirmation?:boolean}={}):Promise<Record<string,unknown>>{
   const {tasks, push, coverage, researchRegionService, adminBoundaryDir, canonicalCache} = services;
@@ -129,6 +132,8 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
   let researchRegion:ResearchRegion|null|undefined;
   let regionTask:Promise<void>|undefined;
   function event(value:Record<string, unknown>) { publish(literatureDisplay(value)); }
+  const researchProgress=(fact:ResearchProgressFact)=>event({researchProgressFact:fact});
+  const synthesisProgress=(status:ResearchProgressFact["status"])=>researchProgress({id:"answer-synthesis",area:"synthesis",status});
   function stage(text:string, searches?:SearchRun[]) {
     if(runTrace.stages.at(-1)!==text)runTrace.stages.push(text);
     if(searches)runTrace.searches=searches;
@@ -154,7 +159,17 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     return latest;
   }
   async function readCoverage(scope:typeof context) {
-    const evidence = await questionGridEvidence(scope,coverage,signal);
+    const hasScope=scope.attachedScope?.some(item=>item.kind==="grid"&&!!item.coverageScope);
+    const action={id:"grid-catalogue",area:"catalog"} as const;
+    if(hasScope)researchProgress({...action,status:"running"});
+    let evidence;
+    try {evidence=await questionGridEvidence(scope,coverage,signal);}
+    catch(error){
+      if(hasScope&&!signal.aborted)researchProgress({...action,status:isResearchTimeout(error)?"timeout":"failed"});
+      throw error;
+    }
+    if(hasScope&&evidence)researchProgress(evidence.status==="ready"?
+      {...action,status:"done",...(evidence.count<=1_000_000?{count:evidence.count}:{})}:{...action,status:"failed"});
     if (evidence) report({id:"question-grid",kind:"tool",name:"读取所引网格的覆盖修订",input:evidence.cellId,
       status:evidence.status==="ready"?"done":"partial",output:gridCoverageSummary(evidence)});
     return evidence;
@@ -346,6 +361,10 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
               researchRegion=region;event({researchRegion});
             }).catch(()=>{researchRegion=null;event({researchRegion});});
           }
+          if(!a2a){
+            const fact=delegatedResearchProgress(messageId,update.researchProgressFact,discoveryProgressAreas);
+            if(fact)researchProgress(fact);
+          }
           if(update.stage)stage(update.stage,update.searches);
           if(update.call)report({...update.call,id:prefix+update.call.id});
           if(update.finding){
@@ -356,6 +375,10 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
             event({finding,traceStarted:runTrace.started});
           }
         },{onAccepted:saveBinding,onCheckpoint:saveBinding,webToolQuestion:clarification?.delegation.query,executionSignal,onEvent:async update=>{
+          if(!runtimeStepContext.getStore()?.replaying){
+            const fact=delegatedResearchProgress(messageId,update.researchProgressFact,discoveryProgressAreas);
+            if(fact)await tasks.append(taskId,{researchProgressFact:fact});
+          }
           if(update.result)await retainDiscoveryMaterials(update.result);
         },...(!continuation?confirmation?.options:{})});
         if(!a2a)await retainDiscoveryMaterials(result);
@@ -488,6 +511,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       }
       const progress:SearchRun[]=[];
       const searches=await executor.read({...plan,targets:allowed},question,{stage,report,callPrefix,executionSignal,onFailure:message=>{readIssues.push(message);},
+      persistProgress:async fact=>{await tasks.append(taskId,{researchProgressFact:fact});},
       options:{onAccepted:async binding=>{if(!runtimeStepContext.getStore()?.replaying)await tasks.append(taskId,{sourceReadBinding:binding});},
         onCheckpoint:async binding=>{if(!runtimeStepContext.getStore()?.replaying)await tasks.append(taskId,{sourceReadBinding:binding});}},onResult:async material=>{readIssues.push(...material.issues);await retainMaterials(material);progress.push(...material.searches);}});
       return [...new Map([...progress,...searches].map(run=>[JSON.stringify(run),run])).values()];
@@ -820,7 +844,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       const currentBatch=acquired?discoveryResultBatch(batchOwner,actualDiscoveryQuery||query,acquired):undefined;
       if(currentBatch)event({resultBatch:currentBatch});
       const reply=await modelReply(targetQuery,context,{message:summary,gridCoverage},history,executor,signal,
-        stage,papers,"",undefined,acquired,report,{plan:deliveryPlan,searches:readRuns,priorEvidence,discoveryAttempt},currentAssertionReadings,{record:prior,searches:archived.searches},await synthesisContext(),currentBatch);
+        stage,papers,"",undefined,acquired,report,{plan:deliveryPlan,searches:readRuns,priorEvidence,discoveryAttempt},currentAssertionReadings,{record:prior,searches:archived.searches},await synthesisContext(),currentBatch,{onProgress:synthesisProgress});
       if(currentBatch)reply.resultBatch=currentBatch;
       if(papers.length)reply.paperRecords=literatureDisplay(papers);
       reply.hainaRecords=pinnedIds.flatMap(id=>id.startsWith("haina:")?haina.records().filter(r=>String(r.id)===id.slice(6)):[]);
@@ -856,10 +880,21 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     const observation=gridCoverage||!allowConstellation?undefined:discoverObservations(lookupQuery,scopedContext,push);
     const constellationFeed=allowConstellation?(observation?.pushFeed||push.latest()):undefined;
     if(constellationFeed)registerObservations(constellationFeed.records,!observation);
-    const localResult=()=>retrieved?discoverConversation(decision?.dataQuestion || query,scopedContext,retrieved.plan.conversationContext):discover(query,scopedContext);
+    const localResult=async()=>{
+      const action={id:"local-catalogue",area:"catalog"} as const;
+      researchProgress({...action,status:"running"});
+      try {
+        const local=retrieved?discoverConversation(decision?.dataQuestion || query,scopedContext,retrieved.plan.conversationContext):discover(query,scopedContext);
+        researchProgress({...action,status:"done"});
+        return resolveSceneQuery(lookupQuery,local,signal,researchProgress);
+      } catch(error) {
+        if(!signal.aborted)researchProgress({...action,status:isResearchTimeout(error)?"timeout":"failed"});
+        throw error;
+      }
+    };
     const result=gridCoverage?{message:gridCoverageSummary(gridCoverage),gridCoverage}:
       scopedReply(observation || (restricted&&!restricted.includes("web")?{message:"按用户限定的来源整理本轮实得资料。"}:
-        await resolveSceneQuery(lookupQuery,localResult(),signal)),scopedContext,retrieved?.plan);
+        await localResult()),scopedContext,retrieved?.plan);
     report({...catalogCall,status:gridCoverage?.status==="unknown"?"partial":"done",output:result.message});
     {
       const paperTrace=retrieved!.sourceStatus.map(s=>s.source+" "+(s.status==="done"?"完成":s.status==="partial"?"部分完成":s.status==="not_requested"?"未请求":"未完成")+" · "+s.count+" 项").join("；");
@@ -867,7 +902,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       event({resultBatch:currentBatch});
       const reply:DiscoveryResponse=await modelReply(decision?.dataQuestion||query,scopedContext,result,history,executor,signal,
         stage,retrieved!.papers,paperTrace,
-        !context.filters.source || context.filters.source==="constellation"?constellationFeed:undefined,retrieved,report,undefined,currentAssertionReadings,{record:prior,searches:archived.searches},await synthesisContext(),currentBatch);
+        !context.filters.source || context.filters.source==="constellation"?constellationFeed:undefined,retrieved,report,undefined,currentAssertionReadings,{record:prior,searches:archived.searches},await synthesisContext(),currentBatch,{onProgress:synthesisProgress});
       reply.resultBatch=currentBatch;
       if(retrieved!.papers.length)reply.paperRecords=literatureDisplay(retrieved!.papers);
       reply.hainaRecords=retrieved!.haina.flatMap(asset=>{

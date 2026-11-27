@@ -72,12 +72,12 @@ export function AnswerBody({message,question,animate,archived,children,clarifica
   ]);
   const remaining=batch?.ids.filter(id=>!shown.has(id)) || [];
   if(m.clarification)return <div role="region" aria-label="补充关键信息">
-    <RunDetails initiallyOpen={initiallyOpenProcess} trace={m.runTrace} openFinding={inspect}/>
+    <RunDetails initiallyOpen={initiallyOpenProcess} trace={m.runTrace} researchProgress={m.researchProgress} openFinding={inspect}/>
     <AnswerContent text={m.text} references={[]} inspect={inspect} animate={animate} onComplete={finish}/>
     {clarificationAction}
   </div>;
   return <>
-    <RunDetails initiallyOpen={initiallyOpenProcess} trace={m.runTrace} runs={notes?.searches} stage={notes?.paperTrace || notes?.basis} failed={m.failed}/>
+    <RunDetails initiallyOpen={initiallyOpenProcess} trace={m.runTrace} researchProgress={m.researchProgress} runs={notes?.searches} stage={notes?.paperTrace || notes?.basis} failed={m.failed}/>
     <AnswerContent text={m.text} quote={onQuote} selectedReferences={s.draftScope?.flatMap(i=>i.kind==="reference"?[i.reference]:[]) || []} references={inlineRefs} details={referenceDetails} inspect={inspect} hover={hover} inCell={active?inCell:undefined} focused={active?s.mapFocus?.assetId:undefined}
       limitation={notes?.limitation} onComplete={finish} animate={animate && !m.failed} open={refs=>setDrawer({refs,title:"本段来源与依据"})}
       savedActions={savedActions}/>

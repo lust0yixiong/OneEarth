@@ -84,6 +84,9 @@ export async function runSourceRead(job: SourceReadJob, signal: AbortSignal, emi
   const papers: PaperRecord[] = [], issues:string[] = [];
   const paperEvidence: NonNullable<SourceReadResult["paperEvidence"]> = [];
   const web = targets.filter(target => target.kind === "web");
+  let timedOut=false;
+  const progress={id:"source-read",area:"reading"} as const;
+  emit({researchProgressFact:{...progress,status:"running"}});
   const readPaper = async (id:string) => {
     signal.throwIfAborted();
     const call = {id:"read-paper-" + id,kind:"tool",name:"读取指定文献资料",input:id};
@@ -126,6 +129,7 @@ export async function runSourceRead(job: SourceReadJob, signal: AbortSignal, emi
       read,configuredFetch:deepseekFetch === true && fetchAllowed,
       stage:(stage,runs) => emit({stage,...(runs ? {searches:runs.map(row=>({...row,hits:[...row.hits]}))} : {})}),
       report:call => emit({call}),
+      onTimeout:()=>{timedOut=true;},
     }),
     Promise.all(targets.flatMap(target => target.kind === "paper" ? [readPaper(target.id)] : [])),
   ]);
@@ -135,6 +139,9 @@ export async function runSourceRead(job: SourceReadJob, signal: AbortSignal, emi
       issues.push(run.query + "：" + (run.warning || "未完整取得指定位置的材料。"));
   }
   signal.throwIfAborted();
+  const readCount=papers.length+searches.filter(run=>run.status==="done"&&run.hits.some(hit=>!!hit.pageExcerpt)).length;
+  const status=readCount===targets.length&&!issues.length?"done":readCount?"partial":timedOut?"timeout":"failed";
+  emit({researchProgressFact:{...progress,status,...(status==="done"||status==="partial"?{count:readCount}:{})}});
   const sourceReadResult:SourceReadResult = {searches,papers,issues,...(paperEvidence.length ? {paperEvidence} : {})};
   if (!papers.length && !searches.some(run => run.status === "done" && run.hits.length))
     return {sourceReadResult,error:"没有取得指定来源的材料。",code:"source_read_unavailable"};

@@ -1,6 +1,7 @@
 import {HttpAgent, type AgentSubscriber} from "@ag-ui/client";
 import type {Message as AgUiMessage,ResumeEntry,ToolCall} from "@ag-ui/core";
 import {ChatResponseError,type ChatPhase} from "./chat-response";
+import {readResearchProgress,readResearchProgressState,type ResearchProgress} from "./native-agui-research-progress";
 import {nativeAgUiStepLabel,type NativeAgUiStep} from "./native-agui-progress";
 import type {RuntimePhase} from "./runtime-status";
 import {nativeAgUiPath, nativeAgUiProtocolVersion, oneEarthAgUiVersion, readOneEarthAgUiInterruptRecord, readOneEarthAgUiResult,
@@ -31,6 +32,7 @@ type ChatProgress = {
   onAccepted: () => void;
   onDraft: (text: string) => void;
   onSummary: (snapshot: ProviderReasoningSnapshot) => void;
+  onResearchProgress: (progress:ResearchProgress) => void;
   onStep: (step:PublicStepProgress & {stage:string}) => void;
   onLifecycle: (lifecycle: TaskLifecycle) => void;
 };
@@ -106,6 +108,12 @@ export async function submitNativeChat<T extends object>(
         progress.onAccepted();
         progress.onLifecycle({runtimePhase: {phase: "executing"}});
       }
+    },
+    onStateSnapshotEvent: ({event})=>{
+      if(!started || sealed || abortController.signal.aborted ||
+        ("subagentRunId" in event && event.subagentRunId!==undefined))return;
+      const activity=readResearchProgressState(event.snapshot,runId);
+      if(activity)progress.onResearchProgress(activity);
     },
     onStepStartedEvent: ({event}) => {
       if(!started || sealed || openStep)return;
@@ -311,7 +319,7 @@ export async function readClaimedNativeTurn(parent:ChatRun,claim:OneEarthAgUiInt
 }
 
 export async function recoverNativeChat(
-  run:ChatRun, signal:AbortSignal, progress:Pick<ChatProgress,"onAccepted"|"onLifecycle">,
+  run:ChatRun, signal:AbortSignal, progress:Pick<ChatProgress,"onAccepted"|"onLifecycle"> & Partial<Pick<ChatProgress,"onResearchProgress">>,
 ):Promise<CompletedChat> {
   const unavailableTimeout=60_000;
   let until=Date.now()+unavailableTimeout;
@@ -327,6 +335,10 @@ export async function recoverNativeChat(
       progress.onAccepted();
       const facts=readTaskLifecycle(task);
       if(facts)progress.onLifecycle(facts);
+      if(task.status==="queued" || task.status==="running"){
+        const activity=readResearchProgress(task.researchProgress,run.runId);
+        if(activity)progress.onResearchProgress?.(activity);
+      }
       if(task.status==="cancelled")throw new ChatResponseError("本地任务已取消。","cancelled");
       if(task.status==="failed")throw new ChatResponseError("本轮任务未完成。","run_failed");
       if(task.status==="complete"){

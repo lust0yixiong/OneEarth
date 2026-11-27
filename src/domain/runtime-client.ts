@@ -50,6 +50,7 @@ export interface ResearchRecord {
   workspaceTool?:unknown;
   workspaceReceipt?:WorkspaceReceipt;
   taskLifecycle?:TaskLifecycle;
+  researchProgress?:unknown;
 }
 
 export async function loadResearchRecord(id:string,signal?:AbortSignal):Promise<ResearchRecord>{

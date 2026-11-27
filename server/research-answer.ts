@@ -242,7 +242,7 @@ export function shouldReviewAnswerEvidence(answer:{message:string;limitation?:st
   if(verifiedExample&&explicitMathExample&&text.length<500&&!sourceClaim)return false;
   return answer.message.length>=300 || /论文|清单|版本|\d/.test(answer.message);
 }
-export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[];priorEvidence?:ParentResearchEvidence;discoveryAttempt?:"submission-attempted"|"accepted"},assertionReadings:CurrentAssertionReading[]=[],sourceHistory:SourceReadHistory={},turnContext?:RuntimeTurnContext,currentBatch?:ResultBatch,budgetPolicy:{promptBytes?:number;answerMs?:number}={}) {
+export async function modelReply(query:string,context:DiscoveryContext,base:DiscoveryResponse,history:Turn[],executor:ReturnType<typeof researchExecutor>,signal:AbortSignal,onStage?:(stage:string,searches?:SearchRun[])=>void,papers:PaperRecord[]=[],paperTrace="",constellationFeed?:PushFeed,retrieval?:DataSearchResult,onTool?:(call:ToolCall)=>void,turn?:{plan:TurnPlan;searches:SearchRun[];priorEvidence?:ParentResearchEvidence;discoveryAttempt?:"submission-attempted"|"accepted"},assertionReadings:CurrentAssertionReading[]=[],sourceHistory:SourceReadHistory={},turnContext?:RuntimeTurnContext,currentBatch?:ResultBatch,budgetPolicy:{promptBytes?:number;answerMs?:number;onProgress?:(status:import("./research-progress").ResearchProgressFact["status"])=>void}={}) {
     if(retrieval?.questionCheck || retrieval?.clarification || retrieval?.plan.questionMode==="reframe")
       throw Error("转换后的问题尚未得到用户确认，不能生成答复。");
     const start=Date.now();
@@ -395,6 +395,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
     const actualCalculations:CalculationReport[]=[];
     let answer:SynthesisAnswer;
     let origin="model-validated";
+    budgetPolicy.onProgress?.("running");
     onTool?.({id:"answer-generation",kind:"tool",name:"回答整理",input:JSON.stringify({promptBytes:packet.stats.promptBytes,budgetMs:Math.min(synthesisTimeLimitMs,budgetPolicy.answerMs??synthesisTimeLimitMs)}),status:"running"});
     try{if(packet.blocked)throw Error("本轮合成的必要材料超过输入预算，未发送超限提示。");
       answer=await synthesizeAnswer(prompt,references,webHits,p=>runModel(p),signal,
@@ -415,7 +416,8 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         onTool?.({id,kind:"tool",name:node==="answer-repair"?"回答引用与结构核对":node==="calculation-plan"?"核对数值演算参数":"回答整理",input:node==="answer-repair"?repairInput:"依据本轮已取得材料处理",status:"failed",error:error instanceof Error?error.message:"本步骤未完成。",output:retained?"已保留此前通过结构及引用校验的内容，不保留未核验的新计算结果。":"未取得可直接恢复的正文，将仅保留实际取得的来源线索。"});
       }});
     }catch(error){if(error instanceof TaskParked)throw error;
-      signal.throwIfAborted();let retained=retainedSourceAnswer(references,webHits,packet.retained,!!retrieval);if(!retained)throw error;
+      signal.throwIfAborted();let retained=retainedSourceAnswer(references,webHits,packet.retained,!!retrieval);
+      if(!retained){budgetPolicy.onProgress?.(budget.signal.aborted?"timeout":"failed");throw error;}
       if(deliveredComparisons.length){const statement="本轮未核对新旧材料差异，不能判断事实新增。";retained.limitation+="\n"+statement;
         retained.sourceChanges=deliveredComparisons.filter(comparison=>retained!.references.some(ref=>ref.kind==="web"&&readSourceIdentity(ref.url)===comparison.identity)).map(comparison=>({ref:comparison.ref,statement,status:"unknown" as const,historyWindow:null,historyQuote:null,currentWindow:null,currentQuote:null}));}
       try{verifyExecutionAndReferences(retained);}catch(rejected){
@@ -442,6 +444,7 @@ export async function modelReply(query:string,context:DiscoveryContext,base:Disc
         status:"failed",error:error instanceof Error?error.message:"来源访问记录不相符。"});}
     }
     onTool?.({id:origin==="model-validated"?"answer-generation":"answer-delivery",kind:"tool",name:origin==="model-validated"?"回答整理":"保留可核依据",input:"区分模型成文通过校验、保留依据与无直接依据",status:origin==="model-validated"?"done":"partial",output:JSON.stringify({mode:origin,promptBytes:packet.stats.promptBytes,modelCalls,sentPromptBytes,elapsedMs:Date.now()-start,references:answer.references.length})});
+    budgetPolicy.onProgress?.(origin==="model-validated"?"done":origin==="no-direct-evidence"?"failed":"partial");
     const {message,sources,webSources}=answer;
     return {...base,message:modelSafeText(message),researchIntent:retrieval?.plan.researchIntent||turn?.plan.researchIntent,conversationContext:retrieval?.plan.conversationContext||turn?.plan.conversationContext,
       conversationEvidence:rememberReadEvidence(previousReadings,searches,memoryOptions),modelExecutor:executor.name,modelIds:sources.map(s=>s.id),

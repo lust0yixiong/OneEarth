@@ -1,6 +1,6 @@
 import {readAgUiWorkspaceRecord,pendingAgUiWorkspaceCalls,bindAgUiWorkspaceReplies,agUiWorkspaceResults,type AgUiWorkspaceReply} from "./postgres-ag-ui-workspace";
 import {readAgUiInterrupt,pendingAgUiInterrupt} from "./postgres-ag-ui-interrupt";
-import {agUiSchema,admitAgUi,appendAgUiText,finishAgUi,projectAgUiProgress,projectAgUiSummary,type AgUiAdmission} from "./ag-ui-persistence";
+import {agUiSchema,admitAgUi,appendAgUiText,finishAgUi,projectAgUiProgress,projectAgUiResearchProgress,projectAgUiSummary,type AgUiAdmission} from "./ag-ui-persistence";
 import {createHash} from "node:crypto";
 import {isDeepStrictEqual} from "node:util";
 import type {Pool, PoolClient} from "pg";
@@ -100,6 +100,7 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
   async function write(db: PoolClient, id: string, payload: Payload, now: number) {
     const saved=await db.query<{seq:string}>("INSERT INTO runtime_chat_events(id,at,payload) VALUES ($1,$2,$3) RETURNING seq", [id, now, payload]);
     await projectAgUiProgress(db,id,payload);
+    await projectAgUiResearchProgress(db,id,payload);
     await projectAgUiSummary(db,id,payload,saved.rows[0].seq);
   }
   async function find(db: Pool | PoolClient, id: string) {

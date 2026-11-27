@@ -321,6 +321,7 @@ export interface Message {
   questionCheck?: QuestionCheck & {attempt?:DiscoveryAttempt};
   questionDecision?: QuestionDecision;
   runTrace?:RunTrace;
+  researchProgress?:import("./native-agui-research-progress").ResearchProgress;
   answerNotes?: AnswerNotes;
   catalogMatch?: DiscoveryResponse["catalogMatch"];
   dataSupport?: DataSupport;

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import type { Router } from "express";
 import { TaskCancelled } from "./task-cancellation";
 import type { OneEarthAgUiInterruptRecord } from "../src/domain/native-ag-ui";
+import type {ResearchProgress} from "../src/domain/native-agui-research-progress";
 import type { NativeWorkspaceToolRecord } from "../src/domain/native-workspace-tool";
 import type { AnswerReference, EvidenceStage } from "../src/domain/types";
 
@@ -173,6 +174,7 @@ export type TaskStore = {
   [Method in Exclude<keyof LocalTaskStore,"materialEvents"|"step"|"clearStep"|"saveStep"|"park"|"cancelStep"|"cancelledSteps">]: (...args: Parameters<LocalTaskStore[Method]>) =>
     ReturnType<LocalTaskStore[Method]> | Promise<ReturnType<LocalTaskStore[Method]>>;
 }&{runtimeStatus?:(id:string)=>Promise<{runtimePhase?:import("../src/domain/runtime-status").RuntimePhase;remoteStop?:import("../src/domain/runtime-status").RemoteStop;remoteStops?:import("../src/domain/runtime-status").RemoteStop[]}>;
+  researchProgress?:(id:string)=>Promise<ResearchProgress|undefined>;
   recordRemoteStop?:(id:string,receipt:import("../src/domain/runtime-status").RemoteStop)=>Promise<boolean>;
   pendingRemoteStops?:()=>Promise<{id:string;discoveryTaskId:string}[]>;
   renewLease?:(lease:RuntimeTaskLease)=>Promise<boolean>;releaseLease?:(lease:RuntimeTaskLease)=>Promise<void>;materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>;researchHandoff?:(id:string)=>Promise<Payload|undefined>;
@@ -206,7 +208,8 @@ export function taskStatusRoutes(router: Router, base: string, store: TaskStore,
       if (typeof conversationId === "string") identity.conversationId = conversationId;
       if (typeof turnId === "string") identity.turnId = turnId;
     }
-    res.set("Cache-Control", "no-store").json({id:task.id, status:task.status, created:task.created, updated:task.updated,...identity,...await store.runtimeStatus?.(task.id)});
+    const [runtimeStatus,researchProgress]=await Promise.all([store.runtimeStatus?.(task.id),store.researchProgress?.(task.id)]);
+    res.set("Cache-Control", "no-store").json({id:task.id, status:task.status, created:task.created, updated:task.updated,...identity,...runtimeStatus,researchProgress});
   });
   if(options.researchRecords)router.get(base+"/:taskId/record",async(req,res)=>{
     const id=String(req.params.taskId);
@@ -214,8 +217,8 @@ export function taskStatusRoutes(router: Router, base: string, store: TaskStore,
     const result=(await store.terminal(id))?.result??(task?await options.recoverRecord?.(task):undefined);
     if(!task||!result){res.status(404).json({error:"没有找到已完成的研究记录。"});return;}
     const {query,turnId,conversationId}=JSON.parse(task.body);
-    const [workspaceReceipt,interrupt,workspaceTool]=await Promise.all([store.workspaceReceipt?.(id),options.readInterrupt?.(id),options.readWorkspaceTool?.(id)]);
-    res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,result,workspaceReceipt,interrupt,workspaceTool});
+    const [workspaceReceipt,interrupt,workspaceTool,researchProgress]=await Promise.all([store.workspaceReceipt?.(id),options.readInterrupt?.(id),options.readWorkspaceTool?.(id),store.researchProgress?.(id)]);
+    res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,result,workspaceReceipt,interrupt,workspaceTool,researchProgress});
   });
   router.delete(base + "/:taskId", async (req, res) => {
     const id=String(req.params.taskId);

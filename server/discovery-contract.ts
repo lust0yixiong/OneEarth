@@ -29,6 +29,7 @@ export interface DiscoveryInput {
 }
 
 export interface DiscoveryEvent {
+  researchProgressFact?: import("./research-progress").ResearchProgressFact;
   stage?: string;
   searches?: SearchRun[];
   call?: ToolCall;

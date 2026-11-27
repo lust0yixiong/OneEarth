@@ -1,4 +1,4 @@
-import {finishAgUi,projectAgUiProgress,projectAgUiSummary} from "./ag-ui-persistence";
+import {finishAgUi,projectAgUiProgress,projectAgUiResearchProgress,projectAgUiSummary,readAgUiResearchProgress} from "./ag-ui-persistence";
 import type {RuntimePhase,RemoteStop} from "../src/domain/runtime-status";
 import {randomUUID} from "node:crypto";
 import {runtimeTaskLease,runtimeTaskLeaseMs,runtimeStepConcurrency,type RuntimeTaskLease} from "./runtime-task-lease";
@@ -86,7 +86,11 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   async function write(db:PoolClient,id:string,payload:Payload,at=Date.now()){
     const saved=await db.query(`INSERT INTO ${events}(id,at,payload) VALUES ($1,$2,$3::jsonb) RETURNING seq`,
       [id,at,JSON.stringify(payload)]);
-    if(namespace==="runtime"){await projectAgUiProgress(db,id,payload);await projectAgUiSummary(db,id,payload,String(saved.rows[0].seq));}
+    if(namespace==="runtime"){
+      await projectAgUiProgress(db,id,payload);
+      await projectAgUiResearchProgress(db,id,payload);
+      await projectAgUiSummary(db,id,payload,String(saved.rows[0].seq));
+    }
     if(namespace==="discovery"&&payload.finding){
       await db.query("INSERT INTO discovery_findings(task_id,seq,finding) VALUES ($1,$2,$3::jsonb)",
         [id,saved.rows[0].seq,JSON.stringify(payload.finding)]);
@@ -250,6 +254,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
     },
     finish,
     ...(namespace==="runtime"?{
+      researchProgress:(id:string)=>readAgUiResearchProgress(pool,id),
       async runtimeStatus(id:string){
         const {rows:[latest]}=await pool.query<{phase:RuntimePhase}>("SELECT payload->'runtimePhase' AS phase FROM runtime_events WHERE id=$1 AND payload ? 'runtimePhase' ORDER BY seq DESC LIMIT 1",[id]);
         const {rows}=await pool.query<{discoveryTaskId:string;state:RemoteStop["state"];remoteState?:string}>(`SELECT discovery_id AS "discoveryTaskId",state,remote_state AS "remoteState" FROM runtime_remote_stops WHERE task_id=$1 ORDER BY CASE state WHEN 'pending' THEN 0 WHEN 'unconfirmed' THEN 1 ELSE 2 END,updated DESC`,[id]);

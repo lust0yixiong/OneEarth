@@ -4,6 +4,8 @@ import { rectangle } from "../src/domain/geo-rectangle";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { ErrorCode,McpError } from "@modelcontextprotocol/sdk/types.js";
+import {isResearchTimeout} from "./research-progress";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { Coordinate, EvidenceTab, Need, SourceProfile } from "../src/domain/types";
 import { validPaperRecord, type PaperRecord } from "../src/domain/paper-record";
@@ -18,7 +20,7 @@ const str = (value: unknown) => typeof value === "string" ? value.trim() : "";
 const strings = (value: unknown) => Array.isArray(value) ? value.map(str).filter(Boolean) : [];
 const show = (v: unknown) => typeof v === "string" ? v : JSON.stringify(v) ?? "";
 export interface PaperPlan { name: string; requestedName?:string; facets: {need: string; queries: string[]}[]; region: string[]; scenario?: string[] }
-export interface PaperSearchResult {records:PaperRecord[];tools:Tool[];incomplete:Tool[];notices?:string[];truncated?:boolean}
+export interface PaperSearchResult {records:PaperRecord[];tools:Tool[];incomplete:Tool[];notices?:string[];truncated?:boolean;timedOut?:boolean}
 const shortEnglish=(value:string)=>/[a-z]/i.test(value) && !/\p{Script=Han}/u.test(value) && value.split(/\s+/).length<=3;
 
 export function readPaperPlan(raw: string): PaperPlan {
@@ -206,7 +208,11 @@ export async function searchPapers(plan: PaperPlan, signal: AbortSignal, stage: 
   if(identity.kind==="unique")plan={...plan,name:identity.doi};
   if(!plan.name && !plan.facets.some(f=>f.queries.some(shortEnglish)))throw Error("文献资料未取得有效英文检索词，未发送整句中文查询。");
   const endpoint = process.env.ONEEARTH_EARTHNANO_URL || "http://10.11.140.149:8767/sse";
-  const deadline = AbortSignal.any([signal, AbortSignal.timeout(30000)]);
+  const timeout=AbortSignal.timeout(30000);
+  const deadline = AbortSignal.any([signal,timeout]);
+  let timedOut=false;
+  const requestTimedOut=(error:unknown)=>timeout.aborted||isResearchTimeout(error)||
+    error instanceof McpError&&error.code===ErrorCode.RequestTimeout;
   const client = new Client({name:"oneearth", version:"0.1"});
   const transport = new SSEClientTransport(new URL(endpoint), {
     fetch: (url, init) => fetch(url, {...init, signal: AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : [])])}),
@@ -230,6 +236,7 @@ export async function searchPapers(plan: PaperPlan, signal: AbortSignal, stage: 
       report?.({...call,status:"done",output:output.length>3000 ? output.slice(0,3000)+"…（输出节选）" : output});
       return data;
     } catch (error) {
+      if(!signal.aborted&&requestTimedOut(error))timedOut=true;
       report?.({...call,status:"failed",error:error instanceof Error ? error.message : "文献资料请求失败"});
       throw error;
     }
@@ -403,6 +410,10 @@ export async function searchPapers(plan: PaperPlan, signal: AbortSignal, stage: 
     if(truncated)notices.push("本轮已核对相关性靠前的 "+checked+" 个候选，结果不是全库总量。");
     if(irrelevant)notices.push("指定资料的主题回退中有 "+irrelevant+" 项候选的标题/别名未支持其与指定资料或检索主题相关，未继续读取论文用法、元数据或原文；未将它们当作指定资料的替代身份。");
     records.sort((a,b)=>(priorities.get(a.dsKey)||0)-(priorities.get(b.dsKey)||0));
-    return {records,tools:[...toolsUsed],incomplete:[...incomplete],notices,truncated};
+    return {records,tools:[...toolsUsed],incomplete:[...incomplete],notices,truncated,timedOut:timedOut||timeout.aborted};
+  } catch(error) {
+    signal.throwIfAborted();
+    if(requestTimedOut(error))throw new DOMException(error instanceof Error?error.message:"文献资料检索超过请求时限。","TimeoutError");
+    throw error;
   } finally { await client.close(); }
 }

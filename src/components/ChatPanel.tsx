@@ -340,7 +340,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     return ()=>preferences.clear();
   },[s.sessionId]);
   const renderedMessages=useMemo(()=>chatMessages.map((m) => {
-    const initiallyOpenProcess=m.runTrace?.providerReasoning?.length ? liveProcessOpen.current.get(m.id) : undefined;
+    const initiallyOpenProcess=!m.researchProgress && m.runTrace?.providerReasoning?.length ? liveProcessOpen.current.get(m.id) : undefined;
     const parent=m.replyTo && questions.get(m.id);
     const resumedBy=m.nativeInterrupt?.resumedBy;
     const replyTerminal=resumedBy ? claimedReplyTerminals.get(resumedBy) : undefined;
@@ -420,7 +420,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   }}>这条问题未收到回答，重新提问</button>
               )}
               {m.role==="assistant" && m.questionCheck && <>
-                {m.runTrace && <RunDetails initiallyOpen={initiallyOpenProcess} trace={m.runTrace}/>}
+                {(m.runTrace || m.researchProgress) && <RunDetails initiallyOpen={initiallyOpenProcess} trace={m.runTrace} researchProgress={m.researchProgress}/>}
                 <QuestionCheck check={nativeCheck?.questionCheck ?? m.questionCheck}
                   pending={!verifiedInterrupts.has(s.sessionId+"/"+m.id)}
                   closed={checkClosed} terminal={nativeCheck?.status==="resolved" ? replyTerminal : undefined}
@@ -525,7 +525,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
       <div className="live-search pending" role="status">
         {question && <button type="button" className="activity-link" onClick={()=>locateQuestion(question.id)}
           aria-controls={"message-"+question.id}>{chat.phase==="research" ? "研究" : "回复"} · {question.text}</button>}
-        <RunDetails working trace={chat.trace} onOpenChange={open=>liveProcessOpen.current.set(chat.id,open)} stage={chat.stage} runs={chat.searches}
+        <RunDetails working trace={chat.trace} researchProgress={chat.researchProgress} onOpenChange={open=>liveProcessOpen.current.set(chat.id,open)} stage={chat.stage} runs={chat.searches}
           openFinding={id=>void loadRemoteAssetIds([id]).then(()=>inspectAsset(id,chat.scope.filters,chat.scope.selection)).catch(()=>patch({error:"暂时无法打开这条线索。"}))}/>
         {chat.accepted && <button type="button" className="activity-link" disabled={chat.cancelling}
           onClick={()=>void cancelChat(chat.id)}>{chat.cancelling?"正在取消本轮":"取消本轮"}</button>}

@@ -25,6 +25,7 @@ import { randomId } from "./id";
 import type {ResumeEntry} from "@ag-ui/core";
 import { ChatResponseError, type ChatPhase } from "./chat-response";
 import {mergeNativeRunProcess,needsArchivedRunProcess,savedNativeSummaries} from "./native-summary-client";
+import {readResearchProgress,type ResearchProgress} from "./native-agui-research-progress";
 import {loadNativeWorkspaceMessages,readClaimedNativeTurn,readNativeInterrupt,recoverNativeChat,submitNativeChat,type ChatRun} from "./native-chat-client";
 import {readWorkspaceToolRecord,workspaceActionFields} from "./native-workspace-tool";
 import {nativeAgUiPath,readOneEarthAgUiInterruptRecord,type OneEarthAgUiInterruptRecord,type OneEarthAgUiResumePayload,type OneEarthQuestionCheckResumePayload} from "./native-ag-ui";
@@ -170,6 +171,7 @@ type ActiveChat = {
   cancelling?:boolean;
   cancelError?:string;
   draftText?:string;
+  researchProgress?:ResearchProgress;
   trace:import("./types").RunTrace;
   searches:import("./types").SearchRun[];
 };
@@ -544,7 +546,7 @@ function archivedChatMessages(saved:ResearchRecord,runTrace?:Message["runTrace"]
       },historicalReply:true} : {}),
       workspacePending:reply.workspacePending,researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
       conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
-      answerNotes:reply.answerNotes,runTrace,researchRegion:reply.researchRegion,
+      answerNotes:reply.answerNotes,runTrace,researchProgress:readResearchProgress(saved.researchProgress,saved.id),researchRegion:reply.researchRegion,
       gridCoverage:reply.gridCoverage,
       ...(reply.clarification || clarificationPrompt ? {clarification:true} : {}),
       clarificationPrompt,
@@ -1748,7 +1750,8 @@ function useWorkspaceValue(initialState: State) {
       };
       let hydrateCompletedProcess=false;
       const complete = (message:string, extra:Partial<Message>) =>{
-        const written=add("assistant",message,{taskLifecycle:entry.progress.taskLifecycle,...extra,chatMessage:true});
+        const written=add("assistant",message,{taskLifecycle:entry.progress.taskLifecycle,
+          researchProgress:entry.progress.researchProgress,...extra,chatMessage:true});
         const lifecycle=extra.taskLifecycle??entry.progress.taskLifecycle;
         if(hydrateCompletedProcess && !extra.failed && lifecycle?.runtimePhase?.phase==="complete" && message===canonicalResponse?.message)
           void written.then(()=>hydrateRunProcess(run,message));
@@ -1829,6 +1832,13 @@ function useWorkspaceValue(initialState: State) {
             const trace=entry.progress.trace;
             updateProgress({trace:{...trace,providerReasoning:[...(trace.providerReasoning ?? []),snapshot]}});
           },
+          onResearchProgress:(researchProgress:ResearchProgress)=>{
+            const phase=entry.progress.taskLifecycle?.runtimePhase?.phase;
+            if(!isCurrent() || entry.progress.cancelling || phase==="cancel-pending" ||
+              phase==="complete" || phase==="failed" || phase==="cancelled" ||
+              researchProgress.revision<=(entry.progress.researchProgress?.revision ?? 0))return;
+            updateProgress({researchProgress});
+          },
           onStep:({stage,phase,runtimePhase}:{stage:string;phase:ChatPhase;runtimePhase:NonNullable<TaskLifecycle["runtimePhase"]>})=>{
             const prior=entry.progress.taskLifecycle?.runtimePhase?.phase;
             if(!isCurrent() || entry.progress.cancelling || prior==="cancel-pending" ||
@@ -1900,6 +1910,9 @@ function useWorkspaceValue(initialState: State) {
         await acceptedReplyWrite;
         if (!isCurrent()) return;
         const {response,interrupt,record}=result;
+        const archivedProgress=readResearchProgress(record?.researchProgress,run.runId);
+        if(archivedProgress && archivedProgress.revision>(entry.progress.researchProgress?.revision ?? 0))
+          entry.progress={...entry.progress,researchProgress:archivedProgress};
         const archivedTrace=record && readArchivedChatTrace(record,{id:run.runId,conversationId:run.threadId,turnId:run.turnId},response.message);
         const liveTrace=entry.progress.trace.providerReasoning?.length ? entry.progress.trace : undefined;
         const runTrace=mergeNativeRunProcess(run.runId,liveTrace,archivedTrace);

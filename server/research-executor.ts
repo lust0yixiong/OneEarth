@@ -1,3 +1,4 @@
+import {delegatedResearchProgress,type ResearchProgressFact} from "./research-progress";
 import {runtimeStepContext} from "./runtime-step";
 import {TaskParked} from "./task-store";
 import type {ChatModel} from "../src/domain/chat-model";
@@ -15,7 +16,9 @@ import {modelSafeText,modelSafeValue,assertModelContextSafe} from "./model-conte
 import type {ProviderReasoningSink} from "./provider-reasoning";
 
 type ReadDependencies={stage:(text:string,searches?:SearchRun[])=>void;report:(call:ToolCall)=>void;callPrefix?:string;executionSignal?:AbortSignal;
-  options?:DiscoveryA2AOptions;onFailure?:(message:string)=>void;onResult?:(result:SourceReadResult)=>Promise<void>};
+  options?:DiscoveryA2AOptions;onFailure?:(message:string)=>void;onResult?:(result:SourceReadResult)=>Promise<void>;
+  persistProgress?:(fact:ResearchProgressFact)=>Promise<void>};
+const readProgressAreas:ReadonlySet<ResearchProgressFact["area"]>=new Set(["reading"]);
 
 export function discoveryProtocol():"a2a"|"v1"{
   const protocol=process.env.ONEEARTH_DISCOVERY_PROTOCOL||"a2a";
@@ -87,6 +90,10 @@ export function researchExecutor(config:ChatModel,deepseekTools:DeepSeekTools|un
       if(entry&&!entry.reserved){entry.grant=grant;entry.reserved=true;await step!.save();}
       const callbacks:DiscoveryA2AOptions={...deps.options,authorizeReplay:()=>canReplay(grant,messageId),onAccepted:async binding=>{await deps.options?.onAccepted?.(binding);if(grant&&!entry?.binding)await webTools!.authority.bind(grant,binding.discoveryId);},onEvent:async event=>{
             await deps.options?.onEvent?.(event);
+            if(!step?.replaying){
+              const fact=delegatedResearchProgress(messageId,event.researchProgressFact,readProgressAreas);
+              if(fact)await deps.persistProgress?.(fact);
+            }
             const value=event.sourceReadResult||event.sourceReadProgress;
             const completed=event.searches?.filter(run=>run.status==="done"&&run.hits.some(hit=>["abstract","page-excerpt","pdf-excerpt"].includes(hit.stage||"")&&!!hit.pageExcerpt));
             if(value||completed?.length)await deps.onResult?.({papers:value?.papers||[],searches:value?.searches||completed||[],issues:value?.issues||[],...(value?.paperEvidence?{paperEvidence:value.paperEvidence}:{})});

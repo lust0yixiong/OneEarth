@@ -128,6 +128,7 @@ await workTasks(store, async ({id,body}: {id:string;body:DiscoveryInput|SourceRe
     lockQuestion:!!continuation && !clarificationReply, resumingClarification:!!clarificationReply,
     planned: planned => emit({planned}),
     finding: finding => emit({finding}),
+    progress: researchProgressFact => emit({researchProgressFact}),
     report: call => emit({call}),
     stage,
     plan: correction => executeDiscoveryModel(config, dataSearchInstructions +

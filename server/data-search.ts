@@ -2,7 +2,8 @@ import {changesTopic,userTopic,restoredIntent,explicitResearchYears,closedIntent
 import {explicitDatasetName} from "./paper-name-identity";
 import {researchIntentSchema,validResearchIntent,type ResearchIntent} from "../src/domain/research-intent";
 import type {Asset} from "../src/domain/datasets";
-import type {PaperPlan} from "./earthnano";
+import type {PaperPlan,PaperSearchResult} from "./earthnano";
+import {isResearchTimeout,type ResearchProgressFact} from "./research-progress";
 import {readPaperPlan} from "./earthnano";
 import {parseSearchPlan} from "./web-search";
 import type {PaperRecord} from "../src/domain/paper-record";
@@ -258,13 +259,14 @@ type Dependencies={
   history?:PlanningHistory[];
   references?:AnswerReference[];
   plan:(correction?:{issue:string;previous:string})=>Promise<string>;
-  paper:(plan:PaperPlan)=>Promise<{records:PaperRecord[];incomplete:string[];tools:string[];notices?:string[];truncated?:boolean}>;
+  paper:(plan:PaperPlan)=>Promise<Omit<PaperSearchResult,"incomplete"|"tools">&{incomplete:string[];tools:string[]}>;
   haina:(queries:string[])=>Promise<HainaSearchResult>|HainaSearchResult;
   web:(queries:SearchQuery[],options?:{readPages?:boolean;initialRuns?:SearchRun[];focus?:WebComplementPlan;regionHints?:string[]})=>Promise<SearchRun[]>;
   refineWeb?:(input:WebComplementInput,signal:AbortSignal)=>Promise<string>;
   report:(call:ToolCall)=>void;
   stage:(message:string)=>void;
   finding?:(value:SearchFinding)=>void;
+  progress?:(fact:ResearchProgressFact)=>void;
   planned?:(plan:DataSearchPlan)=>void;
 };
 export async function requiredDataSearch(query:string,signal:AbortSignal,deps:Dependencies,decision?:QuestionDecision):Promise<DataSearchResult> {
@@ -355,13 +357,16 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
       papers:[],haina:[],searches:[],issues,sourceStatus};
   }
   deps.stage(decision?"按用户确认的问题检索相关依据":"沿用原问题检索相关依据");
-  async function search<T>(source:string,id:string,input:unknown,work:()=>Promise<T>|T,count:(value:T)=>number,issue:(value:T)=>string=()=>"",info:(value:T)=>unknown=()=>undefined):Promise<T|undefined>{
+  async function search<T>(source:string,id:string,area:"literature"|"haina"|"web",input:unknown,work:()=>Promise<T>|T,count:(value:T)=>number,issue:(value:T)=>string=()=>"",info:(value:T)=>unknown=()=>undefined,timedOut?:(value:T)=>boolean|undefined):Promise<T|undefined>{
     const call={id,kind:"tool" as const,name:source,input:JSON.stringify(input,null,2)};
     deps.report({...call,status:"running"});
+    deps.progress?.({id,area,status:"running"});
     try{
       const value=await work(),detail=issue(value),n=count(value);
       const status=detail?(n>0?"partial":"failed"):"done";
       sourceStatus.push({source,status,count:n,detail});
+      const progressStatus=status==="failed"&&timedOut?.(value)?"timeout":status;
+      deps.progress?.({id,area,status:progressStatus,...(status==="done"||status==="partial"?{count:n}:{})});
       if(detail)issues.push(source+"："+detail);
       deps.report({...call,status,output:JSON.stringify({count:n,detail,info:info(value)}),...(detail?{error:detail}:{})});
       deps.stage(source+" · "+(detail?"部分检索未完成，已返回 ":"检索完成，返回 ")+n+" 项");
@@ -371,6 +376,7 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
       const detail=error instanceof Error?error.message:"请求失败";
       issues.push(source+"："+detail);
       sourceStatus.push({source,status:"failed",count:0,detail});
+      deps.progress?.({id,area,status:isResearchTimeout(error)?"timeout":"failed"});
       deps.report({...call,status:"failed",error:detail});
       deps.stage(source+" · 检索失败");
       return undefined;
@@ -410,14 +416,14 @@ export async function requiredDataSearch(query:string,signal:AbortSignal,deps:De
         : "本轮网络检索未取得可用线索。",
       items:hits.slice(0,2).map(h=>({title:h.title,url:h.url,detail:(h.pageExcerpt?"已取得页面摘录":"检索结果摘要")+" · "+h.url}))});
   }
-  const lookupPaper=()=>runSource("paper",()=>search(discoverySourceNames.paper,"source-paper",plan.paper,async()=>{
+  const lookupPaper=()=>runSource("paper",()=>search(discoverySourceNames.paper,"source-paper","literature",plan.paper,async()=>{
     const result=await deps.paper(plan.paper);paperFinding(result.records,!!result.incomplete.length);return result;
-  },r=>r.records.length,r=>r.incomplete.length?"未完成调用："+r.incomplete.join("、"):"",r=>({notices:r.notices,truncated:r.truncated})));
-  const lookupHaina=()=>runSource("haina",()=>search(discoverySourceNames.haina,"source-haina",plan.hainaQueries,async()=>{
+  },r=>r.records.length,r=>r.incomplete.length?"未完成调用："+r.incomplete.join("、"):"",r=>({notices:r.notices,truncated:r.truncated}),r=>r.timedOut));
+  const lookupHaina=()=>runSource("haina",()=>search(discoverySourceNames.haina,"source-haina","haina",plan.hainaQueries,async()=>{
     const result=await deps.haina(plan.hainaQueries);hainaFinding(result);return result;
   },r=>r.assets.length,r=>r.warning,r=>({endpoint:r.endpoint,areaId:"2",catalogTotal:r.total,synced:r.synced,method:"专区目录接口分页同步后检索"})));
   let webChecks:WebComplementPlan|undefined;
-  const lookupWeb=()=>runSource("web",()=>search(discoverySourceNames.web,"source-web",plan.web,async()=>{
+  const lookupWeb=()=>runSource("web",()=>search(discoverySourceNames.web,"source-web","web",plan.web,async()=>{
     // Spend the page-read budget after taking stock of any other searches already in progress.
     const regionHints=plan.researchIntent?.region ? [plan.researchIntent.region,...plan.paper.region] : [];
     if(!deps.refineWeb){const result=await deps.web(plan.web,{regionHints});webFinding(result,false);return result;}

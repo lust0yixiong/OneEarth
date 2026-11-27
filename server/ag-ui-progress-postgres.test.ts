@@ -12,6 +12,7 @@ import {taskStatusRoutes,TaskParked,type Payload} from "./task-store";
 import {createRuntimeStep} from "./runtime-step";
 import {runtimeTaskLease} from "./runtime-task-lease";
 import type {RuntimeTurnInput} from "./runtime-turn-handoff";
+import {readResearchProgressState} from "../src/domain/native-agui-research-progress";
 import {nativeAgUiStepLabels} from "../src/domain/native-agui-progress";
 import {emptyFilters} from "../src/domain/spatial";
 
@@ -64,6 +65,24 @@ test("native HTTP streams only persisted lifecycle steps across park, recovery a
  async function queued(run:Awaited<ReturnType<typeof begin>>){run.control.release.resolve();await until(()=>run.stream.frames.some(frame=>frame.type==="STEP_STARTED"&&frame.stepName==="research-queued"));assert.equal((await tasks.get(run.id))?.status,"queued");}
  async function claim(id:string){const claimed=await tasks.claim();assert.equal(claimed?.id,id);assert.ok(claimed.lease);return claimed as typeof claimed&{body:RuntimeTurnInput};}
  const first=await begin();await queued(first);let selected=await claim(first.id);await until(()=>first.stream.frames.some(frame=>frame.stepName==="research-executing"));
+ // Persist both foreground and worker events through the normal Chat/worker append paths.
+ const getProgress=async(id:string)=>await(await fetch(origin+"/api/tasks/"+id)).json();
+ const publish=(event:Payload)=>runtimeTaskLease.run(selected.lease,()=>tasks.append(first.id,event));
+ const firstAction={id:"network-first",area:"web",status:"running"};
+ await publish({researchProgressFact:firstAction});
+ await publish({researchProgressFact:firstAction});
+ await publish({researchProgressFact:{...firstAction,status:"partial",count:4,output:"PRIVATE_OUTPUT"}});
+ await publish({researchProgressFact:{id:"literature-first",area:"literature",status:"timeout",error:"PRIVATE_ERROR"}});
+ await publish({researchProgressFact:{id:"network-repeat",area:"web",status:"running"}});
+ await publish({researchProgressFact:{id:"invalid",area:"web",status:"running",count:8}});
+ await until(()=>first.stream.frames.filter(frame=>frame.type==="STATE_SNAPSHOT").length===4);
+ const research=(await getProgress(first.id)).researchProgress;
+ assert.deepEqual(research,{version:1,runId:first.id,revision:4,actions:[
+  {id:"network-first",order:1,area:"web",status:"partial",count:4},
+  {id:"literature-first",order:2,area:"literature",status:"timeout"},
+  {id:"network-repeat",order:3,area:"web",status:"running"},
+ ]});
+ assert.deepEqual(readResearchProgressState(first.stream.frames.filter(frame=>frame.type==="STATE_SNAPSHOT").at(-1)?.snapshot,first.id),research);
  // Each waiting state is persisted by RuntimeStep.park, which releases the
  // claimed lease; the standard STEP remains open while the task is parked.
  for(const operation of ["discover","read","discover"] as const){
@@ -77,20 +96,21 @@ test("native HTTP streams only persisted lifecycle steps across park, recovery a
  await db.query("UPDATE runtime_tasks SET lease_until=0 WHERE id=$1",[first.id]);const before=(await tasks.chat.agUiEvents(first.id)).length;await other.recoverInterrupted();await other.recoverInterrupted();assert.equal((await tasks.chat.agUiEvents(first.id)).length,before);assert.equal(await runtimeTaskLease.run(selected.lease,()=>tasks.finish(first.id,"complete",{result})),false);
  selected=await claim(first.id);assert.equal(await runtimeTaskLease.run(selected.lease,()=>tasks.finish(first.id,"complete",{result})),true);await first.stream.done;assertBalanced(first.stream.frames);
  const starts=first.stream.frames.filter(frame=>frame.type==="STEP_STARTED").map(frame=>frame.stepName);assert.deepEqual(starts,["foreground","research-queued","research-executing","discovery-wait","research-resuming","source-read-wait","research-resuming","discovery-wait","research-resuming"]);
- assert.deepEqual((await tasks.terminal(first.id))?.result,result);assert.equal(await tasks.chat.latestCompleted(first.threadId),first.id);const archive=await(await fetch(origin+"/api/tasks/"+first.id+"/record")).json();assert.equal(archive.id,first.id);assert.equal(archive.turnId,first.turnId);assert.deepEqual(archive.result,result);
- assert.equal((await db.query("SELECT public_step FROM runtime_agui_runs WHERE id=$1",[first.id])).rows[0].public_step,null);const settled=(await tasks.chat.agUiEvents(first.id)).length;await tasks.append(first.id,{runtimePhase:{phase:"executing"}});await tasks.chat.append(first.id,{chatPhase:"foreground"});assert.equal(await tasks.finish(first.id,"failed",{error:"PRIVATE_LATE"}),false);assert.equal((await tasks.chat.agUiEvents(first.id)).length,settled);
+ assert.deepEqual((await tasks.terminal(first.id))?.result,result);assert.equal(await tasks.chat.latestCompleted(first.threadId),first.id);const archive=await(await fetch(origin+"/api/tasks/"+first.id+"/record")).json();assert.equal(archive.id,first.id);assert.equal(archive.turnId,first.turnId);assert.deepEqual(archive.result,result);assert.deepEqual(archive.researchProgress,research);
+ assert.equal((await db.query("SELECT public_step FROM runtime_agui_runs WHERE id=$1",[first.id])).rows[0].public_step,null);const settled=(await tasks.chat.agUiEvents(first.id)).length;await tasks.append(first.id,{runtimePhase:{phase:"executing"},researchProgressFact:{id:"late",area:"synthesis",status:"done"}});await tasks.chat.append(first.id,{chatPhase:"foreground"});assert.equal(await tasks.finish(first.id,"failed",{error:"PRIVATE_LATE"}),false);assert.equal((await tasks.chat.agUiEvents(first.id)).length,settled);
  // Business failure closes the source-read wait, but no private error/stage
  // or tool/model content is emitted as a standard progress field.
  const failed=await begin();await queued(failed);const failedClaim=await claim(failed.id);await runtimeTaskLease.run(failedClaim.lease,()=>tasks.park!(failed.id,{kind:"controlled-checkpoint"},Date.now()+10000,{runtimePhase:{phase:"waiting-discovery",operation:"read"},stage:"PRIVATE_READ"}));await until(()=>failed.stream.frames.at(-1)?.stepName==="source-read-wait");await tasks.finish(failed.id,"failed",{error:"PRIVATE_INTERNAL_FAILURE",code:"controlled_failure"});await failed.stream.done;assertBalanced(failed.stream.frames);assert.equal(failed.stream.frames.at(-1).type,"RUN_ERROR");assert.equal((await tasks.terminal(failed.id))?.code,"controlled_failure");
  // DELETE has one original ending. Late remote-stop rows never reopen STEP,
  // replace the business terminal or add another standard ending.
- const cancelled=await begin();await queued(cancelled);const cancelClaim=await claim(cancelled.id),remote=randomUUID();await runtimeTaskLease.run(cancelClaim.lease,async()=>{await tasks.append(cancelled.id,{discoveryBinding:{transport:"a2a",messageId:cancelled.id,discoveryId:remote,state:"TASK_STATE_WORKING"}});await tasks.park!(cancelled.id,{kind:"controlled-checkpoint"},Date.now()+10000,{runtimePhase:{phase:"waiting-discovery",operation:"discover"}});});
+ const cancelled=await begin();await queued(cancelled);const cancelClaim=await claim(cancelled.id),remote=randomUUID();await runtimeTaskLease.run(cancelClaim.lease,async()=>{await tasks.append(cancelled.id,{researchProgressFact:{id:"waiting-read",area:"reading",status:"running"}});await tasks.append(cancelled.id,{discoveryBinding:{transport:"a2a",messageId:cancelled.id,discoveryId:remote,state:"TASK_STATE_WORKING"}});await tasks.park!(cancelled.id,{kind:"controlled-checkpoint"},Date.now()+10000,{runtimePhase:{phase:"waiting-discovery",operation:"discover"}});});
  await until(()=>cancelled.stream.frames.at(-1)?.stepName==="discovery-wait");assert.equal((await fetch(origin+"/api/tasks/"+cancelled.id,{method:"DELETE"})).status,204);await cancelled.stream.done;assertBalanced(cancelled.stream.frames);assert.deepEqual(cancelled.stream.frames.at(-1).outcome,{type:"cancelled"});const terminal=await tasks.terminal(cancelled.id),publicCount=(await tasks.chat.agUiEvents(cancelled.id)).length;assert.equal((await tasks.runtimeStatus!(cancelled.id)).remoteStop?.state,"pending");await tasks.recordRemoteStop!(cancelled.id,{discoveryTaskId:remote,state:"confirmed",remoteState:"TASK_STATE_CANCELED"});assert.deepEqual(await tasks.terminal(cancelled.id),terminal);assert.equal((await tasks.chat.agUiEvents(cancelled.id)).length,publicCount);assert.equal((await tasks.runtimeStatus!(first.id)).remoteStop,undefined);
+ assert.deepEqual((await getProgress(cancelled.id)).researchProgress.actions,[{id:"waiting-read",order:1,area:"reading",status:"running"}]);
  // The old early-interruption branch has no checkpoint to resume. Its exact
  // failed business update must also close the native stream in that transaction.
  const interrupted=await begin("no-checkpoint");await queued(interrupted);await claim(interrupted.id);await until(()=>interrupted.stream.frames.at(-1)?.stepName==="research-executing");await db.query("UPDATE runtime_tasks SET lease_until=0 WHERE id=$1",[interrupted.id]);await other.recoverInterrupted();await Promise.race([interrupted.stream.done,delay(1500).then(()=>assert.fail("failed original native stream remained open"))]);assertBalanced(interrupted.stream.frames);assert.equal(interrupted.stream.frames.at(-1).type,"RUN_ERROR");assert.equal(interrupted.stream.frames.at(-1).code,"worker_interrupted");assert.equal((await tasks.get(interrupted.id))?.status,"failed");assert.equal((await tasks.terminal(interrupted.id))?.code,"worker_interrupted");const ended=(await tasks.chat.agUiEvents(interrupted.id)).length;await other.recoverInterrupted();assert.equal((await tasks.chat.agUiEvents(interrupted.id)).length,ended);
  // Foreground-only replies retain the same native message and one closed STEP.
- const ordinary=await begin("reply");ordinary.control.release.resolve();await ordinary.stream.done;assertBalanced(ordinary.stream.frames);assert.deepEqual(ordinary.stream.frames.filter(frame=>frame.type.startsWith("STEP_")).map(frame=>[frame.type,frame.stepName]),[["STEP_STARTED","foreground"],["STEP_FINISHED","foreground"]]);
+ const ordinary=await begin("reply");ordinary.control.release.resolve();await ordinary.stream.done;assertBalanced(ordinary.stream.frames);assert.ok(!ordinary.stream.frames.some(frame=>frame.type==="STATE_SNAPSHOT"));assert.equal((await getProgress(ordinary.id)).researchProgress,undefined);assert.deepEqual(ordinary.stream.frames.filter(frame=>frame.type.startsWith("STEP_")).map(frame=>[frame.type,frame.stepName]),[["STEP_STARTED","foreground"],["STEP_FINISHED","foreground"]]);
  // Concurrent original runs retain independent phase slots and streams.
  const foreground=await begin("reply"),background=await begin();await queued(background);const parallel=await claim(background.id);await runtimeTaskLease.run(parallel.lease,()=>tasks.park!(background.id,{kind:"controlled-checkpoint"},Date.now()+10000,{runtimePhase:{phase:"waiting-discovery",operation:"read"}}));await until(()=>background.stream.frames.at(-1)?.stepName==="source-read-wait");assert.deepEqual(foreground.stream.frames.filter(frame=>frame.type.startsWith("STEP_")).map(frame=>[frame.type,frame.stepName]),[["STEP_STARTED","foreground"]]);foreground.control.release.resolve();await foreground.stream.done;await tasks.finish(background.id,"failed",{error:"PRIVATE_PARALLEL",code:"controlled_failure"});await background.stream.done;assertBalanced(foreground.stream.frames);assertBalanced(background.stream.frames);
  // Namespace compatibility: a legacy non-native task has no AG-UI run to
