@@ -11,9 +11,9 @@ OneEarth 用于提出研究问题、核对数据和文献依据，以及在球�
 
 ## 当前工作台
 
-Mac mini 常驻版本为 **v0.2.0-rc.10**，设置页显示版本。工作台支持本机与获准的局域网访问。案例页保留可视化案例，科学问题案例区保持空白。[现状与访问范围](docs/架构与接口现状.md) · [正式验收](evidence/product/ACCEPTANCE.md#mac-mini-工作台后端合并正式发布)
+Mac mini 常驻版本为 **v0.2.0-rc.10**，设置页显示版本。工作台支持本机与获准的局域网访问。案例页保留可视化案例，科学问题案例区保持空白。[现状与访问范围](docs/架构与接口现状.md) · [正式验收](evidence/product/ACCEPTANCE.md#mac-mini-原生-ag-ui-正式发布)
 
-工作台与运行时 API 共用同源入口。研究 worker、发现服务和时空服务独立运行。当前常驻版本与源码的进程说明见[现行进程拓扑](docs/架构与接口现状.md#现行进程拓扑)。
+工作台与运行时 API 共用同源入口。Chat 以 AG-UI 1.0 提交运行并接收 SSE，断流后按原运行编号读取状态和归档。默认模型为 DeepSeek Flash。需要推理摘要时，可在设置中选择 Codex 原有服务下标有「思考摘要」的 `gpt-6.1-sol`。研究 worker、发现服务和时空服务独立运行。[浏览器接口](docs/架构与接口现状.md#原生-ag-ui) · [现行进程拓扑](docs/架构与接口现状.md#现行进程拓扑)
 
 [![OneEarth 横版逻辑架构图，含预留的数据处理、统一表征数据服务及规划中的独立工具服务，点击查看大图](docs/diagrams/oneearth-public-architecture.png)](docs/diagrams/oneearth-public-architecture.png)
 

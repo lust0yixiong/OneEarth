@@ -25,7 +25,7 @@ COLORS = {
 svg = [
     f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" '
     f'viewBox="0 0 {WIDTH} {HEIGHT}" role="img" aria-labelledby="title desc">',
-    '<title id="title">OneEarth 公开逻辑架构</title>',
+    '<title id="title">OneEarth 逻辑架构</title>',
     '<desc id="desc">工作台、运行时、业务服务与来源。实线表示现行链路，虚线表示规划链路。</desc>',
     '<style>text{font-family:"PingFang SC","Hiragino Sans GB",'
     '"Noto Sans CJK SC",Arial,sans-serif}</style>',
@@ -91,7 +91,7 @@ svg.append(
     f'<image x="59" y="35" width="154" height="54" preserveAspectRatio="xMinYMid meet" '
     f'href="data:image/png;base64,{logo}"/>'
 )
-text(235, 76, "公开逻辑架构", 46, weight=720)
+text(235, 76, "逻辑架构", 46, weight=720)
 rect(1486, 35, 256, 47, "#e5efe9", None, 12)
 text(1614, 66, "在运基线 · v0.2.0-rc.10", 20, "#30584b", 650, "middle")
 rule(58, 1742, 107)
@@ -138,7 +138,7 @@ card("network-sources", 1486, 720, 250, 119, "公开网络供应商与原站",
      ("搜索、网页与 PDF 来源",), fill="#fffbf5", border="#e8d8c6", title_size=22, body_size=19)
 
 arrow("workbench-runtime", "M322 303 H443")
-edge_label(383, 287, "工作台请求")
+edge_label(383, 287, "AG-UI / HTTP", size=17)
 arrow("research-task-handoff", "M637 369 V431")
 edge_label(654, 409, "入库后领取", anchor="start")
 arrow("api-executor-call", "M479 368 V380 Q479 394 465 394 H442 Q428 394 428 408 V651 Q428 665 442 665 H443", "executor")
