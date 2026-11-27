@@ -36,6 +36,10 @@
 
 计划产物可包含 `sourcePolicy`，用 `restricted` 或 `preferred` 及有序的 `sources` 记录来源策略。只在前一渠道确认零命中后启用下一渠道时，计划包含 `fallback: "no_match"`。来源标识为 `haina`、`paper`、`web`、`constellation`。星座接收库查询由运行时负责。同一研究轮的补查继承归档中的范围和条件结果。父任务已在海纳找到资料时，子任务未查到该资料的某个字段不会打开原先未启用的论文渠道。执行产物 `sourceStatus` 中，`done` 且 `count: 0` 表示完成但未命中，`failed` 表示失败，`not_requested` 的渠道没有启动工具记录。
 
+### 开放研究中的多主题文献检索
+
+当一个研究计划有多个有效且去重的文献主题，且未指定单一名称时，发现服务在同一个受托任务内按计划顺序逐项查询。该文献分支共享 30 秒调度窗口，单一主题对断言库的查询期限至多 13 秒，剩余不足 11 秒的主题记录为本轮未查。渠道范围仍沿原计划。查询成功的主题先发布其可按原 ID 读取的论文记录，再回报当前成果。计数按已核对到明确论文用法的不同论文 ID 去重，每主题可附四条可打开的资料。候选上限、超时和未启动分别留证。目录数量与文献命中数量独立。运行时将这些事实投影到原研究轮的公开进度。[主题执行](../server/literature-topic-search.ts) · [工作台公开进度](架构与接口现状.md#原生-ag-ui)
+
 ### 确定性论文查询
 
 `kind=oneearth.paper.query.v1` 在同一个 `POST /message:send` 接收 `input.operation`。网页仍使用运行时提供的相同 `/api/paper-records` 路径。以下操作使用当前发现域的发布记录与只读论文连接。打开归档回答时，当轮原材料仍来自运行时研究记录。
@@ -189,7 +193,7 @@
 
 隔离候选支持同一原消息上的人工追问弹框。有效发现计划保留原澄清文本，并可在结果中附 `clarificationOptions`（两至四个由服务端赋 ID 的选项，空数组表示只需输入文字）。运行时确认真实 Task 处于 `TASK_STATE_INPUT_REQUIRED` 后，才把这类问题投影成 `clarificationPrompt.kind = "research"`。旧记录和不带选项元数据的旧提供方仍可从原消息手动回复。观测执行器回执与其他机器等待不投影为人工弹框。
 
-新版浏览器同时提交同一父消息的 `clarificationAnswer` 和 `clarificationReply: {parentTaskId}`。运行时核实同会话归档和对应选项，再把实际文字续接到 A2A。A2A 请求仍是 `continuedFrom` 与 `clarificationReply: {text, afterSeq}`。本地校验发现答复不完整时，可在新的本地回复消息中重新提出问题，后续仍指向已经保存的原 Task 和等待水位。若用户改了原研究目标，沿用原有问题确认流程。
+正式工作台按[原生 AG-UI 追问续答](架构与接口现状.md#原生-ag-ui)提交同线程的新运行，绑定原问题及 `resume.interruptId`。运行时核实同会话归档和对应选项，再把实际文字续接到 A2A。A2A 请求为 `continuedFrom` 与 `clarificationReply: {text, afterSeq}`。本地校验发现答复不完整时，可在新的本地回复消息中重新提出问题，后续仍指向已经保存的原 Task 和等待水位。若用户改了原研究目标，沿用原有问题确认流程。
 
 ### 只读观测核对与机器续接
 
