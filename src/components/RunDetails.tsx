@@ -1,6 +1,6 @@
 import {researchProgressAreas,researchProgressStates,type ResearchProgress} from "../domain/native-agui-research-progress";
 import {literatureDisplay, literatureText} from "../domain/literature-label";
-import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from "react";
+import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,type ReactNode} from "react";
 import {Clock3,Copy,Check,ChevronDown} from "lucide-react";
 import type {ProviderReasoningSnapshot,RunTrace,SearchRun,ToolCall} from "../domain/types";
 import {mergeProviderReasoning} from "../domain/provider-reasoning";
@@ -129,7 +129,7 @@ function ProviderReasoning({snapshots}:{snapshots:ProviderReasoningSnapshot[]}) 
     </div>;
   });
 }
-export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,working=false,failed=false,openFinding,initiallyOpen,onOpenChange,researchProgress,processStatus}:{trace?:RunTrace;stage?:string;runs?:SearchRun[];working?:boolean;failed?:boolean;openFinding?:(id:string)=>void;initiallyOpen?:boolean;onOpenChange?:(open:boolean)=>void;researchProgress?:ResearchProgress;processStatus?:string}) {
+export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,working=false,failed=false,openFinding,initiallyOpen,onOpenChange,researchProgress,processStatus,cancelling=false,notices}:{trace?:RunTrace;stage?:string;runs?:SearchRun[];working?:boolean;failed?:boolean;openFinding?:(id:string)=>void;initiallyOpen?:boolean;onOpenChange?:(open:boolean)=>void;researchProgress?:ResearchProgress;processStatus?:string;cancelling?:boolean;notices?:ReactNode}) {
   const trace=useMemo(()=>literatureDisplay(rawTrace),[rawTrace]);
   const reported=useMemo(()=>literatureDisplay(rawReported),[rawReported]);
   const reasoning=useMemo(()=>mergeProviderReasoning(undefined,rawTrace?.providerReasoning) ?? [],[rawTrace?.providerReasoning]);
@@ -142,7 +142,7 @@ export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,worki
     output:r.status==="done"?JSON.stringify({returned:r.hits.length,total:r.total,hits:r.hits,warning:r.warning,cacheStoredAt:r.cacheStoredAt},null,2):undefined,
   }))];
   const stages=trace?.stages?.length?trace.stages:stage && !researchProgress?[stage]:[];
-  const currentAction=working && researchProgress?.actions.slice().reverse().find(action=>action.status==="running");
+  const currentAction=working && !cancelling && researchProgress?.actions.slice().reverse().find(action=>action.status==="running");
   const elapsed=Math.max(0,Math.floor((now-(trace?.started||now))/1000));
   if(!researchProgress && !working && !calls.length && !stages.length && !reasoning.length)return null;
   const findings=trace?.findings?.length ? <section className="oe-findings" aria-label="阶段发现" aria-live={working?"polite":"off"}>
@@ -153,18 +153,25 @@ export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,worki
     </div>)}
     {working && <p className="oe-findings-note">继续核对中，完整回答将汇总各来源的适用性和依据。</p>}
   </section> : null;
-  return <>{working && findings}<details className="oe-run" open={open} onToggle={e=>{
+  const records=(stages.length || calls.length) ? <>
+    {!!stages.length && <StageHistory stages={stages} working={working}/>}
+    {!!calls.length && <div className="oe-call-group">
+      <CallHistory calls={calls} runs={runs} working={working} failed={failed}/>
+    </div>}
+  </> : null;
+  const summary=currentAction ? (currentAction.topic ?? researchProgressAreas[currentAction.area].label)+" · "+elapsed+" 秒"
+    : working ? processStatus ?? "已用时 "+elapsed+" 秒"
+    : researchProgress ? researchProgress.actions.length+" 项操作" : undefined;
+  return <details className="oe-run" open={open} onToggle={e=>{
     const expanded=e.currentTarget.open;
     setOpen(expanded);
     onOpenChange?.(expanded);
   }}>
-    <summary><Clock3 size={14}/><span>{researchProgress ? "执行过程" : working ? "已用时 "+elapsed+" 秒" : "思考过程"}</span>
-      {researchProgress && <span className="oe-research-progress-summary">{currentAction
-        ? (currentAction.topic ?? researchProgressAreas[currentAction.area].label)+" · "+elapsed+" 秒"
-        : processStatus ?? researchProgress.actions.length+" 项操作"}</span>}
+    <summary><Clock3 size={14}/><span>{working || researchProgress ? "执行过程" : "思考过程"}</span>
+      {summary && <span className="oe-research-progress-summary" aria-live={currentAction?"off":undefined}>{summary}</span>}
       <ChevronDown size={13}/>
     </summary>
-    {!working && findings}
+    {notices}
     {!!reasoning.length && <ProviderReasoning snapshots={reasoning}/>}
     {researchProgress && <ol className="oe-research-progress" aria-label="执行过程">
       {researchProgress.actions.map(action => {
@@ -190,8 +197,7 @@ export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,worki
         </li>;
       })}
     </ol>}
-    {!!stages.length && <StageHistory stages={stages} working={working}/>}
-    {!!calls.length && <div className="oe-call-group">
-    <CallHistory calls={calls} runs={runs} working={working} failed={failed}/></div>}
-  </details></>;
+    {findings}
+    {working && records ? <details className="oe-run-records"><summary>详细记录 <ChevronDown size={12}/></summary>{records}</details> : records}
+  </details>;
 }
