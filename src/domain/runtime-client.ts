@@ -51,6 +51,8 @@ export interface ResearchRecord {
   workspaceReceipt?:WorkspaceReceipt;
   taskLifecycle?:TaskLifecycle;
   researchProgress?:unknown;
+  cataloguePresentation?:unknown;
+  researchRange?:Extract<import("./question-scope").ScopeItem,{kind:"grid"}>;
 }
 
 export async function loadResearchRecord(id:string,signal?:AbortSignal):Promise<ResearchRecord>{

@@ -10,7 +10,7 @@ import type {ObservationAttachment} from "./observation-material";
 export type ScopeItem =
   | ObservationAttachment
   | {kind:"reference";reference:AnswerReference;number:number;messageId:string}
-  | {kind:"grid"; selection:Pick<Selection,"grid"|"id"|"point">; place:string; coverageScope?:GridCoverageScope & {summary?:CoverageScopeSummary}}
+  | {kind:"grid"; selection:Pick<Selection,"grid"|"id"|"point">; place:string; coverageScope?:GridCoverageScope & {summary?:CoverageScopeSummary}; conditionRevision?:number}
   | {kind:"time"; period:[number,number]; utcWindow:[number,number]|null}
   | {kind:"dataset"; id:string; title:string; version:string|null; source:string};
 export function timeScope(filters:Filters):ScopeItem[] {

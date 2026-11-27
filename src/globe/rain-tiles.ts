@@ -1,12 +1,15 @@
 import {gunzipSync} from "fflate";
-import {rainFactors,rainGrid,rainTileCell,rainTileSize,rainTileXY,type RainCatalog,type RainManifest} from "../domain/rainfall";
+import {rainCell,rainFactors,rainGrid,rainTileCell,rainTileSize,rainTileXY,type RainCatalog,type RainManifest} from "../domain/rainfall";
+import {isLayerObservationRevision,type LayerObservationRef} from "../domain/layer-observations";
 import type {XY} from "../domain/regional-cases";
 import {rainTileRoot} from "../domain/rain-catalog";
+import {workspacePublicationRevision} from "../domain/workspace-view-context";
 
+type Tile={data:Uint16Array;revision?:string};
 type TileRequest={key:string;month:number;level:number;id:number};
 const request=(month:number,level:number,id:number):TileRequest=>({key:month+"/"+level+"/"+id,month,level,id});
 export class RainTiles {
-  private cache=new Map<string,Uint16Array>();
+  private cache=new Map<string,Tile>();
   private pending=new Map<string,AbortController>();
   private failures=new Set<string>();
   private view:TileRequest[]=[];
@@ -29,7 +32,17 @@ export class RainTiles {
   get(month:number,level:number,id:number){
     const key=request(month,level,id).key,value=this.cache.get(key);
     if(value){this.cache.delete(key);this.cache.set(key,value);}
-    return value;
+    return value?.data;
+  }
+  observation(monthIndex:number,point:XY):LayerObservationRef|undefined{
+    const month=this.manifest.months[monthIndex];
+    if(!month || !isLayerObservationRevision(month.source.sha256) || !point.every(Number.isFinite))return;
+    const {id}=rainTileCell(point);
+    const tileRevision=this.cache.get(request(monthIndex,2,id).key)?.revision;
+    if(!tileRevision)return;
+    const {row,column}=rainCell(point);
+    return {kind:"imerg-cell",datasetId:"nasa:imerg-monthly",revision:month.source.sha256,
+      month:this.manifest.year+"-"+String(month.month).padStart(2,"0"),row,column,tileRevision};
   }
   setView(month:number,level:number,ids:number[]){
     const key=month+"/"+level+"/"+ids.join(",");
@@ -76,7 +89,8 @@ export class RainTiles {
       const bytes=payload[0]===31 && payload[1]===139?gunzipSync(payload):payload;
       if(bytes.length!==rainTileSize*rainTileSize*2)throw Error("降水瓦片不完整");
       if(controller.signal.aborted||this.disposed)return;
-      this.cache.set(tile.key,new Uint16Array(bytes.buffer,bytes.byteOffset,bytes.byteLength/2));
+      const revision=workspacePublicationRevision(response.headers.get("etag"));
+      this.cache.set(tile.key,{data:new Uint16Array(bytes.buffer,bytes.byteOffset,bytes.byteLength/2),revision});
       const keep=new Set(this.wanted().map(t=>t.key));
       for(const key of this.cache.keys()){
         if(this.cache.size<=128)break;

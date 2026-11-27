@@ -1,3 +1,5 @@
+import type {ViirsPublication} from "../domain/haina-published-raster";
+import type {CesiumDatasetPick} from "./cesium-dataset-layers";
 import type {PublishedRasterTarget} from "../domain/published-raster-observation";
 import {createViirsPainter,type ViirsRaster} from "./haina-viirs-painter";
 import {hainaBoundsOnScreen,type HainaViewport} from "./haina-viewport";
@@ -64,7 +66,7 @@ import type {
   Selection,
   Coordinate,
 } from "../domain/types";
-type PublicOverlay=Pick<Scene,"publicPoints"|"publicImage"|"publicRaster"|"publicSample"|"publicPick"|"publicPatches"|"publicViirs">;
+type PublicOverlay=Pick<Scene,"publicPoints"|"publicImage"|"publicRaster"|"publicSample"|"publicPick"|"publicPatches"|"publicViirs"|"publicViirsPublication">;
 export type GlobeLayerRender=
   | (PublicOverlay & {id:string;kind:"public";selection:PublicLayerSelection})
   | {id:string;kind:"field";selection:{id:string;frame:number};image?:GeoImageFrame|null;publishedRaster?:PublishedRasterTarget;texture?:Uint8ClampedArray|null;rain?:RainTiles|null}
@@ -74,6 +76,7 @@ export type GlobeLayerRender=
 export interface Scene {
   datasetLayers?:GlobeLayerRender[];
   datasetFocus?:string|null;
+  onDatasetPick?:(pick:CesiumDatasetPick,grid:GridSpec)=>boolean;
   flight?:{kind?:"research-region"|"place"|"grid"|"layer-control"}|null;
   researchRegion?:import("../domain/research-region").ResearchRegionLayer|null;
   observationGlobe?:boolean;
@@ -92,6 +95,7 @@ export interface Scene {
   publicPick?:(point:Coordinate,patch?:HainaPatch)=>void;
   publicPatches?:HainaPatch[];
   publicViirs?:ViirsRaster;
+  publicViirsPublication?:ViirsPublication;
   fieldTexture?:Uint8ClampedArray|null;
   fieldImage?:GeoImageFrame|null;
   fieldRaster?:PublishedRasterTarget;
@@ -115,6 +119,7 @@ export interface Scene {
 }
 export interface FrameInfo {
   paintedRasters?:PublishedRasterTarget[];
+  viirs?:{ready:boolean;failed:boolean;empty:boolean};
   publicPoints?:PublicLayerPoint[];
   publicMarkers?:{id:string;label:string;x:number;y:number}[];
   publicViewport?:HainaViewport;

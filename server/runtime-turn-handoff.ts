@@ -7,6 +7,8 @@ import type {ClarificationReply} from "./clarification-guard";
 import type {TurnHistory,TurnPlan} from "./turn-planning";
 import type {ClarificationPrompt,ClarificationAnswer} from "../src/domain/clarification";
 import type {RuntimeConversationHistory} from "./conversation-history";
+import type {LayerObservationBinding} from "./runtime-layer-observation";
+import type {CaseObservationBinding} from "./runtime-case-observation";
 import type {RuntimeTurnContext} from "./runtime-turn-context";
 
 export type RuntimeTurnInput={query:string;conversationId:string;turnId:string;previousTaskId?:string;context:DiscoveryContext;
@@ -14,7 +16,7 @@ export type RuntimeTurnInput={query:string;conversationId:string;turnId:string;p
 export type ObservationTurnMaterial={artifactId:string;version:string;title:string;variables:string[]};
 export type RuntimeWorkspacePending={taskId:string;question:string;originalQuestion?:string;proposedAction?:import("../src/domain/workspace-view-context").WorkspaceViewAction;
   proposalOrigin?:{layerId:string;controlId:string;valueId:string};clarificationPrompt?:ClarificationPrompt;answer?:ClarificationAnswer};
-export type RuntimeTurnOptions={publicAnswer?:true;historicalTargets?:import("./turn-planning").TurnTarget[];conversationHistory?:RuntimeConversationHistory;observationUnavailable?:boolean;observationAvailable?:boolean;priorResult?:DiscoveryResponse|null;observationMaterials?:ObservationTurnMaterial[];pending?:RuntimeWorkspacePending;turnContext?:RuntimeTurnContext};
+export type RuntimeTurnOptions={publicAnswer?:true;caseObservation?:CaseObservationBinding;layerObservation?:LayerObservationBinding;historicalTargets?:import("./turn-planning").TurnTarget[];conversationHistory?:RuntimeConversationHistory;observationUnavailable?:boolean;observationAvailable?:boolean;priorResult?:DiscoveryResponse|null;observationMaterials?:ObservationTurnMaterial[];pending?:RuntimeWorkspacePending;turnContext?:RuntimeTurnContext};
 /** Private server record, never a browser input or a replacement for source authorization. */
 export type RuntimeTurnHandoff={version:1;kind:"runtime-turn-plan";inputFingerprint:string;plannedAt:number;historicalTargets?:import("./turn-planning").TurnTarget[];plan:TurnPlan;runTrace:RunTrace;
   observationUnavailable?:true;observationAvailable?:true;observationMaterials?:ObservationTurnMaterial[];pending?:RuntimeWorkspacePending;priorOverride?:true;turnContext?:RuntimeTurnContext};
@@ -33,7 +35,7 @@ export function validRuntimeTurnHandoff(value:unknown):value is RuntimeTurnHando
   if(!value||typeof value!=="object"||Array.isArray(value))return false;
   const v=value as RuntimeTurnHandoff,p=v.plan;
   try{return v.version===1&&v.kind==="runtime-turn-plan"&&/^[a-f0-9]{64}$/.test(v.inputFingerprint)&&Number.isSafeInteger(v.plannedAt)&&v.plannedAt>0&&
-    !!p&&(["read","search"].includes(p.action)||p.observationUse==="selected"&&p.action==="respond")&&typeof p.goal==="string"&&p.goal.length>0&&p.goal.length<=1200&&
+    !!p&&p.caseObservationUse===undefined&&p.layerObservationUse===undefined&&(["read","search"].includes(p.action)||p.observationUse==="selected"&&p.action==="respond")&&typeof p.goal==="string"&&p.goal.length>0&&p.goal.length<=1200&&
     typeof p.reason==="string"&&p.reason.length>0&&p.reason.length<=600&&validResearchIntent(p.researchIntent)&&
     typeof p.conversationContext==="string"&&p.conversationContext.length<=1600&&Array.isArray(p.targets)&&p.targets.length<=8&&
     p.targets.every(target=>!!target&&typeof target.key==="string"&&target.key.length<=2300)&&

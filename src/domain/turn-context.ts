@@ -1,4 +1,5 @@
 import {validWorkspaceViewContext,type WorkspaceViewContext} from "./workspace-view-context";
+import {validFlightMapReceipt} from "./flight-catalogue";
 
 // Browser observations are separate from server-owned execution evidence.
 export type TurnRelation = {
@@ -75,6 +76,7 @@ export type BrowserWorkspaceReceipt = {
   state: "applied" | "stale" | "failed" | "declined";
   reason?: WorkspaceRejectionReason;
   observation?: WorkspaceObservation;
+  flight?: import("./flight-catalogue").FlightMapReceipt;
 };
 
 export type WorkspaceRecoveryAdvice = {message:string;nextStep:"explain"|"ask-confirmation"|"unavailable"};
@@ -97,8 +99,12 @@ function effectIdentity(value: Record<string,unknown>) {
 }
 
 export function validBrowserWorkspaceReceipt(value: unknown): value is BrowserWorkspaceReceipt {
-  if(!object(value)||!keys(value,["effectId","conversationId","turnId","state","reason","observation"])||!effectIdentity(value))return false;
-  const {state,reason,observation}=value;
+  if(!object(value)||!keys(value,["effectId","conversationId","turnId","state","reason","observation","flight"])||!effectIdentity(value))return false;
+  const {state,reason,observation,flight}=value;
+  if(flight!==undefined&&(!validFlightMapReceipt(flight)||observation!==undefined||
+    flight.state==="arrived"&&state!=="applied"||
+    flight.state==="superseded"&&state!=="stale"||
+    (flight.state==="cancelled"||flight.state==="ground-unavailable"||flight.state==="coverage-unavailable")&&state!=="failed"))return false;
   if(state==="applied")return reason===undefined&&(observation===undefined||validWorkspaceObservation(observation));
   if(observation!==undefined)return false;
   if(state==="declined")return reason===undefined;

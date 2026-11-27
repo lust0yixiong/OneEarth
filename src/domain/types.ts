@@ -305,6 +305,12 @@ export interface AnswerNotes {
 }
 export type ClarificationReply = {parentTaskId:string};
 export interface Message {
+  caseObservation?: import("./case-observations").CaseObservation;
+  caseObservationStatus?: import("./case-observations").CaseObservationStatus;
+  layerObservation?: import("./layer-observations").LayerObservation;
+  layerObservationStatus?: import("./layer-observations").LayerObservationStatus;
+  cataloguePresentationTarget?: import("./catalogue-presentation").CataloguePresentationTarget;
+  cataloguePresentation?: import("./catalogue-presentation").CataloguePresentation;
   taskLifecycle?: import("./task-lifecycle-client").TaskLifecycle;
   browserTurnFrame?: import("./turn-context").BrowserTurnFrame;
   workspaceEffect?: import("./turn-context").WorkspaceEffect;
@@ -365,12 +371,16 @@ export interface DiscoveryAttempt {
   query: string;
   context: DiscoveryContext;
   workspaceKey: string;
+  researchRangeRevision?: number;
   userMessageId: string;
   workspaceOperationKeys?: Partial<Record<import("./workspace-operations").WorkspaceOperationKind,string>>;
   workspaceCandidateKey?: string;
   view?: View;
 }
 export interface DiscoveryContext {
+  caseObservationRef?: import("./case-observations").CaseObservationRef;
+  layerObservationRef?: import("./layer-observations").LayerObservationRef;
+  flightParentRunId?: string;
   browserTurnFrame?: import("./turn-context").BrowserTurnFrame;
   workspaceView?: import("./workspace-view-context").WorkspaceViewContext;
   attachedScope?:import("./question-scope").ScopeItem[];
@@ -403,6 +413,10 @@ export interface CapabilityGap {
   verification: string;
 }
 export interface DiscoveryResponse {
+  caseObservation?: import("./case-observations").CaseObservation;
+  caseObservationStatus?: import("./case-observations").CaseObservationStatus;
+  layerObservation?: import("./layer-observations").LayerObservation;
+  layerObservationStatus?: import("./layer-observations").LayerObservationStatus;
   resultBatch?: import("./turn-context").ResultBatch;
   workspaceEffect?: import("./turn-context").WorkspaceEffect;
   workspaceAction?: import("./workspace-view-context").WorkspaceViewAction;
@@ -446,6 +460,7 @@ export interface DiscoveryResponse {
   camera?: Camera;
   /** Ask the globe to animate to `camera` instead of jumping there. */
   fly?: boolean;
+  flightCatalogue?: true;
   /** Short place name shown on the globe marker while the flight is visible. */
   placeLabel?: string;
   clearSelection?: boolean;

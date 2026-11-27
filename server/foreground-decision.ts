@@ -38,8 +38,8 @@ export class ForegroundReadCardinalityError extends Error {
 /** Also validates plain-JSON model providers that cannot enforce the schema. */
 export function normalizeForegroundDecision(raw:string,input:TurnInput){
   const value=JSON.parse(raw.trim().replace(/^```(?:json)?\s*|\s*```$/gi,""));
-  const keys=["decide",...(input.observationAvailable||input.observationUnavailable?["observationUse"]:[]),
-    ...(input.gridCoverage?.status==="ready"&&input.gridCoverage.summary?["gridIntent"]:[])];
+  const keys=["decide",...(input.layerObservation?["layerObservationUse"]:[]),...(input.caseObservation?["caseObservationUse"]:[]),...(input.observationAvailable||input.observationUnavailable?["observationUse"]:[]),
+    ...(input.adoptedRangeUnavailable||input.gridCoverage?.status==="ready"&&input.gridCoverage.summary?["gridIntent"]:[])];
   exact(value,keys);
   const d=value.decide;
   if(!d||typeof d!=="object"||Array.isArray(d))throw Error("前台决定需要唯一明确分支。");
@@ -69,7 +69,7 @@ export function normalizeForegroundDecision(raw:string,input:TurnInput){
   if(d.kind==="read"&&(!targets.length&&!(input.observationAvailable&&value.observationUse==="selected")||targets.length>3))throw new ForegroundReadCardinalityError(targets,value);
   const grid=input.context.attachedScope?.find(item=>item.kind==="grid"),time=input.context.attachedScope?.find(item=>item.kind==="time");
   return JSON.stringify({action,goal,targets,clarification,clarificationChoices,clarificationSubject,workspaceAction,reply,
-    observationUse:value.observationUse,gridIntent:value.gridIntent,
+    caseObservationUse:value.caseObservationUse,layerObservationUse:value.layerObservationUse,observationUse:value.observationUse,gridIntent:value.gridIntent,
     evidenceNeed:({respond:targets.length?"existing":"none",workspace:"none",read:"read",search:"discover",clarify:"unclear"} as Record<string,string>)[action],
     reason:"前台模型依据本轮意图及已提供对象选择唯一决定。",researchIntent:{purpose:goal,task:goal,region:grid?.place??null,time:time?time.period.join("—")+"年":null,months:[]},
     conversationContext:goal,evidenceGap:action==="search"?goal:null});

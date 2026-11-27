@@ -70,7 +70,7 @@ export function workspaceToolCall(runId: string, response: DiscoveryResponse): T
 type WorkspaceToolMessage = ToolMessage & { content: string };
 
 export function workspaceToolResult(receipt: WorkspaceReceipt, expectsRendering = false): WorkspaceToolMessage | undefined {
-  const { taskId, state, observation, reason } = receipt;
+  const { taskId, state, observation, reason, flight } = receipt;
   if (observation?.state === "loading" || (expectsRendering && state === "applied" && !observation)) return;
   const status = observation?.state ?? state;
   const error = status === "failed" ? "浏览器无法应用该操作。"
@@ -81,6 +81,7 @@ export function workspaceToolResult(receipt: WorkspaceReceipt, expectsRendering 
     version: 1,
     status,
     ...(reason ? { reason } : {}),
+    ...(flight ? { flight } : {}),
     ...(observation ? { target: {
       datasetId: observation.datasetId,
       valueId: observation.valueId,

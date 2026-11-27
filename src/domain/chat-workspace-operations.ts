@@ -4,6 +4,7 @@ import {assetById, assetIdentity} from "./datasets";
 import {datasetLayers, globeCases} from "./regional-cases";
 import {createResearchList, listKey, parseResearchList, persistResearchList, type SavedEvidence} from "./research-list";
 import {makeCandidates} from "./results";
+import {researchRangeAdoptionKey} from "./research-range";
 import type {State} from "./store";
 import type {CandidateSet, Citation} from "./types";
 import type {WorkspaceCandidateItem, WorkspaceOperationKind} from "./workspace-operations";
@@ -76,6 +77,11 @@ export function availableChatOperations(s:State, batch:CandidateSet|null, citati
   const operations=new Map<WorkspaceOperationKind,ChatOperationTarget>();
   operations.set("open-saved",{key:"open-saved"});
   operations.set("open-research-lists",{key:"open-research-lists"});
+  const rangeAdoption=researchRangeAdoptionKey(s);
+  if (rangeAdoption) operations.set("adopt-research-range",{key:rangeAdoption});
+  if(s.view==="earth" && s.overview==="catalog" && !s.caseId && !s.visualization && !s.dataView &&
+    !s.fieldLayer && !s.publicLayer && !s.inspector && !s.evidence)
+    operations.set("present-catalogue",{key:"catalogue-globe"});
   if (s.origin) operations.set("return-to-results",{key:JSON.stringify(s.origin)});
   const addSave=(kind:WorkspaceOperationKind,save:SaveTarget)=>{
     const {batch,reference}=save;

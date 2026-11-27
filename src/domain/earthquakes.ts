@@ -18,7 +18,7 @@ interface Feature {
   geometry:{type:string;coordinates:[number,number,number|null]}|null;
   properties:{type:string;status:string;place:string|null;time:number;mag:number|null;url:string;updated:number};
 }
-export interface EarthquakeDay {generated:number;events:Earthquake[]}
+export interface EarthquakeDay {generated:number;events:Earthquake[];snapshotId?:string}
 export interface SeismicStation {id:string;name:string;point:Coordinate}
 export interface StationDirectory {updated:number;stations:SeismicStation[]}
 

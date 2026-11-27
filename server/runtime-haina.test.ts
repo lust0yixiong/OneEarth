@@ -7,7 +7,7 @@ import {mkdtempSync,writeFileSync,rmSync} from "node:fs";
 import {tmpdir} from "node:os";
 import path from "node:path";
 import {queryHainaCatalog,DiscoveryA2AError} from "./discovery-a2a-client";
-import {runtimeTurnHaina} from "./runtime-turn-haina";
+import {readGridHainaRecords,runtimeTurnHaina} from "./runtime-turn-haina";
 import {runtimeMaterialHistory} from "./runtime-material-history";
 import {executeTurn,type RuntimeServices} from "./runtime-turn";
 import {openTaskStore} from "./task-store";
@@ -43,6 +43,15 @@ test("explicit Haina catalogue uses a model-free direct Message and preserves pu
 for(const mode of ["unavailable","wrong-message","missing-context"] as const)test("Haina direct catalogue rejects "+mode+" without fabricating an empty snapshot",async t=>{
   const p=await provider(t,mode);await assert.rejects(queryHainaCatalog(0,20,new AbortController().signal),DiscoveryA2AError);
   assert.equal(p.requests.length,mode==="unavailable"?3:1);
+});
+
+test("a grid catalogue resolves only the exact covered Haina IDs",async t=>{
+  const p=await provider(t);
+  const found=await readGridHainaRecords(["haina:987654319","haina:987654321","haina:987654321","open.other"],AbortSignal.timeout(1000));
+  assert.deepEqual(found.hainaRecords,[haina()]);
+  assert.deepEqual(found.hainaCatalog,catalog);
+  assert.deepEqual(p.requests.map(request=>request.message.parts[0].data.input)
+    .sort((a,b)=>a.cursor-b.cursor),[{cursor:987654318,limit:1},{cursor:987654320,limit:1}]);
 });
 
 test("runtime Haina view consumes only bound archives or actual results, without bundled catalogue fallback",async()=>{

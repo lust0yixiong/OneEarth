@@ -7,8 +7,9 @@ import { productDatabase } from "./product-database";
 import { cancellationReceipt,TaskConflict,type ResearchExecutionReceipt,type TaskStore,type Task,type Payload,type TaskStatus } from "./task-store";
 import {conversationHistorySchema, postgresConversationHistory} from "./postgres-conversation-history";
 import {chatSchema, claimClarificationAnswer, lockRuntimeSubmission, postgresChatMessages, submissionFingerprint, type PostgresChatMessages} from "./postgres-chat-messages";
+import {cataloguePresentationSchema,postgresCataloguePresentation,type CataloguePresentationStore} from "./postgres-catalogue-presentation";
 
-export function postgresTaskStore(namespace:"runtime"):Promise<TaskStore & {chat:PostgresChatMessages}>;
+export function postgresTaskStore(namespace:"runtime"):Promise<TaskStore & {chat:PostgresChatMessages;cataloguePresentation:CataloguePresentationStore}>;
 export function postgresTaskStore(namespace:"discovery"):Promise<TaskStore>;
 export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise<TaskStore>{
   const pool=productDatabase(namespace==="runtime"?"RUNTIME":"DISCOVERY");
@@ -63,6 +64,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
             source_channel text, reference jsonb NOT NULL, PRIMARY KEY(task_id,ordinal)
           );`);
         await db.query(chatSchema);
+        await db.query(cataloguePresentationSchema);
         await db.query(conversationHistorySchema);
       }else{
         await db.query(`
@@ -132,6 +134,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
     return row(inserted.rows[0]);
   }
   const chat=namespace==="runtime"?postgresChatMessages(pool,transaction,submit):undefined;
+  const cataloguePresentation=namespace==="runtime"?postgresCataloguePresentation(pool,transaction):undefined;
   const get=async(id:string)=>{
     const result=await pool.query<Task>(`SELECT * FROM ${tasks} WHERE id=$1`,[id]);
     return result.rows[0] ? row(result.rows[0]) : chat?.get(id);
@@ -191,7 +194,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   let firstRecovery=true;
   const owned=new Map<string,RuntimeTaskLease>();
   const store={
-    ...(chat?{chat,researchHandoff:chat.handoff,workspaceReceipt:chat.workspaceReceipt,conversationHistory:postgresConversationHistory(pool)}:{}),
+    ...(chat?{chat,cataloguePresentation,researchHandoff:chat.handoff,workspaceReceipt:chat.workspaceReceipt,conversationHistory:postgresConversationHistory(pool)}:{}),
     get,
     ...(namespace==="runtime"?{async researchExecution(id:string):Promise<ResearchExecutionReceipt|undefined>{
       const {rows: [task]}=await pool.query<{status: TaskStatus}>("SELECT status FROM runtime_tasks WHERE id=$1", [id]);

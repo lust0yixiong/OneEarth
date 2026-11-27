@@ -14,6 +14,21 @@ export default defineConfig({
         }
       }
     }
+  }, {
+    name: "cesium-proof-resources",
+    apply: "build",
+    generateBundle() {
+      if (process.env.VITE_ONEEARTH_CESIUM_PROOF !== "1" && process.env.VITE_ONEEARTH_CESIUM_STRICT !== "1") return;
+      const root = fileURLToPath(new URL("./node_modules/cesium/Build/Cesium/", import.meta.url));
+      const emit = (directory: string) => {
+        for (const item of readdirSync(join(root, directory), {withFileTypes:true})) {
+          const path = directory + "/" + item.name;
+          if (item.isDirectory()) emit(path);
+          else this.emitFile({type:"asset",fileName:"cesium/" + path,source:readFileSync(join(root,path))});
+        }
+      };
+      for (const directory of ["Assets","Workers","ThirdParty"]) emit(directory);
+    }
   }],
   build: { chunkSizeWarningLimit: 1100, outDir: process.env.ONEEARTH_DIST_DIR || "dist" },
   server: { host: "127.0.0.1" },

@@ -1,6 +1,9 @@
 import {useEffect,useLayoutEffect,useRef,useState} from "react";
 import {ArrowLeft, Volume2, VolumeX, X} from "lucide-react";
-import {createRenderer,type Scene} from "../globe/renderer";
+import type {createRenderer,Scene} from "../globe/renderer";
+import {strictCesiumMode} from "../globe/cesium-mode";
+import {createObservationGlobe} from "../globe/observation-globe";
+import {readCaseObservationRef,type CaseObservationRef} from "../domain/case-observations";
 import {emptyFilters} from "../domain/spatial";
 import {useWorkspace} from "../domain/store";
 import type {WeatherStation} from "../domain/weather-stations";
@@ -33,32 +36,46 @@ export function LiveLightning({back}:{back:()=>void}){
   const {patch,registerWorkspaceSurface}=useWorkspace();
   const [paused,setPaused]=useState(false),[sound,setSound]=useState(false);
   const {stations,east,west}=useWeatherObservations(paused);
-  const [selected,setSelected]=useState<WeatherStation|null>(null);
+  const [selected,setSelected]=useState<{record:WeatherStation;observation?:CaseObservationRef}|null>(null);
   const [audioError,setAudioError]=useState(false);
   const root=useRef<HTMLDivElement>(null),base=useRef<HTMLCanvasElement>(null);
   const dots=useRef<HTMLCanvasElement>(null),effects=useRef<HTMLCanvasElement>(null);
+  const cesiumHost=useRef<HTMLDivElement>(null);
   const audio=useRef<AudioContext|null>(null),engine=useRef<ReturnType<typeof createRenderer>|null>(null);
   const live=useRef({stations:stations.data,east:east.data,west:west.data,paused});
-  useEffect(()=>{live.current={stations:stations.data,east:east.data,west:west.data,paused};},[stations.data,east.data,west.data,paused]);
+  useLayoutEffect(()=>{live.current={stations:stations.data,east:east.data,west:west.data,paused};},[stations.data,east.data,west.data,paused]);
   useEffect(()=>{patch({chatOpen:false});},[patch]);
   useEffect(()=>{
-    let hits:WeatherHit[]=[];
+    type HitFrame={hits:WeatherHit[];revision:number;snapshotId?:string};
+    let next:HitFrame|undefined,presented:HitFrame|undefined;
     const scene:Scene={observationGlobe:true,camera:{center:[103,18],zoom:1,reason:"全球天气"},caseId:null,filters:emptyFilters(),gridSystem:"h3",layer:"all",source:-1,selection:null,dataView:null,mesh:false,windTheme:"light",
       onObservationPick(x,y){
+        if(!presented||presented.revision!==globe.observationRevision)return;
         let limit=13**2,nearest:WeatherStation|null=null;
-        for(const hit of hits){
+        for(const hit of presented.hits){
           const distance=(hit.x-x)**2+(hit.y-y)**2;
           if(distance<limit){limit=distance;nearest=hit.station;}
         }
-        setSelected(nearest);
+        setSelected(nearest?{record:nearest,observation:readCaseObservationRef({
+          kind:"awc-metar",snapshotId:presented.snapshotId,id:nearest.id,observedAt:nearest.observed,
+        })}:null);
       }};
-    const globe=createRenderer(base.current!,root.current!,()=>scene,camera=>{scene.camera=camera;},()=>{},()=>{});
+    const globeSurface=createObservationGlobe(root.current!,cesiumHost.current,base.current,[dots.current!,effects.current!],scene,weatherCaseTitle+"地球");
+    const {engine:globe,viewport,layers,present}=globeSurface;
     engine.current=globe;
-    const stop=animateWeather(effects.current!,globe,()=>live.current,(stations)=>{
-      hits=mapStations(dots.current!,stations,globe);
+    const stop=animateWeather(layers[1],viewport,globe,()=>live.current,snapshot=>{
+      const hits=mapStations(layers[0],viewport,snapshot?.stations??[],globe);
+      next={hits,revision:globe.observationRevision,snapshotId:snapshot?.snapshotId};
       return hits.filter(hit=>hit.station.storm);
-    },(point,interval)=>{if(audio.current?.state==="running")chime(audio.current,...point,interval);});
-    return ()=>{stop();globe.dispose();engine.current=null;const ac=audio.current;audio.current=null;if(ac)void ac.close();};
+    },(point,interval)=>{if(audio.current?.state==="running")chime(audio.current,...point,interval);},visibleFlashes=>{
+      const drawn=next;
+      present(()=>{
+        presented=drawn;
+        viewport.dataset.observationStations=String(drawn?.hits.length??0);
+        viewport.dataset.observationFlashes=String(visibleFlashes);
+      });
+    });
+    return ()=>{stop();globeSurface.dispose();engine.current=null;const ac=audio.current;audio.current=null;if(ac)void ac.close();};
   },[]);
   async function toggleSound(){
     try{
@@ -68,7 +85,7 @@ export function LiveLightning({back}:{back:()=>void}){
     }catch{setAudioError(true);}
   }
   function focus(center:Coordinate){engine.current?.flyTo({center,zoom:1,reason:"天气视野"});}
-  const station=stations.data?.stations.find(row=>row.id===selected?.id);
+  const station=selected?.record;
   const stormCount=stations.data?.stations.filter(row=>row.storm).length;
   const feedTime=(time:number|undefined,failed:boolean,age:number)=>{
     if(!time)return failed?"暂不可用，正在重试":"读取中…";
@@ -79,6 +96,7 @@ export function LiveLightning({back}:{back:()=>void}){
     const status = feeds.some(feed => feed.data) ? "ready" : feeds.every(feed => feed.failed) ? "unavailable" : "loading";
     return {
       surface: "cases", case: {id: "live-lightning", title: weatherCaseTitle},
+      observation: selected?.observation,
       activeLayer: {
         id: "live-lightning", title: weatherCaseTitle, status, controls: [],
         display: [
@@ -93,9 +111,11 @@ export function LiveLightning({back}:{back:()=>void}){
     };
   }));
   return <section className="strike-case"><div className="strike-globe" ref={root}>
-    <canvas className="strike-base" ref={base} aria-label={weatherCaseTitle+"地球"}/>
-    <canvas className="strike-overlay" ref={dots} aria-hidden="true"/>
-    <canvas className="strike-overlay" ref={effects} aria-hidden="true"/>
+    {strictCesiumMode ? <div className="strike-cesium" ref={cesiumHost}/> : <>
+      <canvas className="strike-base" ref={base} aria-label={weatherCaseTitle+"地球"}/>
+      <canvas className="strike-overlay" ref={dots} aria-hidden="true"/>
+      <canvas className="strike-overlay" ref={effects} aria-hidden="true"/>
+    </>}
     <header className="strike-heading"><button onClick={back}><ArrowLeft size={15}/>案例</button>
       <h1>{weatherCaseTitle}</h1>
       <small>{weatherCaseCoverage}</small>

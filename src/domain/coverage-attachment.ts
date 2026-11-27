@@ -63,3 +63,20 @@ export async function attachCoverageScope(
     coverageScope: {id, revision, summary: structuredClone(scope)},
   };
 }
+
+/** Wait only for the already registered cell at its exact coverage revision. */
+export async function waitForBoundCoverage(scope:CoverageAttachment,selection:CoverageSelection,signal:AbortSignal) {
+  const body=JSON.stringify({id:scope.id,revision:scope.revision,grid:selection.grid,
+    cells:[selection.id],requireSelection:true});
+  for(;;){
+    signal.throwIfAborted();
+    const response=await fetch("/api/coverage/cells",{method:"POST",headers:{"Content-Type":"application/json"},signal,body});
+    if(!response.ok)throw Error("原地面范围的覆盖修订已不可查。");
+    const result=await response.json();
+    if(result.revision!==scope.revision || !isBoundCoverageSummary(result.scope,selection.id,selection.grid.key) ||
+      !Array.isArray(result.ready))throw Error("时空服务未确认原地面范围。");
+    if(result.ready.includes(selection.id))return;
+    if(!result.pending)throw Error("时空服务未返回原地面网格的覆盖。");
+    await new Promise<void>(resolve=>setTimeout(resolve,150));
+  }
+}

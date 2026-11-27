@@ -3,6 +3,7 @@ import {gunzip} from "node:zlib";
 import {promisify} from "node:util";
 import type {RequestHandler} from "express";
 import type {WeatherStation,StationSnapshot} from "../src/domain/weather-stations";
+import {availableCaseObservationSnapshot,publishMetarSnapshot} from "./case-observations";
 
 const unzip=promisify(gunzip);
 const base="https://aviationweather.gov/data/cache/";
@@ -41,15 +42,25 @@ async function load(){
   })()]);
   return parseStations(csv,names);
 }
-let cached:StationSnapshot|undefined, pending:Promise<StationSnapshot>|undefined,next=0;
-export const weatherStations:RequestHandler=async(_req,res)=>{
-  try{
-    if(Date.now()>=next && !pending){
-      pending=load().then(data=>{cached=data;next=Date.now()+55000;return data;})
-        .catch(error=>{next=Date.now()+5000;throw error;}).finally(()=>{pending=undefined;});
-    }
-    const data=await pending ?? cached;
-    if(!data)throw Error();
-    res.set("Cache-Control","no-cache").json(data);
-  }catch{res.status(503).json({error:"气象站观测更新失败"});}
-};
+export function createWeatherStations({
+  now=Date.now, loadSnapshot=load,
+}: {now?:()=>number;loadSnapshot?:()=>Promise<StationSnapshot>}={}):RequestHandler {
+  let cached:StationSnapshot|undefined, pending:Promise<StationSnapshot>|undefined,next=0;
+  return async(_req,res)=>{
+    try{
+      if(now()>=next && !pending){
+        pending=loadSnapshot().then(data=>{
+          cached={...data,snapshotId:publishMetarSnapshot(data,now())};
+          next=now()+55_000;
+          return cached;
+        }).catch(error=>{next=now()+5_000;throw error;}).finally(()=>{pending=undefined;});
+      }
+      const data=await pending ?? cached;
+      if(!data)throw Error();
+      const {snapshotId,...feed}=data;
+      res.set("Cache-Control","no-cache").json({...feed,
+        ...(snapshotId&&availableCaseObservationSnapshot("awc-metar",snapshotId,now())?{snapshotId}:{})});
+    }catch{res.status(503).json({error:"气象站观测更新失败"});}
+  };
+}
+export const weatherStations=createWeatherStations();

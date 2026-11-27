@@ -71,6 +71,8 @@ export function postgresConversationHistory(pool:Pool) {
           OR body @> '{"context":{"attachedScope":[{"kind":"observation"}]}}'
           OR body @> '{"context":{"attachedScope":[{"reference":{"evidenceLevel":"observation-file"}}]}}'
           OR result ? 'observationCheckResult'
+          OR result ? 'caseObservation'
+          OR result ? 'layerObservation'
           OR result @> '{"answerNotes":{"references":[{"evidenceLevel":"observation-file"}]}}',
           false
         ) AS restricted FROM saved

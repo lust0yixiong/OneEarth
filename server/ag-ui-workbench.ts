@@ -15,11 +15,14 @@ import {requestPerformance,type ExecutorTiming} from "./request-performance";
 import {publicAnswerContext} from "./public-answer-stream";
 import {AgUiInputError,readAgUiInput} from "./ag-ui-input";
 import {nativeAgUiPath} from "../src/domain/native-ag-ui";
+import {bindCaseObservation,type CaseObservationBinding,type ResolveCaseObservation} from "./runtime-case-observation";
+import {bindLayerObservation,type LayerObservationBinding,type ResolveLayerObservation} from "./runtime-layer-observation";
 import {workspaceReply} from "./runtime-chat-channel";
 
 /** Native producer: standard frames are persisted directly by the original
  * acceptance/finish transactions, never reconstructed from NDJSON events. */
-export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresChatMessages},prepare:(id:string,input:unknown)=>Promise<ChatPreparation>){
+export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresChatMessages},prepare:(id:string,input:unknown,observation?:CaseObservationBinding,layerObservation?:LayerObservationBinding)=>Promise<ChatPreparation>,
+ resolveObservation?:ResolveCaseObservation,resolveLayerObservation?:ResolveLayerObservation){
  const {chat}=tasks;await chat.acquire();nativeWorkspaceReceiptRoutes(app,chat);let stopping=false;
  const active=new Map<string,{controller:AbortController;done:Promise<void>}>();
  function start(id:string,prepared:Exclude<ChatPreparation,{error:string}>,allowPublic:boolean){
@@ -75,11 +78,18 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
    }
    const pendingWorkspaceToolCallIds=await chat.checkAgUiWorkspace(decoded.body.conversationId,decoded.body.previousTaskId,decoded.workspaceReplies);
    const body=await bindAgUiResume(tasks,decoded.body,resume);
-   const prepared=resume?.status==="cancelled"?{kind:"research" as const}:await prepare(id,body);
+   // Strictly validate the branch with an asynchronous source read before allowing it to start.
+   if(body.context?.layerObservationRef!==undefined){
+    const issue=await validateTurnStructure(tasks,body);if(issue)throw new AgUiInputError(issue);
+   }
+   const observation=resume?undefined:bindCaseObservation(body.context,resolveObservation);
+   const layerObservation=resume?undefined:await bindLayerObservation(body.context,resolveLayerObservation);
+   const prepared=resume?.status==="cancelled"?{kind:"research" as const}:await prepare(id,body,observation,layerObservation);
    if(resume?.status==="cancelled"){const issue=await validateTurnStructure(tasks,body);if(issue)throw new AgUiInputError(issue);}
 
    if("error" in prepared){res.status(resume?409:400).json({error:prepared.error});return;}
-   const admitted=await chat.admit(id,body,4,{threadId:body.conversationId,turnId:body.turnId,fingerprint,workspaceTool:decoded.workspaceTool,workspaceReplies:decoded.workspaceReplies,pendingWorkspaceToolCallIds,previousTaskId:decoded.body.previousTaskId,...(resume?{resume}:{})});
+   const admitted=await chat.admit(id,{...body,...(observation?{serverCaseObservation:observation}:{}),
+    ...(layerObservation?{serverLayerObservation:layerObservation}:{})},4,{threadId:body.conversationId,turnId:body.turnId,fingerprint,workspaceTool:decoded.workspaceTool,workspaceReplies:decoded.workspaceReplies,pendingWorkspaceToolCallIds,previousTaskId:decoded.body.previousTaskId,...(resume?{resume}:{})});
    if(!admitted){res.status(429).set("Retry-After","2").json({error:"前台正在处理其他运行。"});return;}
    if(!admitted.started){res.status(409).set("Location","/api/tasks/"+id).json({error:"该运行已受理，请只读原状态与归档。",code:"RUN_ALREADY_ACCEPTED"});return;}
    if(resume?.status==="cancelled")await tasks.finish(id,"cancelled",{error:"研究者明确放弃原追问。",code:"cancelled"});

@@ -9,6 +9,8 @@ import {gridSpec} from "../domain/spatial";
 const unselected={id:"",grid:gridSpec("h3",2),point:[0,0] as [number,number]};
 import { regionalForDataset } from "../domain/regional-cases";
 import { useCallback, useMemo, useState } from "react";
+import {readCaseObservation} from "../domain/case-observations";
+import {readLayerObservation} from "../domain/layer-observations";
 import {RunDetails} from "./RunDetails";
 import {SourceDrawer} from "./SourceDrawer";
 import {AnswerFooter} from "./AnswerFooter";
@@ -65,6 +67,62 @@ function RetainedResearch({message,open}:{message:Message;open:(ref:AnswerRefere
       {links(remaining)}
     </div>}
   </section>;
+}
+
+function CaseObservationEvidence({value}:{value:Message["caseObservation"]}) {
+  const observation=readCaseObservation(value);
+  if(!observation)return null;
+  const utc=new Date(observation.observedAt).toISOString();
+  const time=utc.replace("T"," ").replace(/(?:\.000)?Z$/u," UTC");
+  const usgs=observation.kind==="usgs-earthquake";
+  const field=(name:string,value:number|null,unit="")=>name+" "+(value===null?"原记录未提供":value+unit);
+  return <details className="chat-role" data-case-observation={observation.id} data-observation-utc={utc}>
+    <summary>原观测依据 · {usgs?"USGS":"AWC METAR"} · {observation.id}<ChevronDown size={12}/></summary>
+    <div className="chat-role-body">
+      <p>{usgs?observation.place:observation.stationName} · <time dateTime={utc}>{time}</time></p>
+      <p>{usgs
+        ? [field("震级",observation.magnitude),field("深度",observation.depthKm," km")].join(" · ")
+        : [field("气温",observation.temperatureC," °C"),field("风速",observation.windKnots," kt"),
+          observation.weather || "原记录未提供天气现象"].join(" · ")}</p>
+      <a href={observation.sourceUrl} target="_blank" rel="noreferrer">
+        {usgs?"USGS 事件页":"AWC METAR 来源入口"} <ArrowUpRight size={12} aria-hidden="true"/>
+      </a>
+    </div>
+  </details>;
+}
+
+function LayerObservationEvidence({value}:{value:Message["layerObservation"]}) {
+  const observation=readLayerObservation(value);
+  if(!observation)return null;
+  const measurement=(value:number|null,unit:string)=>value===null ? "原记录缺测" : value+" "+unit;
+  let title:string, identity:string, detail:ReactNode, reading:ReactNode;
+  if(observation.kind==="imerg-cell"){
+    title="月降水";
+    identity=observation.month;
+    const product=observation.run==="Derived" ? "NASA POWER 派生" : "GPM IMERG "+observation.run;
+    detail=<><time dateTime={identity}>{identity}</time> · 原生网格第 {observation.row} 行、第 {observation.column} 列</>;
+    reading=<>{measurement(observation.value,observation.unit)} · {product} {observation.productVersion}
+      {!observation.complete && (observation.through ? " · 截至 "+observation.through : " · 未覆盖整月")}</>;
+  }else if(observation.kind==="ctd"){
+    title="CTD 剖面";
+    identity=observation.stationId;
+    detail=<>{identity} · <time dateTime={observation.sampledAt}>{observation.sampledAt}</time> · 采样深度 {observation.depthM} m</>;
+    reading=<>{observation.variable==="temperature"?"水温":"盐度"} {measurement(observation.value,observation.unit)}</>;
+  }else{
+    title="冰川前缘";
+    identity=observation.objectId;
+    detail=<>{observation.label} · <time dateTime={observation.observedOn}>{observation.observedOn}</time></>;
+  }
+  return <details className="chat-role" data-layer-observation={observation.kind} data-observation-id={identity}>
+    <summary>原图层依据 · {title} · {identity}<ChevronDown size={12}/></summary>
+    <div className="chat-role-body">
+      <p>{detail}</p>
+      {reading && <p>{reading}</p>}
+      <a href={observation.sourceUrl} target="_blank" rel="noreferrer">
+        查看原数据来源 <ArrowUpRight size={12} aria-hidden="true"/>
+      </a>
+    </div>
+  </details>;
 }
 
 export function AnswerBody({message,question,animate,archived,children,clarificationAction,onQuote,onReady,initiallyOpenProcess,showLiveMembership=true}:{message:Message;question:string;animate:boolean;archived:boolean;children?:ReactNode;clarificationAction?:ReactNode;onQuote?:(reference:AnswerReference,number:number)=>void;onReady?:(id:string)=>void;initiallyOpenProcess?:boolean;showLiveMembership?:boolean}){
@@ -134,7 +192,8 @@ export function AnswerBody({message,question,animate,archived,children,clarifica
       <summary>适用范围与限制</summary>
       <p>{notes.limitation}</p>
     </details>}
-    {ready && <><AnswerMapContext message={m} locations={locations} cellCount={inCell.size} loading={!membership.members} error={membership.error} showCellRelation={showLiveMembership}/>
+    {ready && <><CaseObservationEvidence value={m.caseObservation}/><LayerObservationEvidence value={m.layerObservation}/>
+    <AnswerMapContext message={m} locations={locations} cellCount={inCell.size} loading={!membership.members} error={membership.error} showCellRelation={showLiveMembership}/>
     {notes?.followUp && <p className="answer-question">{notes.followUp}</p>}
     {batch && remaining.length>0 && <details className="chat-role" onToggle={e=>setExpanded(e.currentTarget.open)}>
       <summary>{references.length ? "其他候选资料" : "本轮候选资料"}（{remaining.length}）<ChevronDown size={12}/></summary>

@@ -3,6 +3,8 @@ import {mergeNativeRunProcess} from "./native-summary-client";
 import {workspaceReceiptAdvances} from "./published-raster-observation";
 import type { Message,RunTrace,WebHit } from "./types";
 import type { WorkspaceSnapshot } from "./store";
+import {ResearchRangeChanged,type ResearchRange,type ResearchRangeInput,type ResearchRangeSnapshot} from "./research-range";
+import {mergeCataloguePresentation} from "./catalogue-presentation";
 
 const databaseName = "oneearth.sessions.v1";
 export const legacySession = "legacy-workspace-v1";
@@ -16,6 +18,7 @@ export interface SessionSummary {
 export interface SessionRecord {
   workspace: WorkspaceSnapshot;
   messages: Message[];
+  researchRange:ResearchRangeSnapshot;
 }
 
 let connection: Promise<IDBDatabase> | undefined;
@@ -93,17 +96,20 @@ export function mergeMessages(existing: Message[], incoming: Message[]) {
     const previous = messages.get(message.id);
     const receipt=matchingWorkspaceReceipt(message);
     const prior=previous && matchingWorkspaceReceipt(previous);
+    const cataloguePresentation=mergeCataloguePresentation(previous?.cataloguePresentation,message.cataloguePresentation);
     if (!previous || (previous.failed && !message.failed) ||
       (previous.failed && previous.retry && message.failed && !message.retry && previous.replyTo===message.replyTo) ||
       (receipt && previous.replyTo===message.replyTo && (!prior || workspaceReceiptAdvances(prior,receipt)))) {
-      messages.set(message.id,withArchivedTrace(message,previous));
+      const merged=withArchivedTrace(message,previous);
+      messages.set(message.id,cataloguePresentation===merged.cataloguePresentation?merged:{...merged,cataloguePresentation});
       changed = true;
     }else if(previous){
       const taskLifecycle=mergeCancelledLifecycle(previous,message);
       const nativeInterrupt=mergeInterrupt(previous,message);
       const enriched=withArchivedTrace(previous,message);
-      if(enriched!==previous || (taskLifecycle && taskLifecycle!==previous.taskLifecycle) || nativeInterrupt!==previous.nativeInterrupt){
-        messages.set(message.id,{...enriched,taskLifecycle:taskLifecycle??previous.taskLifecycle,
+      if(enriched!==previous || (taskLifecycle && taskLifecycle!==previous.taskLifecycle) || nativeInterrupt!==previous.nativeInterrupt||
+        cataloguePresentation!==previous.cataloguePresentation){
+        messages.set(message.id,{...enriched,taskLifecycle:taskLifecycle??previous.taskLifecycle,cataloguePresentation,
           nativeInterrupt,clarificationPrompt:nativeInterrupt?.kind==="question-check" ? previous.clarificationPrompt : nativeInterrupt?.prompt??previous.clarificationPrompt});
         changed=true;
       }
@@ -133,10 +139,46 @@ export async function readSessionMessage(sessionId: string, id: string): Promise
 export async function readSession(id: string): Promise<SessionRecord | null> {
   const db = await database();
   const tx = db.transaction(["workspaces", "messages"]);
-  const [workspace, messages] = await Promise.all([
-    result(tx.objectStore("workspaces").get(id)), messagesIn(tx, id),
+  const workspaces=tx.objectStore("workspaces");
+  const [workspace, messages, researchRange] = await Promise.all([
+    result(workspaces.get(id)), messagesIn(tx, id), result(workspaces.get(["research-range",id])),
   ]);
-  return workspace ? { workspace, messages } : null;
+  return workspace ? { workspace, messages, researchRange:researchRangeSnapshot(researchRange) } : null;
+}
+
+type StoredResearchRange=ResearchRange | {clearedRevision:number};
+function researchRangeSnapshot(value?:StoredResearchRange):ResearchRangeSnapshot {
+  if (!value) return {revision:0,range:null};
+  if ("clearedRevision" in value) return {revision:value.clearedRevision,range:null};
+  return {revision:value.scope.conditionRevision,range:value};
+}
+
+export async function readResearchRange(id:string):Promise<ResearchRangeSnapshot> {
+  const db=await database();
+  return researchRangeSnapshot(await result(db.transaction("workspaces").objectStore("workspaces").get(["research-range",id])));
+}
+
+/** A viewport save cannot overwrite any tab's explicitly adopted research range. */
+export async function writeResearchRange(id:string,range:ResearchRangeInput|null,expectedRevision:number,
+  authorized:()=>boolean):Promise<ResearchRangeSnapshot> {
+  const db=await database();
+  const tx=db.transaction("workspaces","readwrite");
+  const store=tx.objectStore("workspaces");
+  // Chat delivery recovery scans keys starting with the conversation ID.
+  const key=["research-range",id];
+  const previous=store.get(key);
+  const committed=completed(tx);
+  let saved:StoredResearchRange|undefined;
+  previous.onsuccess=()=>{
+    const {revision}=researchRangeSnapshot(previous.result);
+    if (revision!==expectedRevision || !authorized())return;
+    const next=revision+1;
+    saved=range ? {...range,scope:{...range.scope,conditionRevision:next}} : {clearedRevision:next};
+    store.put(saved,key);
+  };
+  await committed;
+  if(!saved)throw new ResearchRangeChanged("当前条件已变化，请核对后重新操作。");
+  return researchRangeSnapshot(saved);
 }
 
 // Each message has its own primary key. Two tabs can commit to the same

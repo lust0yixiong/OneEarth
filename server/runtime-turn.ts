@@ -12,7 +12,7 @@ import type { spatialCoverageClient } from "./spatial-coverage-client";
 import {runtimeTurnPapers} from "./runtime-turn-papers";
 import type {RuntimeWebToolAuthority} from "./runtime-web-tool-store";
 import {runtimeMaterialHistory,archivedReadEvidence,type RuntimeMaterialReceipt} from "./runtime-material-history";
-import {runtimeTurnHaina,type RuntimeHainaMaterials} from "./runtime-turn-haina";
+import {readGridHainaRecords,runtimeTurnHaina,type RuntimeHainaMaterials} from "./runtime-turn-haina";
 import type {CurrentAssertionReading} from "./runtime-assertion-evidence";
 import {paperId} from "../src/domain/paper-record";
 import type { constellationService } from "./constellations";
@@ -21,7 +21,10 @@ import { modelReply } from "./research-answer";
 import { validHistory } from "./turn-history";
 import path from "node:path";
 import {gridCoverageSummary,questionGridEvidence,verifiedGridContext} from "./question-grid";
+import {flightCataloguePlace} from "../src/domain/flight-catalogue";
+import {researchRegionCamera} from "../src/domain/research-region";
 import {gridQueryLimits,gridCataloguePaperIds,gridCatalogueAnswer} from "./grid-catalogue-answer";
+import {cataloguePresentationTarget} from "../src/domain/catalogue-presentation";
 import {ExecutorFailure} from "./executor-failure";
 import {prepareTurn,parseTurnPlan,turnPlanningTargets,turnMetadata,turnPlanningSchema,TurnPlanningFailure,type TurnPlan,type TurnInput} from "./turn-planning";
 import {randomUUID} from "node:crypto";
@@ -55,6 +58,8 @@ import {runtimeTurnContext,boundTurnContext} from "./runtime-turn-context";
 import {refreshWorkspaceObservations} from "./runtime-workspace-state";
 import {discoveryResultBatch,gridCatalogueBatch} from "./runtime-result-batch";
 import {modelSafeValue,modelSafeText} from "./model-context-safety";
+import {answerLayerObservation,stripLayerObservationContext} from "./runtime-layer-observation";
+import {answerCaseObservation} from "./runtime-case-observation";
 import {runtimeTurnFingerprint,runtimeTurnHandoff,validRuntimeTurnHandoff,type RuntimeTurnInput,type RuntimeTurnHandoff,type RuntimeTurnOptions,type ForegroundTurnOutcome} from "./runtime-turn-handoff";
 import {createClarificationPrompt,clarificationAnswerText,type ClarificationPrompt} from "../src/domain/clarification";
 export {validRuntimeTurnHandoff} from "./runtime-turn-handoff";
@@ -122,7 +127,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
   if(savedMaterials?.paperRecords?.length)cachedPapers.remember(savedMaterials.paperRecords);
   const currentAssertionReadings:CurrentAssertionReading[]=[];
   let idSequence=0;const nextId=()=>runtimeStepContext.getStore()?.stableId("turn-"+idSequence++)??randomUUID();
-  let context=boundTurnContext(body.context,turnContext);
+  let context=stripLayerObservationContext(boundTurnContext(body.context,turnContext));
   const controller = {signal};
   let activeExecutor:ReturnType<typeof researchExecutor>|undefined;
   const runTrace:RunTrace = internal.handoff?structuredClone(internal.handoff.runTrace):{started:runtimeStepContext.getStore()?.state.startedAt??Date.now(),stages:[],calls:[],timings:requestPerformance.getStore()};
@@ -158,7 +163,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         operations:latest.history.filter(record=>record.execution.workspace.effectId).map(record=>({taskId:record.taskId,workspace:record.execution.workspace}))})});
     return latest;
   }
-  async function readCoverage(scope:typeof context) {
+  async function readCoverage(scope:typeof context,adopted:boolean) {
     const hasScope=scope.attachedScope?.some(item=>item.kind==="grid"&&!!item.coverageScope);
     const action={id:"grid-catalogue",area:"catalog"} as const;
     if(hasScope)researchProgress({...action,status:"running"});
@@ -170,7 +175,9 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     }
     if(hasScope&&evidence)researchProgress(evidence.status==="ready"?
       {...action,status:"done",...(evidence.count<=1_000_000?{count:evidence.count}:{})}:{...action,status:"failed"});
-    if (evidence) report({id:"question-grid",kind:"tool",name:"读取所引网格的覆盖修订",input:evidence.cellId,
+    const unavailableDefault=adopted&&evidence?.status==="unknown";
+    if (evidence) report({id:unavailableDefault?"adopted-grid-availability":"question-grid",kind:"tool",
+      name:unavailableDefault?"尝试核对会话研究范围":"读取所引网格的覆盖修订",input:evidence.cellId,
       status:evidence.status==="ready"?"done":"partial",output:gridCoverageSummary(evidence)});
     return evidence;
   }
@@ -183,12 +190,21 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     let history=clarification?.original.history??body.history;
     if(chatOriginal)history=[...history.slice(-7),{role:"user",text:body.query}];
     const decision=clarification?.original.questionDecision??body.questionDecision;
+    const flightPlace=internal.foreground&&!clarification&&!decision&&!body.clarificationAnswer&&context.workspaceView?.surface==="earth"
+      ?flightCataloguePlace(query):undefined;
     if(clarification)context={...clarification.context,workspaceView:body.context.workspaceView};
     const executor=activeExecutor=researchExecutor(body.config,clarification?clarification.original.deepseekTools:body.deepseekTools,signal,
       services.webTools?{researchTaskId:taskId,authority:services.webTools}:undefined,{taskId,onSnapshot:snapshot=>{if(!signal.aborted)reasoning.accept(snapshot);}});
     event({conversationId:body.conversationId,turnId:body.turnId, ...(decision ? {continuedFrom:decision.checkMessageId} : {})});
     stage("正在理解问题");
-    const gridCoverage=await readCoverage(context);
+    const adoptedRange=context.attachedScope?.find(item=>item.kind==="grid"&&item.conditionRevision!==undefined);
+    const checkedCoverage=flightPlace?undefined:await readCoverage(context,!!adoptedRange);
+    const unavailableRange=adoptedRange&&checkedCoverage?.status==="unknown"?checkedCoverage:undefined;
+    const gridCoverage=unavailableRange?undefined:checkedCoverage;
+    const gridLimits=checkedCoverage&&!clarification&&!decision?gridQueryLimits(query):undefined;
+    const unavailableReply=()=>({result:{message:gridCoverageSummary(unavailableRange!),clarification:true,gridCoverage:unavailableRange,runTrace}});
+    if(unavailableRange&&(clarification||decision||gridLimits?.currentCoverageOnly))return unavailableReply();
+    if(unavailableRange)context=verifiedGridContext(context,{...unavailableRange,summary:undefined});
     if(gridCoverage){
       const time=context.attachedScope?.find(item=>item.kind==="time");
       const authoritative=gridCoverage.summary?.filters;
@@ -214,8 +230,8 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       if(checked.action==="clarify")return {clarificationContinuation:true,result:{message:checked.clarification!,clarification:true,discoveryClarification:true,
         clarificationPrompt:createClarificationPrompt("research",checked.clarification!),runTrace}};
     }
-    const gridLimits=gridCoverage&&!clarification&&!decision?gridQueryLimits(query):undefined;
-    const prior = Object.hasOwn(internal,"priorResult")?internal.priorResult??undefined:await priorResult(tasks,body.conversationId,body.previousTaskId);
+    const priorRecord = Object.hasOwn(internal,"priorResult")?internal.priorResult??undefined:await priorResult(tasks,body.conversationId,body.previousTaskId);
+    const prior=priorRecord?.caseObservation||priorRecord?.layerObservation?undefined:priorRecord;
     const candidatePaperIds=[...(context.candidateIds||[]),...(context.attachedScope?.flatMap(s=>s.kind==="dataset"?[s.id]:[])||[]),
       ...(gridCoverage?gridCataloguePaperIds(gridCoverage):[]),
       ...(prior?.answerNotes?.references?.flatMap(r=>r.kind==="asset"?[r.id]:[])||[])];
@@ -312,7 +328,16 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       const authority=researchEvidenceAuthority(question,plan,continuing||clarification?undefined:prior);
       const reply=clarification?researchEvidenceAuthority(body.query,plan):undefined;
       return {...authority,discoveryLimit:authority.discoveryLimit??reply?.discoveryLimit,
-        allowDiscovery:authority.allowDiscovery&&reply?.allowDiscovery!==false&&!scopeUnverified&&!gridLimits?.currentCoverageOnly&&!gridLimits?.noDiscovery};
+        allowDiscovery:authority.allowDiscovery&&reply?.allowDiscovery!==false&&!scopeUnverified&&
+          !requiresUnavailableRange(plan)&&!gridLimits?.currentCoverageOnly&&!gridLimits?.noDiscovery};
+    }
+    function requiresUnavailableRange(plan:TurnPlan) {
+      if(!unavailableRange)return false;
+      if(plan.gridIntent&&plan.gridIntent!=="none")return true;
+      // The adopted scope is the default for research. A separately attached
+      // range/referral is handled by the existing explicit request path.
+      return plan.action==="search"||
+        plan.action==="read"&&(!plan.targets.length||plan.targets.some(target=>target.kind==="grid"));
     }
     let initialDiscoveryId:string|undefined,initialBinding:DiscoveryBinding|undefined,lastBinding:DiscoveryBinding|undefined,actualDiscoveryQuery:string|undefined;
     let lastDiscoveryResult:import("./data-search").DataSearchResult|undefined;
@@ -418,7 +443,10 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     }
     const controlResolution=(layerId:string)=>layerId==="forest"?forestResolution:workspaceResolution;
     const planningInput:TurnInput={
-      question:decision?.dataQuestion||query,context,history,conversationContext,gridCoverage,workspacePublication:workspaceResolution?.proof,
+      question:decision?.dataQuestion||query,context,history,conversationContext,gridCoverage,
+      caseObservation:internal.caseObservation&&{kind:internal.caseObservation.kind,status:internal.caseObservation.status},
+      layerObservation:internal.layerObservation&&{kind:internal.layerObservation.kind,status:internal.layerObservation.status},
+      adoptedRangeUnavailable:!!unavailableRange,workspacePublication:workspaceResolution?.proof,
       forestPublication:forestResolution?.proof,
       turnContext,conversationHistory:internal.conversationHistory,historicalTargets:internal.handoff?.historicalTargets,
       ...(internal.publicAnswer?{publicAnswer:true as const}:{}),
@@ -445,7 +473,10 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         output:JSON.stringify({...plan,decisionSource:"stored-confirmation",authorization:{parentTaskId:internal.pending!.taskId,optionId:"approve"},modelPlanning:{attempts:0,workspaceAction:internal.pending?.proposedAction}})});
       return {plan,retrieval:undefined as import("./data-search").DataSearchResult|undefined};
     }
-    const prepared = internal.approvedConfirmation?approvedPlan():internal.handoff?{plan:resumedPlan(),retrieval:undefined as import("./data-search").DataSearchResult|undefined}:clarification?{plan:{action:"search",evidenceNeed:"discover",goal:clarification.goal,targets:[],
+    const prepared = flightPlace?{plan:{action:"workspace",goal:query,evidenceNeed:"none",targets:[],reason:"按明确的先飞行、后读取顺序执行。",
+      clarification:null,workspaceNavigation:{kind:"navigate-map",place:flightPlace},
+      ...turnMetadata(query,{history,conversationContext})} as TurnPlan,retrieval:undefined}:
+      internal.approvedConfirmation?approvedPlan():internal.handoff?{plan:resumedPlan(),retrieval:undefined as import("./data-search").DataSearchResult|undefined}:clarification?{plan:{action:"search",evidenceNeed:"discover",goal:clarification.goal,targets:[],
       reason:"研究者明确补充原委托，沿已受理发现身份和等待水位继续。",clarification:null,
       ...turnMetadata(query,{previousResearchIntent:planningIntent,history,conversationContext})} as TurnPlan,retrieval:undefined as import("./data-search").DataSearchResult|undefined}:
       navigation ? navigationTurn(navigation) : await prepareTurn(planningInput, signal, {
@@ -456,8 +487,15 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     const restrictedConfirmation=internal.pending?.clarificationPrompt?.kind==="confirmation"&&!internal.approvedConfirmation&&internal.pending.answer!==undefined;
     if(restrictedConfirmation&&(["read","search"].includes(prepared.plan.action)||prepared.plan.observationUse==="selected"))
       return {result:{message:"本次答复未批准原提案，也未启动新的研究。若要改变研究目的，请另行明确提出。",clarification:true,runTrace}};
+    if(prepared.plan.caseObservationUse==="selected"&&internal.foreground&&internal.caseObservation)
+      return {result:answerCaseObservation(internal.caseObservation,runTrace)};
+    if(prepared.plan.layerObservationUse==="selected"&&internal.foreground&&internal.layerObservation)
+      return {result:answerLayerObservation(internal.layerObservation,runTrace)};
+    if(requiresUnavailableRange(prepared.plan))return unavailableReply();
     if(internal.foreground&&(["read","search"].includes(prepared.plan.action)||prepared.plan.observationUse==="selected")){
-      signal.throwIfAborted();return {runtimeTurnHandoff:runtimeTurnHandoff(body,prepared.plan,runTrace,{...internal,turnContext,historicalTargets:internal.conversationHistory?turnPlanningTargets(planningInput).filter(target=>target.basis==="history"&&internal.conversationHistory!.sourceTargets(query).some(({reference})=>reference.kind==="asset"?target.id===reference.id:target.url===reference.url)):internal.handoff?.historicalTargets})};
+      signal.throwIfAborted();
+      const {caseObservationUse:_caseUse,layerObservationUse:_layerUse,...researchPlan}=prepared.plan;
+      return {runtimeTurnHandoff:runtimeTurnHandoff(body,researchPlan,runTrace,{...internal,turnContext,historicalTargets:internal.conversationHistory?turnPlanningTargets(planningInput).filter(target=>target.basis==="history"&&internal.conversationHistory!.sourceTargets(query).some(({reference})=>reference.kind==="asset"?target.id===reference.id:target.url===reference.url)):internal.handoff?.historicalTargets})};
     }
     const turn=prepared.plan,evidenceAuthority=discoveryAuthority(turn);
     if((clarification||internal.handoff&&turn.action==="search")&&evidenceAuthority.allowDiscovery&&turn.gridIntent!=="count"&&turn.gridIntent!=="catalogue")
@@ -476,7 +514,24 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     if(gridQuestion&&gridCoverage){
       const archivedIds=gridCataloguePaperIds(gridCoverage).filter(id=>cachedPapers.get(id));
       const papers=gridQuestion==="catalogue"?await loadPapers(gridCataloguePaperIds(gridCoverage)):[];
-      const other=gridCoverage.status==="ready"?gridCoverage.sourceIds.flatMap(id=>!paperId(id)&&assetById.get(id)?[assetById.get(id)!]:[]):[];
+      const coveredHaina=gridQuestion==="catalogue"&&gridCoverage.status==="ready"
+        ? [...new Set(gridCoverage.sourceIds.filter(id=>/^haina:[1-9][0-9]*$/.test(id)))].slice(0,20) : [];
+      const archivedHaina=coveredHaina.filter(id=>haina.has(id));
+      const missingHaina=coveredHaina.filter(id=>!haina.has(id));
+      const matchedHaina=new Set(archivedHaina);
+      if(missingHaina.length){
+        const exact=await readGridHainaRecords(missingHaina,signal);
+        const resolved=exact.hainaRecords?.map(row=>"haina:"+row.id)??[];
+        haina.remember(exact);
+        for(const id of resolved)matchedHaina.add(id);
+        report({id:"grid-catalogue-haina",kind:"tool",name:"按覆盖来源身份读取海纳目录记录",
+          input:JSON.stringify({requested:missingHaina}),status:resolved.length===missingHaina.length?"done":"partial",
+          output:JSON.stringify({level:"catalogue-record",resolved})});
+      }
+      const other=gridCoverage.status==="ready"?gridCoverage.sourceIds.flatMap(id=>{
+        const asset=!paperId(id)&&(!id.startsWith("haina:")||matchedHaina.has(id))?assetById.get(id):undefined;
+        return asset?[asset]:[];
+      }):[];
       const reply=gridCatalogueAnswer(gridCoverage,gridQuestion,papers,other,archivedIds);
       if(gridLimits?.currentCoverageOnly&&(turn.gridIntent==="deeper"||turn.gridIntent==="none"||turn.action==="clarify")){
         reply.clarification=true;
@@ -490,11 +545,20 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         output:JSON.stringify({mode:gridQuestion,papers:reply.paperRecords?.map(p=>p.id)||[],archivedIds,level:"catalogue-location",discoveryDelegated:false,sourceRead:false})});
       if(reply.answerNotes){reply.answerNotes.elapsedMs=Date.now()-runTrace.started;reply.answerNotes.executor=executor.name==="codex"?"Codex":"Claude Code";}
       const hainaRecords=haina.records().filter(r=>used.includes("haina:"+r.id)),hainaCatalog=haina.status();
+      if(archivedHaina.some(id=>used.includes(id))&&reply.answerNotes)
+        reply.answerNotes.limitation+="\n部分海纳条目沿用同会话的原目录记录，不代表重新核实了当前目录内容。";
       if(hainaRecords.length&&!hainaCatalog&&reply.answerNotes)reply.answerNotes.limitation+="\n已保留原档海纳对象，但未取得对应目录状态；不能据此声称当前海纳目录已核实。";
-      return {result:literatureDisplay({...reply,runTrace,modelExecutor:executor.name,researchIntent:turn.researchIntent,
+      const result:DiscoveryResponse={...reply,runTrace,modelExecutor:executor.name,researchIntent:turn.researchIntent,
         resultBatch:gridCatalogueBatch(batchOwner,query,used,gridCoverage.revision,!incomplete&&!reply.clarification&&gridCoverage.status==="ready"),
         conversationContext:turn.conversationContext,conversationEvidence,conversationAssertionEvidence,
-        hainaRecords,...(hainaCatalog?{hainaCatalog}:{})})};
+        hainaRecords,...(hainaCatalog?{hainaCatalog}:{})};
+      if(turn.workspaceOperation==="present-catalogue"){
+        const target=!result.clarification&&cataloguePresentationTarget(result,{runId:taskId,conversationId:body.conversationId,turnId:body.turnId});
+        if(target)result.workspaceOperation={kind:"present-catalogue",batchId:target.batchId};
+        else if(result.answerNotes)
+          result.answerNotes.limitation+="\n本轮目录中没有可核对版本的绘制对象，未提交球面呈现。";
+      }
+      return {result:literatureDisplay(result)};
     }
     if(gridCoverage&&gridLimits?.noDiscovery&&turn.action==="search")return {result:{message:"本轮已限定不另行搜索，尚未执行新发现。可依据已有材料继续，或明确要读取的具体来源。",clarification:true,gridCoverage,runTrace}};
     let retrieved=prepared.retrieval;
@@ -689,7 +753,10 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       if(internal.foreground&&turn.action==="respond"&&turn.foregroundReply&&!hasSourceMaterial)
         return complete({message:turn.foregroundReply,...continuity});
       if(turn.workspaceOperation){
-        const reply={message:"已确定当前工作台操作。",workspaceOperation:{kind:turn.workspaceOperation},...continuity};
+        if(turn.workspaceOperation==="present-catalogue")throw new TurnPlanningFailure();
+        const message=turn.workspaceOperation==="adopt-research-range"
+          ?"将采用地图上当前选中的网格作为研究范围，由工作台核对原选格后应用。":"已确定当前工作台操作。";
+        const reply={message,workspaceOperation:{kind:turn.workspaceOperation},...continuity};
         report({id:"workspace-action",kind:"tool",name:"确认当前工作台操作",input:JSON.stringify(reply.workspaceOperation),status:"done",output:"交由网页按原工作台状态核验后执行。"});
         return complete(reply);
       }
@@ -822,6 +889,14 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
             actionable=isActionable();
           }
         }
+        if(flightPlace){
+          const target=operation.camera??(operation.researchRegion?researchRegionCamera(operation.researchRegion):null);
+          if(!target)return complete({...operation,...continuity});
+          report({id:"workspace-flight-locate",kind:"tool",name:"核对飞行地名与原定位来源",input:flightPlace,
+            status:"done",output:JSON.stringify({location:operation.message,camera:target,source:operation.researchRegion?.source})});
+          return complete({message:"将飞到「"+flightPlace+"」。飞行完成并核对中心地面网格后再查目录。",
+            camera:target,fly:true,placeLabel:flightPlace,flightCatalogue:true,...continuity});
+        }
         report({id:"workspace-action",kind:"tool",name:"执行当前界面操作",input:targetQuery,status:actionable?"done":"partial",
           output:actionable||navigationHandled?operation.message:"本轮未识别到可执行的界面变更。"});
         return complete({...operation,...(!actionable&&!navigationHandled?c40View
@@ -845,6 +920,15 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
       if(currentBatch)event({resultBatch:currentBatch});
       const reply=await modelReply(targetQuery,context,{message:summary,gridCoverage},history,executor,signal,
         stage,papers,"",undefined,acquired,report,{plan:deliveryPlan,searches:readRuns,priorEvidence,discoveryAttempt},currentAssertionReadings,{record:prior,searches:archived.searches},await synthesisContext(),currentBatch,{onProgress:synthesisProgress});
+      if(reply.answerNotes && deliveryPlan.action==="respond" && deliveryPlan.evidenceNeed==="existing" &&
+          !discoveryAttempt && !combinedSearches.length && body.previousTaskId){
+        const selected=new Set(context.attachedScope?.flatMap(item=>
+          item.kind==="reference"&&item.messageId===body.previousTaskId&&item.reference.kind==="asset"?[item.reference.id]:[]));
+        const catalogue=new Set(prior?.answerNotes?.references?.flatMap(ref=>
+          ref.kind==="asset"&&ref.evidenceLevel==="catalogue-record"&&selected.has(ref.id)?[ref.id]:[]));
+        if(catalogue.size)reply.answerNotes.references=reply.answerNotes.references?.map(ref=>
+          ref.kind==="asset"&&catalogue.has(ref.id)?{...ref,evidenceLevel:"catalogue-record"}:ref);
+      }
       if(currentBatch)reply.resultBatch=currentBatch;
       if(papers.length)reply.paperRecords=literatureDisplay(papers);
       reply.hainaRecords=pinnedIds.flatMap(id=>id.startsWith("haina:")?haina.records().filter(r=>String(r.id)===id.slice(6)):[]);

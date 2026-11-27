@@ -14,4 +14,5 @@ export interface WeatherStation {
 export interface StationSnapshot {
   stations: WeatherStation[];
   latest: number;
+  snapshotId?: string;
 }

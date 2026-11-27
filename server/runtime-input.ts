@@ -10,6 +10,10 @@ import {clarificationParent} from "./clarification-guard";
 import {parseObservationCheck,type ObservationCheck} from "./observation-check-contract";
 import {validClarificationAnswer,validClarificationPrompt,clarificationAnswerText} from "../src/domain/clarification";
 import {validBrowserTurnFrame} from "../src/domain/turn-context";
+import {readCaseObservationRef} from "../src/domain/case-observations";
+import {readLayerObservationRequest} from "./runtime-layer-observation";
+import {caseObservationKind} from "./runtime-case-observation";
+import {flightCatalogueFollowUp,matchesFlightGround} from "../src/domain/flight-catalogue";
 
 /** The archived parent owns choices; request mirrors and edited history do not. */
 export async function clarificationAnswerContext(tasks:TaskStore,body:Record<string,any>){
@@ -37,6 +41,10 @@ export async function validateTurnStructure(tasks: TaskStore, value: unknown): P
   const body = value as Record<string, unknown> | null;
   if (!body || typeof body.query !== "string" || !body.query.trim() || body.query.length > 4000 || !validContext(body.context))
     return "请输入有效问题，并附带当前查询上下文。";
+  const context=body.context;
+  const serverObservationFields=["serverCaseObservation","caseObservation","caseObservationStatus","serverLayerObservation","layerObservation","layerObservationStatus"];
+  if (serverObservationFields.some(key=>Object.hasOwn(body,key)||Object.hasOwn(context,key)))
+    return "已核观测快照由服务端确定，不能由客户端提交。";
   if (!validChatModel(body.config) || !validHistory(body.history))
     return "模型配置或对话历史格式无效。";
   if (body.deepseekTools !== undefined && !validDeepSeekTools(body.deepseekTools))
@@ -59,7 +67,24 @@ export async function validateTurnStructure(tasks: TaskStore, value: unknown): P
       (body.questionDecision.choice === "proposed" && body.questionDecision.dataQuestion !== check.proposedQuestion))
       return "原任务没有可供这次确认的问题，请回到该任务重新确认。";
   }
-  const context = body.context as import("../src/domain/types").DiscoveryContext;
+  if(context.caseObservationRef!==undefined){
+    const ref=readCaseObservationRef(context.caseObservationRef);
+    if(!ref||caseObservationKind(context)!==ref.kind)return "所选观测引用与当前案例不一致。";
+  }
+  if(context.layerObservationRef!==undefined&&!readLayerObservationRequest(context))
+    return "所选图层观测引用与发问时的显示目标不一致。";
+  if(context.flightParentRunId!==undefined||body.query===flightCatalogueFollowUp){
+    const parentId=context.flightParentRunId;
+    if(typeof parentId!=="string"||!taskIdPattern.test(parentId)||body.previousTaskId!==parentId||body.query!==flightCatalogueFollowUp)
+      return "飞行后目录查询必须引用同会话的原飞行任务。";
+    const parent=await priorResult(tasks,body.conversationId,parentId);
+    const receipt=await tasks.workspaceReceipt?.(parentId);
+    const grid=context.attachedScope?.find(item=>item.kind==="grid");
+    if(parent?.flightCatalogue!==true||!receipt||receipt.conversationId!==body.conversationId||
+      receipt.effectId!=="workspace:"+parentId||receipt.state!=="applied"||receipt.flight?.state!=="arrived"||
+      !grid?.coverageScope||!matchesFlightGround(receipt.flight.ground,grid.selection))
+      return "原飞行完成回执与本轮地面网格无法核对，未启动目录查询。";
+  }
   if (context.browserTurnFrame !== undefined && (!validBrowserTurnFrame(context.browserTurnFrame) ||
     !taskIdPattern.test(body.conversationId) || !taskIdPattern.test(body.turnId))) return "发问时的工作台状态或轮次关联无效。";
   if (context.caseId && !cases.some(c => c.id === context.caseId)) return "未找到对应案例。";

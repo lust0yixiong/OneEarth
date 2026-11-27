@@ -99,3 +99,24 @@ test("published rain coverage does not bridge missing years or months",()=>{
   assert.equal(publishedRainPeriod(empty,2024,0),null);
   assert.throws(()=>readRainCatalog({id:"imerg-monthly",defaultYear:2024,years:[{year:2024,months:[13]}]}));
 });
+
+test("references only use the loaded native tile and its strong publication revision",async()=>{
+  const revision="a".repeat(64),tileRevision="b".repeat(64);
+  const published={...manifest,months:manifest.months.map(month=>({...month,source:{...month.source,sha256:revision}}))};
+  const point:[number,number]=[-179.95,89.95];
+  const fetcher=(async(url:RequestInfo|URL)=>{
+    const path=String(url);
+    const etag=path.includes("/07/2/") ? '"'+tileRevision+'"' : 'W/"'+tileRevision+'"';
+    return new Response(new Uint16Array(180*180).buffer,{headers:{etag}});
+  }) as typeof fetch;
+  const store=new RainTiles(published,fetcher);
+  try{
+    store.setView(6,0,[0]);await ready(store);
+    assert.equal(store.observation(6,point),undefined);
+    store.select(point);await ready(store);
+    assert.deepEqual(store.observation(6,point),{
+      kind:"imerg-cell",datasetId:"nasa:imerg-monthly",revision,month:"2024-07",row:0,column:0,tileRevision,
+    });
+    assert.equal(store.observation(7,point),undefined);
+  }finally{store.dispose();}
+});

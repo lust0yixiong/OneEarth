@@ -4,8 +4,10 @@ import { loadRemoteAssetIds } from "../domain/datasets";
 import {QuestionScope} from "./QuestionScope";
 import {ObservationCatalogueContext,usePublishedObservationCatalogue} from "./observation-catalogue";
 import {GridCoverageRecord} from "./GridCoverageRecord";
+import type {CataloguePresentationState} from "../domain/catalogue-presentation";
 import {isWorkspaceEffect,workspaceObservationLabel} from "../domain/workspace-effect";
-import {scopeKey} from "../domain/question-scope";
+import {scopeDetail,scopeKey,scopeLabel} from "../domain/question-scope";
+import {adoptCurrentSelectionQuestion,canAdoptCurrentSelection,readResearchRangeScope} from "../domain/research-range";
 import {useWebPreview} from "./use-web-preview";
 import {CopyButton,RunDetails} from "./RunDetails";
 import {QuestionCheck} from "./QuestionCheck";
@@ -57,11 +59,21 @@ function chatScrollPosition(viewport:HTMLDivElement) {
   return {top:viewport.scrollTop,height:viewport.scrollHeight,viewportHeight:viewport.clientHeight};
 }
 
+function hasObservation(message:Message) {
+  return message.caseObservation || message.caseObservationStatus || message.layerObservation || message.layerObservationStatus;
+}
+
 function hasCoverageRecord(message: Message, question?: Message) {
   return !message.failed && !message.questionCheck && !message.clarification &&
-    (message.gridCoverage !== undefined || !!question?.attachedScope?.some(item=>item.kind==="grid") ||
+    !hasObservation(message) &&
+    (message.gridCoverage !== undefined ||
+      !!question?.attachedScope?.some(item=>item.kind==="grid" && item.conditionRevision===undefined) ||
       !!message.runTrace?.calls?.some(call=>call.id==="question-grid"));
 }
+
+const catalogueReceiptLabels:Record<CataloguePresentationState,string>={
+  rendered:"已绘制",failed:"绘制未确认",superseded:"已被后续操作替代",
+};
 
 function AnswerAuthor({message}:{message?:Message}) {
   const intent=message?.researchIntent ?? message?.candidates?.researchRecord?.intent;
@@ -69,7 +81,8 @@ function AnswerAuthor({message}:{message?:Message}) {
   const time=(intent?.time?.trim() || "未指定时间")
     .replace(/^(\d{4})\s*年?\s*[—–\-~～至到]\s*(\d{4})\s*年?$/, "$1年-$2年");
   return <><img className="chat-author-mark" src="/brand/OneEarth-wordmark-black-red.svg" alt="OneEarth" />
-    {message && <span className="chat-answer-scope" aria-label="本轮研究范围" title={region+" / "+time}><span aria-hidden="true">·</span><span aria-label="空间位置">{region}</span><span aria-hidden="true">/</span><span aria-label="时间范围">{time}</span></span>}
+    {message && !hasObservation(message) &&
+      <span className="chat-answer-scope" aria-label="本轮研究范围" title={region+" / "+time}><span aria-hidden="true">·</span><span aria-label="空间位置">{region}</span><span aria-hidden="true">/</span><span aria-label="时间范围">{time}</span></span>}
   </>;
 }
 
@@ -207,6 +220,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     answerClarification,
     cancelChat,
     attachScope,
+    adoptCurrentResearchRange,clearResearchRange,adoptArchivedResearchRange,
     retry,
     recoverableClarifications,
     verifiedInterrupts,
@@ -455,6 +469,17 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   input.current?.focus({preventScroll:true});
                 }}>
               {hasCoverageRecord(m,questions.get(m.id)) && <GridCoverageRecord coverage={m.gridCoverage}/>}
+              {m.cataloguePresentation && <details className="answer-location-note" data-catalogue-presentation={m.cataloguePresentation.batchId}>
+                <summary>目录绘制回执 · {m.cataloguePresentation.items.filter(item=>item.state==="rendered").length} 项已绘制</summary>
+                <ul>
+                  {m.cataloguePresentation.items.map(item=><li key={item.datasetId} data-dataset-id={item.datasetId} data-state={item.state}>
+                    {assetById.get(item.datasetId)?.title??item.datasetId} · 版本 {item.version} · {catalogueReceiptLabels[item.state]}
+                  </li>)}
+                </ul>
+              </details>}
+              {m.gridCoverage?.status==="ready" && questions.get(m.id)?.attachedScope?.some(readResearchRangeScope) &&
+                <button type="button" className="activity-link" disabled={s.attachingMapScope}
+                  onClick={()=>void adoptArchivedResearchRange(m.id)}>用旧条件继续</button>}
               {isWorkspaceEffect(m.activity) && <div className="answer-reply-context">
                 <span>{m.activity?.scope}</span>
                 {m.workspaceReceipt?.observation && <span role="status" data-workspace-observation={m.workspaceReceipt.observation.state}>
@@ -689,6 +714,17 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
       </div>
       <div className="chat-compose">
         {s.sessionError && <p className="session-storage-error" role="alert">{s.sessionError} <button onClick={() => void retrySessionSave()}>重试保存会话</button></p>}
+        {(s.researchRange || canAdoptCurrentSelection(s)) && <div className="research-range-row">
+          {s.researchRange && <span data-research-range="" role="status"
+            data-cell-id={s.researchRange.scope.selection.id}
+            data-condition-revision={s.researchRange.scope.conditionRevision}
+            data-coverage-revision={s.researchRange.scope.coverageScope.revision}
+            title={scopeDetail(s.researchRange.scope)}>当前研究范围 · {scopeLabel(s.researchRange.scope)}</span>}
+          {s.researchRange && <button type="button" className="activity-link" disabled={s.attachingMapScope}
+            onClick={()=>void clearResearchRange(s.researchRangeRevision)}>清除当前研究范围</button>}
+          {canAdoptCurrentSelection(s) && <button type="button" className="activity-link"
+            disabled={s.attachingMapScope} onClick={()=>void adoptCurrentResearchRange()}>{adoptCurrentSelectionQuestion}</button>}
+        </div>}
         {latestReady && latestSources.length>0 && <div className="composer-sources-row">
           <button type="button" className="composer-sources" title={questions.get(latest!.id)?.text}
             aria-haspopup="dialog" onClick={()=>setComposerSources(latest!)}>
@@ -726,8 +762,8 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
           onSubmit={(e) => {
             e.preventDefault();
             if (!text.trim() || s.attachingMapScope) return;
-            void send(text);
-            setText("");
+            const submitted=text;
+            void send(submitted,()=>setText(current=>current===submitted ? "" : current));
           }}
         >
           <textarea

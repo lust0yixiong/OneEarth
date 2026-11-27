@@ -8,6 +8,8 @@ import type { DiscoveryContext } from "./types";
 import { caseById } from "./catalog";
 import {validObservationAttachment} from "./observation-material";
 import {validWorkspaceViewContext} from "./workspace-view-context";
+import {caseObservationCase, readCaseObservationRef} from "./case-observations";
+import {layerObservationMatchesView, readLayerObservationRef} from "./layer-observations";
 function pair(v: unknown): v is [number, number] {
   return (
     Array.isArray(v) &&
@@ -29,6 +31,15 @@ function grid(v: any) {
 }
 export function validContext(v: any): v is DiscoveryContext {
   if(v?.workspaceView!==undefined&&!validWorkspaceViewContext(v.workspaceView))return false;
+  if(v?.caseObservationRef!==undefined){
+    const observation=readCaseObservationRef(v.caseObservationRef);
+    if(!observation || v.workspaceView?.surface!=="cases" ||
+      v.workspaceView.case?.id!==caseObservationCase(observation.kind))return false;
+  }
+  if(v?.layerObservationRef!==undefined){
+    const observation=readLayerObservationRef(v.layerObservationRef);
+    if(!observation || v.caseObservationRef!==undefined || !layerObservationMatchesView(observation,v.workspaceView))return false;
+  }
   if (
     !v ||
     !(
@@ -124,6 +135,8 @@ export function validContext(v: any): v is DiscoveryContext {
           g.grid.key!==v.selection.grid.key || g.grid.key!==(g.grid.system==="h3"?"h":"s")+g.grid.n ||
           g.grid.label!==(g.grid.system==="h3"?"H3 R":"S2 L")+g.grid.n ||
           JSON.stringify(g.point)!==JSON.stringify(v.selection.point) || typeof i.place!=="string" || i.place.length>300)return false;
+        if(i.conditionRevision!==undefined&&(!Number.isSafeInteger(i.conditionRevision)||i.conditionRevision<1||
+          g.grid.system!=="h3"||!i.coverageScope))return false;
         if(i.coverageScope!==undefined){
           const scope=i.coverageScope;
           if(!scope || typeof scope.id!=="string" || !/^[0-9a-z_.:-]{1,160}$/i.test(scope.id) ||

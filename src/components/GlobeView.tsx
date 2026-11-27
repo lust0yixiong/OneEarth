@@ -1,5 +1,7 @@
+import {localLayerObservationRevisions,type LayerObservationRef} from "../domain/layer-observations";
 import {samePublishedRaster,type PublishedRasterPresentation,type PublishedRasterTarget} from "../domain/published-raster-observation";
-import {c40CityFlight} from "../domain/globe-dataset-layers";
+import type {CatalogueFrameObservation} from "../domain/catalogue-presentation";
+import {c40CityFlight,datasetLayerFromView} from "../domain/globe-dataset-layers";
 import { createPortal } from "react-dom";
 import {HainaPublicLayerLegend} from "./HainaPublicLayerLegend";
 import type {HainaPublicLayer} from "./use-haina-public-layer";
@@ -20,6 +22,7 @@ import {useC40Layer} from "./use-c40-layer";
 import {useForestLayer} from "./use-forest-layer";
 import {datasetLayers,globeCases,layerFrameCount,type C40City} from "../domain/regional-cases";
 import type {WorkspaceViewAction, WorkspaceViewChoice, WorkspaceViewContext, WorkspaceViewPublication} from "../domain/workspace-view-context";
+import type {CesiumDatasetPick} from "../globe/cesium-dataset-layers";
 import {sampleField,palettes} from "../globe/regional-layer";
 import { GridDataPopover } from "./GridDataPopover";
 import {GridHoverOverview} from "./GridHoverOverview";
@@ -42,6 +45,7 @@ import {
   assets,
   distinctAssets,
   assetById,
+  activeHainaRecordVersion,
   assetIdentity,
   identitiesForRecords,
   catalogRevision,
@@ -83,22 +87,31 @@ import {
   Info,
 } from "lucide-react";
 import { createRenderer, type FrameInfo, type GlobeLayerRender, type Scene } from "../globe/renderer";
+import { createCesiumRenderer } from "../globe/cesium-renderer";
+import { cesiumLimitLabels, strictCesiumMode } from "../globe/cesium-mode";
 import { useWorkspace } from "../domain/store";
 import { caseById } from "../domain/catalog";
 import {
+  cellAt,
   emptyFilters,
   getModel,
   fitCamera,
   localEntries,
 } from "../domain/spatial";
 import { useGeoOrientation } from "./use-geo-orientation";
-import type { CandidateSet, Coordinate, MapLayer, VisualizationState } from "../domain/types";
+import type { CandidateSet, Coordinate, MapLayer, Selection, VisualizationState } from "../domain/types";
 import { useWindTheme } from "../domain/wind-theme";
 import {DistributionModePicker} from "./DistributionModePicker";
 import {DistributionLegend} from "./DistributionLegend";
 import {useDistributionMode} from "./use-distribution-mode";
 import {distributionModes,resolveDistributionMode,type DistributionContext} from "../domain/distribution-modes";
 import {countBand} from "../domain/distribution-heat";
+
+type ObservedLayerPick=Extract<CesiumDatasetPick,{kind:"rain"|"ctd"|"glacier-front"}>;
+type ObservedLayerTarget=
+  | {hit:Extract<ObservedLayerPick,{kind:"rain"}>;selection:Selection;year:number;month:number;sourceRevision:string}
+  | {hit:Extract<ObservedLayerPick,{kind:"ctd"}>;selection:Selection;targetDepth:number}
+  | {hit:Extract<ObservedLayerPick,{kind:"glacier-front"}>;selection:Selection;view:NonNullable<Scene["dataView"]>};
 
 function layerControl(id: string, label: string, options: WorkspaceViewChoice[], value: string, ordered: boolean) {
   const current = options.find(option => option.id === value);
@@ -123,9 +136,10 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
     state: s,
     patch,
     setFilters,
-    attachScope,
+    attachScope, adoptCurrentResearchRange,
     openVisualization,inspectAsset,inspectCandidates,flyToGrid,focusAnswerEvidence,flyToEvidence,flyToResearchRegion,
-    leaveDetail, registerWorkspaceSurface, noteManualNavigation, focusGlobeLayer, setGlobeLayerVisible, observePublishedRasters,
+    leaveDetail, registerWorkspaceSurface, noteManualNavigation, focusGlobeLayer, setGlobeLayerVisible, observePublishedRasters,observeCatalogueFrame,
+    settleCatalogueFlight,cancelCatalogueFlight,
   } = useWorkspace();
   const stackMode=s.globeLayers.length>0;
   const visibleLayers=useMemo(()=>s.globeLayers.filter(layer=>layer.visible),[s.globeLayers]);
@@ -169,17 +183,29 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
   const [windRetry, setWindRetry] = useState(0);
   const [windTheme, changeWindTheme] = useWindTheme();
   const canvas = useRef<HTMLCanvasElement>(null),
+    globeRoot=useRef<HTMLElement>(null),
     controls = useRef<HTMLDivElement>(null),
-    renderer = useRef<ReturnType<typeof createRenderer> | null>(null);
+    cesiumHost = useRef<HTMLDivElement>(null),
+    renderer = useRef<(ReturnType<typeof createRenderer> & {retryViirs?:()=>void}) | null>(null),
+    cesiumFlight = useRef<ReturnType<typeof createCesiumRenderer>["flyTo"] | null>(null);
   const publicLayer=s.publicLayer;
+  const basicCesiumScene = !s.caseId && s.overview !== "simulation" && !visibleLayers.length &&
+    !s.publicLayer && !s.fieldLayer && !s.dataView && !s.visualization &&
+    s.filters.source !== "constellation" && s.mapResult?.metric !== "scenes";
+  const cesiumProof = strictCesiumMode ||
+    (import.meta.env.VITE_ONEEARTH_CESIUM_PROOF === "1" && basicCesiumScene);
   const hainaView=haina.view;
   const hainaManifest=haina.catalogue.manifest;
   const viirsPublication=hainaManifest?.mode==="viirs"?hainaManifest:undefined;
   const hainaCoverage=hainaManifest?.mode==="coverage"?hainaManifest:undefined;
   const paintedRasters=useRef<{targets:PublishedRasterTarget[];at:number}>({targets:[],at:0});
   const [frame,setFrame]=useState<FrameInfo>({gridLabel:"H3 R2",level:2,visibleCells:0,loading:"",anchor:null});
-  const legacyViirs=useHainaViirsTiles(!stackMode?viirsPublication:undefined,frame.publicViewport);
-  const viirs=focusedResource?.kind==="public"?focusedResource.viirs:legacyViirs;
+  const legacyViirs=useHainaViirsTiles(!cesiumProof&&!stackMode?viirsPublication:undefined,frame.publicViewport);
+  const decodedViirs=focusedResource?.kind==="public"?focusedResource.viirs:legacyViirs;
+  const viirs=cesiumProof&&viirsPublication ? {
+    ...decodedViirs, ready:frame.viirs?.ready??false, failed:frame.viirs?.failed??false, empty:frame.viirs?.empty??false,
+    retry:()=>renderer.current?.retryViirs?.(),
+  } : decodedViirs;
   const [hainaSample,setHainaSample]=useState<{view:typeof hainaView;point:Coordinate}|null>(null);
   const publicSample=hainaSample?.view===hainaView ? hainaSample?.point : undefined;
   const viirsSample=useHainaViirsSample(viirsPublication,publicSample);
@@ -224,7 +250,23 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
   },[needsRainPeriod,layer,patch]);
   const [preferredStyle,setDistributionStyle]=useDistributionMode();
   const distributionContext:DistributionContext=s.mapResult?.selection?"fixed-cell":s.mapResult?.metric==="scenes"?"scenes":"catalog";
-  const distributionStyle=resolveDistributionMode(preferredStyle,distributionContext);
+  const requestedDistribution = resolveDistributionMode(preferredStyle,distributionContext);
+  const cesiumDistribution = strictCesiumMode && basicCesiumScene;
+  const distributionStyle = cesiumProof && (!cesiumDistribution || requestedDistribution === "contours")
+    ? "grid" : requestedDistribution;
+  const fieldIds = stackMode
+    ? visibleLayers.flatMap(item=>item.kind==="field"?[item.selection.id]:[])
+    : s.fieldLayer?[s.fieldLayer.id]:[];
+  const unsupportedCesium = strictCesiumMode ? [
+    !cesiumDistribution && !s.dataView && s.mesh && "grid-mesh",
+    cesiumDistribution && requestedDistribution === "contours" && "contours",
+    fieldIds.some(id=>id!=="forest"&&id!=="c40"&&id!=="rain") && "field-raster",
+    visibleLayers.length > 1 && fieldIds.some(id=>id==="rivers"||id==="lightning") && "layer-stack-picking",
+    s.caseId && !s.dataView && !(s.caseId === "wind" && s.visualization) && "regional-case",
+    s.overview === "simulation" && "simulation",
+    s.filters.source === "constellation" && "constellation",
+    s.mapResult?.metric === "scenes" && "observation-scenes",
+  ].filter((limit): limit is string => typeof limit === "string") : [];
   const smoothedMode=distributionModes[distributionStyle].smoothed && !publicLayer && !layer && !s.caseId && !s.dataView && !s.visualization && s.overview==="catalog";
   const legacyFieldData=useFieldData(!stackMode?layer:null,!stackMode?rainCatalog:undefined);
   const fieldData=focusedField?.fieldData??legacyFieldData;
@@ -319,6 +361,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
       return {id:entry.id,kind:entry.kind,selection:entry.selection,
         publicImage:ready?.haina.data?.image,publicPoints:ready?.haina.data?.points,
         publicPatches:manifest?.mode==="coverage"?manifest.patches:undefined,publicViirs:ready?.viirs.raster,
+        publicViirsPublication:manifest?.mode==="viirs"?manifest:undefined,
         publicRaster:ready?.haina.view?.id,publicSample:focused?publicSample:undefined,publicPick:focused?publicPick:undefined};
     }
     if(entry.kind==="field"){
@@ -343,8 +386,91 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
   const rasterReading=useRef(presentRasters);
   rasterReading.current=presentRasters;
   useEffect(()=>observePublishedRasters(presentRasters()));
-  const scene={...s,datasetLayers:drawLayers,datasetFocus:s.globeLayerFocus,researchRegion:publicLayer?null:s.researchRegion,publicPoints,publicImage,publicRaster,publicSample,publicPick,
-    publicPatches:hainaCoverage?.patches,publicViirs:viirs.raster,catalogStyle:distributionStyle,rightInset,windTheme,answerReferences,
+  const [observedLayerPick,setObservedLayerPick]=useState<ObservedLayerTarget|null>(null);
+  const legacyLayer=stackMode?null:datasetLayerFromView(s);
+  const selectedLayerId=focusedLayer?.id??legacyLayer?.id;
+  const activeLayerPick=(()=>{
+    if(!observedLayerPick||observedLayerPick.hit.layerId!==selectedLayerId||s.selection!==observedLayerPick.selection)return;
+    if("month" in observedLayerPick)
+      return layer?.id==="rain"&&layer.year===observedLayerPick.year&&layer.frame===observedLayerPick.month&&
+        fieldData.field?.rain?.manifest.months[layer.frame]?.source.sha256===observedLayerPick.sourceRevision
+        ? observedLayerPick : undefined;
+    if("targetDepth" in observedLayerPick)
+      return s.dataView?.kind==="ctd"&&s.dataView.stationId===observedLayerPick.hit.sample.name&&
+        s.dataView.depth===observedLayerPick.targetDepth&&s.dataView.variable===observedLayerPick.hit.variable ? observedLayerPick : undefined;
+    return s.dataView===observedLayerPick.view ? observedLayerPick : undefined;
+  })();
+  useEffect(()=>{
+    if(observedLayerPick&&!activeLayerPick)setObservedLayerPick(null);
+  },[observedLayerPick,activeLayerPick]);
+
+  const onDatasetPick:Scene["onDatasetPick"]=(hit,grid)=>{
+    const matchingLayer=visibleLayers.find(layer=>layer.id===hit.layerId);
+    if(hit.kind==="wind"){
+      if(matchingLayer?.kind==="wind" && matchingLayer.id!==s.globeLayerFocus)focusGlobeLayer(matchingLayer.id);
+      return matchingLayer?.kind==="wind" || !stackMode&&s.visualization?.id===hit.layerId;
+    }
+    if(hit.kind==="rain"||hit.kind==="field"){
+      const entry=matchingLayer?.kind==="field"?matchingLayer:legacyLayer?.kind==="field"&&legacyLayer.id===hit.layerId?legacyLayer:null;
+      if(!entry)return false;
+      const selection={id:cellAt(hit.point,grid),grid,point:hit.point};
+      const loaded=resources.get(entry.id)?.resource;
+      const ready=loaded?.kind==="field"&&loaded.selection===entry.selection?loaded:undefined;
+      const field=ready?.layer??entry.selection;
+      const month=(ready?.fieldData.field?.rain??(!stackMode?fieldData.field?.rain:undefined))?.manifest.months[field.frame];
+      if(hit.kind==="rain"&&(field.id!=="rain"||field.year===undefined||!month))return false;
+      if(stackMode&&entry.id!==s.globeLayerFocus)focusGlobeLayer(entry.id);
+      patch({selection});
+      setObservedLayerPick(hit.kind==="rain"&&field.year!==undefined&&month
+        ? {hit,selection,year:field.year,month:field.frame,sourceRevision:month.source.sha256}:null);
+      return true;
+    }
+    if(hit.kind==="ctd"||hit.kind==="glacier-front"){
+      const entry=matchingLayer?.kind==="data"?matchingLayer:legacyLayer?.kind==="data"&&legacyLayer.id===hit.layerId?legacyLayer:null;
+      if(!entry)return false;
+      const view=entry.selection;
+      const point=hit.kind==="ctd"?hit.sample.center:hit.point;
+      const selection={id:cellAt(point,grid),grid,point};
+      if(hit.kind==="ctd"&&view.kind==="ctd"){
+        if(stackMode&&entry.id!==s.globeLayerFocus)focusGlobeLayer(entry.id);
+        patch({selection,dataView:{...view,stationId:hit.sample.name}});
+        setObservedLayerPick({hit,selection,targetDepth:view.depth});
+        return true;
+      }
+      if(hit.kind==="glacier-front"&&view.kind==="front"){
+        if(stackMode&&entry.id!==s.globeLayerFocus)focusGlobeLayer(entry.id);
+        patch({selection});
+        setObservedLayerPick({hit,selection,view});
+        return true;
+      }
+      return false;
+    }
+    const entry=matchingLayer?.kind==="public"?matchingLayer:undefined;
+    const resource=entry && resources.get(entry.id)?.resource;
+    const source=resource?.kind==="public" && resource.selection===entry?.selection ? resource.haina
+      : !stackMode && hit.layerId==="haina:"+publicLayer?.id ? haina : null;
+    if(!source?.view || hit.kind==="point" && !source.data?.points?.some(point=>point.id===hit.pointId))return false;
+    const focusChanged=entry && entry.id!==s.globeLayerFocus;
+    if(focusChanged)focusGlobeLayer(entry.id);
+    if(hit.kind==="point"){
+      if(focusChanged){
+        patch({publicLayer:{...entry.selection,point:hit.pointId}});
+        if(assetById.has(entry.id))inspectDatasetLayer(entry.id,source.catalogue.manifest?.title??source.view.label,["实体数据","海纳专区"]);
+      }else selectHainaPoint(hit.pointId);
+    }else if(hit.patch && hit.patch.id!==source.patch?.id){
+      const selected=entry?.selection??publicLayer;
+      if(!selected)return false;
+      setHainaSample(null);
+      patch({publicLayer:{...selected,view:hainaPatchView(hit.patch.id),month:source.month},globeLayerFit:hit.layerId});
+    }else{
+      setHainaSample({view:source.view,point:hit.point});
+    }
+    return true;
+  };
+  const scene={...s,datasetLayers:drawLayers,datasetFocus:s.globeLayerFocus,onDatasetPick,
+    researchRegion:publicLayer?null:s.researchRegion,publicPoints,publicImage,publicRaster,publicSample,publicPick,
+    publicPatches:hainaCoverage?.patches,publicViirs:viirs.raster,publicViirsPublication:viirsPublication,
+    catalogStyle:distributionStyle,rightInset,windTheme,answerReferences,
     fieldTexture:fieldData.texture,fieldImage,fieldRaster:legacyRaster?legacyRaster.target:undefined,fieldRain:fieldData.field?.rain,basemap:basemapFrame,basemapId:basemapId??undefined};
   const latest=useRef(scene);
   latest.current=scene;
@@ -380,52 +506,84 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
   }, [gridList, s.evidence]);
   const [policy, setPolicy] = useState(false);
   useEffect(() => {
-    if (!canvas.current || !controls.current) return;
+    const element = canvas.current, root = controls.current, host = cesiumHost.current;
+    if (!root || (cesiumProof ? !host : !element)) return;
+    const readScene = () => latest.current as Scene;
+    const updateCamera = (camera: Scene["camera"]) => patch({camera});
+    const select = (selection: NonNullable<Scene["selection"]>) => {
+      const {dataView,filters}=latest.current;
+      const samples=dataView ? dataSelection(dataView,filters,selection) : [];
+      patch(dataView?.kind==="ctd" && samples.length===1
+        ? {selection,dataView:{...dataView,stationId:samples[0].name}} : {selection});
+    };
+    const frameRendered = (info: FrameInfo) => {
+      paintedRasters.current={targets:info.paintedRasters ?? [],at:Date.now()};
+      observePublishedRasters(rasterReading.current());
+      setFrame(info);
+    };
+    const reportError = (error: Error | null) => {
+      if(error)paintedRasters.current={targets:[],at:0};
+      patch({error:error?.message || null});
+    };
+    const observePaint=(observation:CatalogueFrameObservation)=>{
+      const renderedCanvas=canvas.current,section=globeRoot.current;
+      const editions=new Map(observation.datasetIds.map(id=>[id,activeHainaRecordVersion(id)]));
+      // The renderer supplied an already drawn Cesium frame. Confirm the
+      // corresponding React annotations have also reached the visible view.
+      requestAnimationFrame(()=>requestAnimationFrame(()=>{
+        const batch=latest.current.mapResult?.resultBatch;
+        if(!section||!renderedCanvas||canvas.current!==renderedCanvas||!section.isConnected||
+          batch?.taskId!==observation.runId||batch.batchId!==observation.batchId)return;
+        const visible=new Set<string>();
+        for(const pin of section.querySelectorAll<HTMLButtonElement>(".answer-map-pin[data-answer-id][data-batch-id]")){
+          const id=pin.dataset.assetId;
+          if(!id||!editions.get(id)||editions.get(id)!==activeHainaRecordVersion(id)||
+            pin.dataset.answerId!==observation.runId||pin.dataset.batchId!==observation.batchId)continue;
+          const box=pin.getBoundingClientRect(),hit=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);
+          if(box.width>0&&box.height>0&&hit&&pin.contains(hit))visible.add(id);
+        }
+        if(visible.size)observeCatalogueFrame({...observation,datasetIds:[...visible]});
+      }));
+    };
     try {
-      const engine = createRenderer(
-        canvas.current,
-        controls.current,
-        () => latest.current as Scene,
-        (camera) => patch({ camera }),
-        (selection) => {
-          const { dataView, filters } = latest.current;
-          const samples = dataView
-            ? dataSelection(dataView, filters, selection)
-            : [];
-          patch(
-            dataView?.kind === "ctd" && samples.length === 1
-              ? {
-                  selection,
-                  dataView: { ...dataView, stationId: samples[0].name },
-                }
-              : { selection },
-          );
-        },
-        (frame)=>{
-          paintedRasters.current={targets:frame.paintedRasters ?? [],at:Date.now()};
-          observePublishedRasters(rasterReading.current());
-          setFrame(frame);
-        },
-        windCanvas.current || undefined,
-        (error)=>{
-          if(error)paintedRasters.current={targets:[],at:0};
-          patch({error:error?.message || null});
-        },
-        setHover,
-        noteManualNavigation,
-      );
+      const candidate = cesiumProof && host
+        ? createCesiumRenderer(host,readScene,updateCamera,select,frameRendered,reportError,noteManualNavigation,observePaint)
+        : null;
+      if(candidate)canvas.current=candidate.canvas;
+      const engine = candidate ?? createRenderer(element!,root,readScene,updateCamera,select,frameRendered,
+        windCanvas.current || undefined,reportError,setHover,noteManualNavigation);
       renderer.current = engine;
+      cesiumFlight.current=candidate?.flyTo??null;
+      const navigateCesium = (event: MouseEvent) => {
+        if (!candidate || !(event.target instanceof Element)) return;
+        const control = event.target.closest("button");
+        if (control?.hasAttribute("data-reset")) candidate.reset();
+        else if (control?.hasAttribute("data-plus")) candidate.zoom(1);
+        else if (control?.hasAttribute("data-minus")) candidate.zoom(-1);
+      };
+      if (candidate) root.addEventListener("click", navigateCesium);
       return () => {
+        if (candidate) root.removeEventListener("click", navigateCesium);
         engine.dispose();
+        if (candidate && canvas.current === candidate.canvas) canvas.current = null;
         renderer.current = null;
+        cesiumFlight.current=null;
       };
     } catch (e) {
       patch({
         error: e instanceof Error ? e.message : "数据地球暂时无法绘制。",
       });
     }
-  }, [patch,noteManualNavigation,observePublishedRasters]);
-  useEffect(()=>{if(s.flight)renderer.current?.flyTo(s.flight.camera);else renderer.current?.stopFlight();},[s.flight?.id]);
+  }, [cesiumProof,patch,noteManualNavigation,observePublishedRasters,observeCatalogueFrame]);
+  useEffect(()=>{
+    const flight=s.flight;
+    if(!flight){renderer.current?.stopFlight();return;}
+    if(flight.kind!=="catalogue"){renderer.current?.flyTo(flight.camera);return;}
+    const notify=(receipt:Parameters<typeof settleCatalogueFlight>[1])=>settleCatalogueFlight(flight.id,receipt);
+    if(cesiumFlight.current)cesiumFlight.current(flight.camera,notify);
+    else notify({state:"ground-unavailable",observedAt:Date.now()});
+    return ()=>{notify({state:"superseded",observedAt:Date.now()});renderer.current?.stopFlight();};
+  },[s.flight?.id,settleCatalogueFlight]);
   // A place flight only moves the camera; keep a labeled, pulsing pin on the target
   // so the destination is visible without changing the research region layer.
   useEffect(()=>{
@@ -491,7 +649,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
       s.pushFeed,
       s.paperFeed,
       s.dataView,
-      visibleLayers,resources,s.globeLayerFocus,s.visualization,layer,publicLayer,publicPoints,publicImage,publicSample,viirs.raster,hainaCoverage,fieldData.texture,fieldImage,fieldData.revision,fieldData.field,
+      visibleLayers,resources,s.globeLayerFocus,s.visualization,layer,publicLayer,publicPoints,publicImage,publicSample,viirs.raster,viirsPublication,hainaCoverage,fieldData.texture,fieldImage,fieldData.revision,fieldData.field,
       distributionStyle,
       rightInset,
       windTheme,
@@ -556,12 +714,19 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
   const selectedScenes=useMemo(()=>selectedScope ? checkedScenes(selectedScope) : [],[selectedScope]);
   const outsideFrozen =
     !!s.mapResult && outsideMappedSelection(s.mapResult, s.selection);
+  const showingSavedResultGrid=cesiumProof && !!activeAnswer?.candidates?.resultBatch &&
+    !!frame.answerPins?.length && !!s.selection &&
+    s.selection.id===s.mapResult?.selection?.id && s.selection.grid.key===s.mapResult.selection.grid.key;
   async function askSelectedScope() {
     const selection=s.selection;
     if (!selection || scopeRequest.current) return;
     const place=geoOrientation(selection.point).split("（")[0];
     if (!indexedScope) {
       attachScope(gridScope(selection,place),...timeScope(s.filters));
+      return;
+    }
+    if (selection.grid.system==="h3") {
+      await adoptCurrentResearchRange();
       return;
     }
     if (!selectedCoverage) {
@@ -831,11 +996,27 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
       const summary = isCtd
         ? [detail.stationId, variableInfo(detail.variable).label, detail.depth + " m"].join(" · ")
         : [detail.glacier, detail.epoch === "compare" ? "首末时相对照" : detail.epoch === "first" ? "首期前缘" : "末期前缘"].join(" · ");
-      activeLayer = {id: detail.kind, title: isCtd ? "CTD 剖面" : "冰川前缘", status: "ready",
+      activeLayer = {id: detail.kind, title: isCtd ? "CTD 剖面" : "冰川前缘",datasetId:selectedLayerId,status: "ready",
         controls: [{id: "content", label: "当前内容", current: {id: detail.kind, label: summary}, options: [], ordered: false}]};
+    }
+    let layerObservation:LayerObservationRef|undefined;
+    if (activeLayerPick && canvas.current?.dataset.globeEngine==="cesium") {
+      if ("month" in activeLayerPick) {
+        layerObservation=rain?.observation(activeLayerPick.month,activeLayerPick.hit.point);
+      } else if ("targetDepth" in activeLayerPick) {
+        const {sample,variable}=activeLayerPick.hit;
+        layerObservation={kind:"ctd",datasetId:"pangaea:891386",revision:localLayerObservationRevisions.ctd,
+          stationId:sample.name,sampledAt:sample.date,variable,depthM:sample.depth};
+      } else {
+        const {objectId,observedOn}=activeLayerPick.hit;
+        layerObservation={kind:"glacier-front",datasetId:"zenodo:15241675:fronts",revision:localLayerObservationRevisions.front,
+          objectId,observedOn};
+      }
     }
     return {
       surface: "earth", camera: renderer.current?.currentCamera(), activeLayer, applyControl, resolvePublishedChoice,rasterPresentations,
+      layerObservation,
+      ...(canvas.current?.dataset.globeEngine==="cesium"?{catalogueRenderer:"cesium" as const}:{}),
       panels: {layerMenu:basemapOpen},candidateBatch:gridList??undefined,candidateListExpanded:!!gridList&&!s.evidence,
       display: [{label: "视野中心的界面标注", value: orientation.label},
         ...(!activeLayer && catalogMode ? [{label: "分布方式", value: distributionModes[distributionStyle].label}] : [])],
@@ -941,11 +1122,17 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
                       ? "金色为范围 · 绿色深浅按格内定位依据条数"
                       : "绿色深浅按格内定位依据条数"
                     : sceneMode ? countLegend : catalogMode
-                      ? distributionModes[distributionStyle].legendTitle
+                      ? (cesiumProof && !cesiumDistribution ? "所选格网 · 权威目录覆盖" : distributionModes[distributionStyle].legendTitle)
                       : "模拟记录密度（条/km²）"}
           </span>
+          {activeLayerPick && "targetDepth" in activeLayerPick && <output aria-label="已选观测">
+            {activeLayerPick.hit.sample.name} · {activeLayerPick.hit.sample.date.slice(0,10)} · {activeLayerPick.hit.sample.depth} m · {activeLayerPick.hit.sample.value} {dataInfo?.unit}
+          </output>}
+          {activeLayerPick && "view" in activeLayerPick && <output aria-label="已选观测">
+            {activeLayerPick.view.kind==="front"&&activeLayerPick.view.glacier} · {activeLayerPick.hit.observedOn}
+          </output>}
           {catalogMode && !sceneMode ? (
-            <DistributionLegend mode={distributionStyle}/>
+            cesiumProof && !cesiumDistribution ? null : <DistributionLegend mode={distributionStyle}/>
           ) : catalogMode ? (
             <span className="distribution-ramp" role="img" aria-label="观测数量由少到多" title="点选网格查看精确观测数量。">
               <span>少</span><i style={{background:`linear-gradient(to right, ${sceneScale.map(bin=>bin.sceneColor).join(",")})`}}/><span>多</span>
@@ -986,7 +1173,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
               <option value="constellation">三体星座</option><option value="paper">论文研究数据</option>
             </select>
           </label> : <button className="distribution-source-picker" onClick={()=>openVisualization("catalog",null)}><Layers size={14}/>返回数据分布</button>}
-          {catalogMode && <DistributionModePicker value={distributionStyle} context={distributionContext} onChange={setDistributionStyle}/>}
+          {catalogMode && (!cesiumProof || strictCesiumMode) && <DistributionModePicker value={requestedDistribution} context={distributionContext} onChange={setDistributionStyle}/>}
           <select
             aria-label="网格体系"
             value={s.gridSystem}
@@ -1039,23 +1226,20 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
   </div>;
   return (
     <section
+      ref={globeRoot}
       className={"earth-view" + (toolsHost?" globe-docked":"") + (publicLayer ? (toolsHost ? " haina-public-mode haina-docked" : " haina-public-mode") : "") + (s.visualization ? " wind-mode" : "")+((catalogMode||forestMode||c40Mode||publicLayer)?" catalog-distribution":"")}
       data-wind-theme={s.visualization ? windTheme : undefined}
+      data-globe-policy={strictCesiumMode ? "cesium-only" : undefined}
+      data-globe-unsupported={unsupportedCesium.join(" ") || undefined}
       aria-label="数据地球"
     >
       <GlobeLayerResources layers={visibleLayers} focus={s.globeLayerFocus} playing={animate} catalogues={s.publishedFieldCatalogues}
-        viewport={frame.publicViewport} report={report}/>
+        viewport={cesiumProof?undefined:frame.publicViewport} report={report}/>
       <div className="earth-canvas-wrap">
-        <canvas
-          ref={canvas}
-          role="img"
-          aria-label={publicLayer?"海纳公开图层的数据地球":"可旋转、缩放与点选网格的数据地球"}
-        />
-        <canvas
-          ref={windCanvas}
-          className="wind-particles-canvas"
-          aria-hidden="true"
-        />
+        {cesiumProof ? <div className="cesium-proof-host" ref={cesiumHost} style={{right:rightInset}}/> :
+          <canvas ref={canvas} role="img"
+            aria-label={publicLayer?"海纳公开图层的数据地球":"可旋转、缩放与点选网格的数据地球"}/> }
+        {!cesiumProof && <canvas ref={windCanvas} className="wind-particles-canvas" aria-hidden="true"/>}
         {s.flight?.kind==="place" && (
           <div ref={placePin} className="place-pin" role="img" aria-label={"定位标记："+(s.flight.label||"目标位置")}>
             <span className="place-pin-pulse" aria-hidden="true" />
@@ -1064,6 +1248,10 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
           </div>
         )}
       </div>
+
+      {unsupportedCesium.length > 0 && <div className="cesium-capability-notice" role="status">
+        Cesium 尚未实现{unsupportedCesium.map(limit => cesiumLimitLabels[limit]).join("、")}。
+      </div>}
 
       {publicLayer&&frame.publicPoints===publicPoints&&frame.publicMarkers?.map(marker=>
         <button key={marker.id} type="button" className="haina-point-marker"
@@ -1075,12 +1263,19 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
         pushConfigured={s.pushFeed?.offline?undefined:s.pushFeed?.configured}/>}
 
       {activeAnswer && frame.answerPins?.map((pin,i)=><button key={pin.assetId+":"+i}
+        data-answer-id={activeAnswer.id} data-asset-id={pin.assetId} data-batch-id={activeAnswer.candidates?.resultBatch?.batchId}
         className={"answer-map-pin"+(pin.kind==="range"?" range":"")+(s.mapFocus?.assetId===pin.assetId?" focused":"")}
         style={{left:pin.x,top:pin.y}} aria-label={(pin.kind==="range"?"目录范围依据 ":"球上依据 ")+pin.number+"："+(assetById.get(pin.assetId)?.title || "资料")}
         onPointerEnter={()=>focusAnswerEvidence(activeAnswer,pin.assetId)} onPointerLeave={()=>focusAnswerEvidence(activeAnswer,null)}
         onFocus={()=>focusAnswerEvidence(activeAnswer,pin.assetId)} onBlur={()=>focusAnswerEvidence(activeAnswer,null)}
         onClick={()=>{
-          focusAnswerEvidence(activeAnswer,pin.assetId,true);patch({chatOpen:true});
+          focusAnswerEvidence(activeAnswer,pin.assetId,true);
+          const reference=activeAnswer.answerNotes?.references?.[pin.number-1];
+          const batch=activeAnswer.candidates?.resultBatch;
+          if (reference?.kind==="asset" && reference.id===pin.assetId && batch?.taskId===activeAnswer.id &&
+              batch.itemIds.includes(reference.id))
+            attachScope({kind:"reference",reference,number:pin.number,messageId:activeAnswer.id});
+          else patch({chatOpen:true});
           document.querySelector(`[data-message-id="${CSS.escape(activeAnswer.id)}"] .answer-citation[data-asset-id="${CSS.escape(pin.assetId)}"]`)?.scrollIntoView({block:"nearest"});
         }}>{pin.kind==="range"?"范围 ":""}{pin.number}</button>)}
       {frame.productCell?.anchor && (
@@ -1358,6 +1553,9 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
         </div>
       )}
       <div className="earth-side-controls" ref={controls}>
+        {s.flight?.kind==="catalogue" && <button type="button" aria-label="取消飞行查目录" title="取消飞行查目录" onClick={cancelCatalogueFlight}>
+          ×
+        </button>}
         <button ref={layerMenuButton} data-basemap aria-label="切换底图" title="图层" aria-expanded={basemapOpen} aria-haspopup="dialog" onClick={()=>setBasemapOpen(open=>!open)}>
           <Layers size={18} />
         </button>
@@ -1383,7 +1581,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
           {basemapStyle(basemapId)?.name} · 底图 © Esri
         </div>
       )}
-      {!layer && s.selection && frame.anchor && (
+      {!layer && s.selection && frame.anchor && !showingSavedResultGrid && (
         <div
           className="grid-popover-stack"
           style={{

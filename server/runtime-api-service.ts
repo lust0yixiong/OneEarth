@@ -17,6 +17,9 @@ import { nativeAgUiPath } from "../src/domain/native-ag-ui";
 import { prepareRuntimeChat } from "./runtime-chat-turn";
 import { runtimeServices } from "./runtime-services";
 import { closeRuntimeModelCapacity } from "./runtime-model-capacity";
+import { cataloguePresentationRoutes } from "./catalogue-presentation";
+import {resolveCaseObservation} from "./case-observations";
+import {resolveLayerObservation} from "./layer-observations";
 
 const badRequest: express.ErrorRequestHandler = (_error, _req, res, next) => {
   if (res.headersSent) { next(_error); return; }
@@ -69,15 +72,18 @@ export async function createRuntimeApi(state: string) {
     business.put("/api/tasks/:taskId/tool-calls/:toolCallId/receipt", express.json({limit:"16kb"}));
     business.use("/api/paper-records", runtimePaperRoutes());
     business.use(observationMaterialsRoutes());
-    const chat = await agUiWorkbench(business, tasks, (id,input) =>
-      prepareRuntimeChat(services, id, input, tasks.chat.latestCompleted, {publicAnswer:true}));
+    const chat = await agUiWorkbench(business, tasks, (id,input,caseObservation,layerObservation) =>
+      prepareRuntimeChat(services, id, input, tasks.chat.latestCompleted, {publicAnswer:true,caseObservation,layerObservation}),
+      resolveCaseObservation,resolveLayerObservation);
     stopWork.push(() => chat.close());
+    cataloguePresentationRoutes(business,tasks.cataloguePresentation);
     agUiWorkspaceInventory(business, tasks, tasks.chat.agUiPendingWorkspaceCalls,
       async id => typeof await tasks.chat.agUiFingerprint(id) === "string");
     taskStatusRoutes(business, "/api/tasks", tasks,
       {researchRecords:true,chatIdentity:true,
         readInterrupt:id=>tasks.chat.agUiInterrupt(id),
         readWorkspaceTool:id=>tasks.chat.agUiWorkspaceRecord(id),
+        readCataloguePresentation:tasks.cataloguePresentation.read,
         recoverRecord:async task=>(await recoverObservationRecord(tasks,task))??recoverObservationResearchRecord(tasks,task),
         onCancelled:id=>chat.cancel(id)});
     business.use(badRequest);

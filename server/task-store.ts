@@ -6,7 +6,9 @@ import { TaskCancelled } from "./task-cancellation";
 import type { OneEarthAgUiInterruptRecord } from "../src/domain/native-ag-ui";
 import type {ResearchProgress} from "../src/domain/native-agui-research-progress";
 import type { NativeWorkspaceToolRecord } from "../src/domain/native-workspace-tool";
-import type { AnswerReference, EvidenceStage } from "../src/domain/types";
+import type { AnswerReference, DiscoveryContext, DiscoveryResponse, EvidenceStage } from "../src/domain/types";
+import type { ScopeItem } from "../src/domain/question-scope";
+import {isBoundCoverageSummary} from "../src/domain/coverage-attachment";
 
 export const taskIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export type TaskStatus = "queued" | "running" | "complete" | "failed" | "cancelled";
@@ -191,8 +193,27 @@ type TaskStatusRouteOptions = {
   recoverRecord?:(task:Task)=>Promise<unknown>;
   readInterrupt?:(id:string)=>Promise<OneEarthAgUiInterruptRecord | undefined>;
   readWorkspaceTool?:(id:string)=>Promise<NativeWorkspaceToolRecord | undefined>;
+  readCataloguePresentation?:(id:string)=>Promise<import("../src/domain/catalogue-presentation").CataloguePresentation|undefined>;
   onCancelled?:(id:string)=>void;
 };
+
+/** Historical range state only comes from a condition that the spatial service verified for this run. */
+function archivedResearchRange(context:DiscoveryContext|undefined,result:DiscoveryResponse):Extract<ScopeItem,{kind:"grid"}>|undefined {
+  const items=context?.attachedScope;
+  const attached=Array.isArray(items)?items.find(item=>item?.kind==="grid"):undefined;
+  const evidence=result?.gridCoverage;
+  const revision=attached?.conditionRevision;
+  if(typeof revision!=="number"||!Number.isSafeInteger(revision)||revision<1||!attached?.coverageScope||
+    evidence?.status!=="ready"||evidence.scopeId!==attached.coverageScope.id||
+    evidence.revision!==attached.coverageScope.revision||evidence.cellId!==attached.selection.id||
+    evidence.gridKey!==attached.selection.grid.key||
+    !isBoundCoverageSummary(evidence.summary,evidence.cellId,evidence.gridKey))return;
+  const {selection}=evidence.summary;
+  if(selection.grid.system!=="h3"||selection.point[0]!==attached.selection.point[0]||
+    selection.point[1]!==attached.selection.point[1])return;
+  return {kind:"grid",selection,place:attached.place,conditionRevision:revision,
+    coverageScope:{id:evidence.scopeId,revision:evidence.revision,summary:evidence.summary}};
+}
 
 export function taskStatusRoutes(router: Router, base: string, store: TaskStore, options:TaskStatusRouteOptions={}) {
   router.param("taskId", (_req, res, next, id) => {
@@ -216,9 +237,14 @@ export function taskStatusRoutes(router: Router, base: string, store: TaskStore,
     const task=await store.get(id);
     const result=(await store.terminal(id))?.result??(task?await options.recoverRecord?.(task):undefined);
     if(!task||!result){res.status(404).json({error:"没有找到已完成的研究记录。"});return;}
-    const {query,turnId,conversationId}=JSON.parse(task.body);
-    const [workspaceReceipt,interrupt,workspaceTool,researchProgress]=await Promise.all([store.workspaceReceipt?.(id),options.readInterrupt?.(id),options.readWorkspaceTool?.(id),store.researchProgress?.(id)]);
-    res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,result,workspaceReceipt,interrupt,workspaceTool,researchProgress});
+    const {query,turnId,conversationId,context}=JSON.parse(task.body);
+    const researchRange=archivedResearchRange(context,result as DiscoveryResponse);
+    const [workspaceReceipt,interrupt,workspaceTool,researchProgress,cataloguePresentation]=await Promise.all([
+      store.workspaceReceipt?.(id),options.readInterrupt?.(id),options.readWorkspaceTool?.(id),store.researchProgress?.(id),
+      options.readCataloguePresentation?.(id),
+    ]);
+    res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,
+      result,workspaceReceipt,interrupt,workspaceTool,researchProgress,researchRange,cataloguePresentation});
   });
   router.delete(base + "/:taskId", async (req, res) => {
     const id=String(req.params.taskId);

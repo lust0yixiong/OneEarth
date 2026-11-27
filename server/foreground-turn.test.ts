@@ -10,7 +10,7 @@ import {executeTurn,runForegroundTurn,resumePlannedTurn,validRuntimeTurnHandoff,
 import {runtimeTurnFingerprint} from "./runtime-turn-handoff";
 import {openTaskStore} from "./task-store";
 import {turnPlanningSchema} from "./turn-planning";
-import {emptyFilters} from "../src/domain/spatial";
+import {cellAt,emptyFilters,gridSpec} from "../src/domain/spatial";
 import type {DiscoveryContext,DiscoveryResponse} from "../src/domain/types";
 import {createClarificationPrompt,clarificationAnswerText} from "../src/domain/clarification";
 import {prepareRuntimeChat} from "./runtime-chat-turn";
@@ -79,6 +79,112 @@ test("ordinary view answers use one light model call, no task row and no source 
   assert.equal(trace.modelPlanning.attempts,1);assert.equal(trace.modelPlanning.promptBytes,Buffer.byteLength(r.calls[0].prompt));assert.ok(trace.modelPlanning.promptBytes<9475);
   t.diagnostic(JSON.stringify({case:"ordinary",promptBytes:trace.modelPlanning.promptBytes,schemaBytes:Buffer.byteLength(JSON.stringify(r.calls[0].schema)),modelCalls:r.calls.length}));
   assert.ok(!r.calls[0].prompt.includes("检索词、渠道分工"));assert.ok(!r.calls[0].schema.properties.researchIntent);
+});
+
+test("expired adopted coverage allows ordinary view answers and blocks dependent research before any delegation",async t=>{
+  const f=await fixture(t),ctx=context();
+  const grid=gridSpec("h3",2),point:[number,number]=[105,25],id=cellAt(point,grid);
+  ctx.selection={grid,point,id};
+  ctx.attachedScope=[{kind:"grid",place:"原订研究范围",selection:ctx.selection,conditionRevision:3,
+    coverageScope:{id:randomUUID(),revision:"a".repeat(64)}}];
+  f.services.coverage=async()=>({status:"unknown",reason:"expired",cellId:id,gridKey:grid.key,revision:"a".repeat(64)});
+  const ordinary=await f.run(f.body("当前工作台现在显示什么？",{context:ctx}),decision("respond",null,{gridIntent:"none"}));
+  assert.equal(ordinary.result?.message,"这是本轮的一般说明，没有执行外查。");
+  assert.equal(ordinary.result?.gridCoverage,undefined);
+  assert.ok(ordinary.result?.runTrace?.calls.some(call=>call.id==="adopted-grid-availability" && call.status==="partial"));
+  assert.ok(!ordinary.result?.runTrace?.calls.some(call=>call.id==="question-grid"));
+  assert.equal(ordinary.calls.length,1);
+  assert.match(ordinary.calls[0].prompt,/"adoptedRangeUnavailable":true/);
+  for(const [query,action,intent] of [["采用的研究范围目前能定位多少资料？","respond","count"],
+    ["查找这个地方新的研究资料。","search","none"]] as const){
+    const dependent=await f.run(f.body(query,{context:ctx}),decision(action,null,{gridIntent:intent}));
+    assert.equal(dependent.outcome.kind,"reply");
+    assert.match(dependent.result?.message??"",/覆盖范围已失效/);
+    assert.equal(dependent.result?.gridCoverage?.status,"unknown");
+    assert.equal(dependent.result?.gridCoverage?.cellId,id);
+  }
+  assert.equal(f.requests.length,0);
+});
+
+test("natural adoption requires an explicit command in the current message and the current workspace operation",async t=>{
+  const f=await fixture(t),ctx=context();
+  ctx.workspaceView!.operations!.push("adopt-research-range");
+  const output=decision("workspace",{kind:"workspace-operation",operation:"adopt-research-range"});
+  const command="请把地图上刚选的这一格作为接下来研究的范围。";
+  const authorized=await f.run(f.body(command,{context:ctx}),output);
+  assert.deepEqual(authorized.result?.workspaceOperation,{kind:"adopt-research-range"});
+  assert.equal(authorized.calls.length,1);
+  for(const text of ["怎么把地图上刚选的这一格作为研究范围","不要把当前网格作为研究范围","等我确认再采用当前网格作为研究范围",
+    "之前的建议是把当前网格作为研究范围"]){
+    const rejected=await f.run(f.body(text,{context:ctx}),output);
+    assert.equal(rejected.result?.workspaceOperation,undefined);
+    assert.equal(rejected.outcome.kind,"reply");
+    if(rejected.outcome.kind==="reply")assert.equal(rejected.outcome.payload.code,"TURN_PLAN_INVALID");
+  }
+  assert.equal((await f.run(f.body(command),output)).result?.workspaceOperation,undefined);
+  assert.equal(f.requests.length,0);
+});
+
+test("only a current explicit catalogue instruction carries the exact new batch in the workspace operation",async t=>{
+  const f=await fixture(t),ctx=context();
+  const grid=gridSpec("h3",2),point:[number,number]=[105,25],cellId=cellAt(point,grid);
+  const scopeId=randomUUID(),revision="c".repeat(64),selection={grid,point,id:cellId},datasetId="haina:177651";
+  ctx.selection=selection;
+  ctx.attachedScope=[{kind:"grid",place:"原选网格",selection,coverageScope:{id:scopeId,revision}}];
+  ctx.workspaceView!.operations!.push("present-catalogue");
+  f.services.coverage=async()=>({status:"ready",scopeId,revision,cellId,gridKey:grid.key,count:1,members:[datasetId],sourceIds:[datasetId],
+    summary:{selection,filters:{...emptyFilters(),source:"haina"},caseId:null,layer:"all",metric:"products",candidateCount:null,candidateIdentity:null}});
+  const conversationId=randomUUID(),parentId=randomUUID();
+  f.tasks.submit(parentId,{conversationId});f.tasks.claim();
+  f.tasks.finish(parentId,"complete",{result:{message:"原目录记录。",
+    hainaRecords:[{id:177651,name:"已核目录条目",description:"受控目录",provider:"目录",source:"目录",version:"1",
+      license:"Public",access:"Public",labels:[],card:{tags:[]}}],
+    hainaCatalog:{total:1,synced:"2026-11-22T00:00:00Z",endpoint:"https://example.org/isolated",warning:""}}});
+  const body=(query:string,context=ctx)=>f.body(query,{conversationId,previousTaskId:parentId,context});
+  const action=(authorizationQuote:string,extra:Record<string,unknown>={})=>
+    ({kind:"workspace-operation",operation:"present-catalogue",authorizationQuote,...extra});
+  const ordinary=await f.run(body("请列出这个网格中匹配的目录条目。"),decision("respond",null,{gridIntent:"catalogue"}));
+  assert.equal(ordinary.result?.workspaceOperation,undefined);
+  assert.deepEqual(ordinary.result?.resultBatch?.itemIds,[datasetId]);
+  const quote="把这些目录条目挂到球上";
+  const authorized=await f.run(body("请列出匹配的目录，不要另行搜索，再"+quote+"。"),
+    decision("workspace",action(quote),{gridIntent:"catalogue"}));
+  const result=authorized.result;
+  assert.ok(result?.resultBatch);
+  assert.equal(result.resultBatch.taskId,authorized.id);
+  assert.equal(result.resultBatch.turnId,authorized.input.turnId);
+  assert.equal(result.resultBatch.conversationId,conversationId);
+  assert.deepEqual(result.resultBatch.itemIds,[datasetId]);
+  assert.deepEqual(result.workspaceOperation,{kind:"present-catalogue",batchId:result.resultBatch.batchId});
+  assert.equal(result.gridCoverage?.revision,revision);
+  assert.equal(authorized.calls.length,1);
+  assert.match(authorized.calls[0].prompt,/不要求固定措辞/);
+  const compound="请查询当前研究网格里的海纳目录，并把本轮查到的条目显示在球上。";
+  const whole=await f.run(body(compound),decision("workspace",action(compound),{gridIntent:"catalogue"}));
+  assert.equal(whole.result?.workspaceOperation?.kind,"present-catalogue");
+
+  const rejectedCases=[
+    {query:"请列出本轮目录。",decision:decision("workspace",action(quote),{gridIntent:"catalogue"})},
+    {query:"不要"+quote+"。",decision:decision("workspace",action(quote),{gridIntent:"catalogue"})},
+    {query:"如何"+quote+"？",decision:decision("workspace",action(quote),{gridIntent:"catalogue"})},
+    {query:quote+"？",decision:decision("workspace",action(quote),{gridIntent:"catalogue"})},
+    {query:"待我确认，再"+quote+"。",decision:decision("workspace",action(quote),{gridIntent:"catalogue"})},
+    {query:"举例：「"+quote+"」，只解释意思。",decision:decision("workspace",action(quote),{gridIntent:"catalogue"})},
+    {query:quote,decision:decision("clarify",action(quote),{gridIntent:"catalogue"})},
+    {query:quote,decision:decision("workspace",action(quote,{batchId:randomUUID()}),{gridIntent:"catalogue"})},
+    {query:quote,decision:decision("workspace",action(quote),{gridIntent:"count"})},
+  ];
+  for(const rejected of rejectedCases){
+    const run=await f.run(body(rejected.query),rejected.decision);
+    assert.equal(run.result?.workspaceOperation,undefined,rejected.query);
+    assert.equal(run.outcome.kind,"reply");
+    if(run.outcome.kind==="reply")assert.equal(run.outcome.payload.code,"TURN_PLAN_INVALID",rejected.query);
+  }
+  const unavailable=structuredClone(ctx);
+  unavailable.workspaceView!.operations=[];
+  const run=await f.run(body(quote,unavailable),decision("workspace",action(quote),{gridIntent:"catalogue"}));
+  assert.equal(run.result?.workspaceOperation,undefined);
+  assert.equal(f.requests.length,0);
 });
 
 test("C40 Beijing/London/New York are resolved from one model decision through the same publication, without a city dictionary",async t=>{

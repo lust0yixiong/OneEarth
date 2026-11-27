@@ -1,4 +1,6 @@
 import type {PublishedRasterPresentation} from "./published-raster-observation";
+import type {CaseObservationRef} from "./case-observations";
+import type {LayerObservationRef} from "./layer-observations";
 import {caseById} from "./catalog";
 import {initialAccessSection} from "./data-access";
 import {assetById} from "./datasets";
@@ -16,6 +18,9 @@ export type WorkspacePanelReading = {
 
 export type WorkspaceSurfaceReading = {
   surface: View;
+  observation?: CaseObservationRef;
+  layerObservation?: LayerObservationRef;
+  catalogueRenderer?: "cesium";
   camera?: Camera;
   rasterPresentations?: PublishedRasterPresentation[];
   activeLayer?: WorkspaceViewContext["activeLayer"];

@@ -142,6 +142,14 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
         if(!saved||!sameReceiptIdentity(id,saved.body,saved.result,input))return;
         if(nativeToolCallId&&(await readAgUiWorkspaceRecord(db,id))?.call.id!==nativeToolCallId)return;
         const observation=input.observation,now=Date.now();
+        if(input.flight){
+          const center=saved.result?.camera?.center;
+          if(saved.result?.flightCatalogue!==true||!center||input.flight.observedAt>now+10000)return;
+          if(input.flight.state==="arrived"){
+            const [lon,lat]=input.flight.ground.point;
+            if(Math.abs((((lon-center[0]+180)%360+360)%360)-180)>.5||Math.abs(lat-center[1])>.5)return;
+          }
+        }else if(saved.result?.flightCatalogue===true&&input.state==="applied")return;
         if(observation){
           const target=workspaceObservationTarget(saved.result);
           if(!target||observation.datasetId!==target.datasetId||observation.valueId!==target.valueId||
@@ -149,6 +157,8 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
         }
         const prior=await getReceipt(db,id);
         if(prior){
+          if(input.flight&&!isDeepStrictEqual(input.flight,prior.flight))
+            throw new TaskConflict("本轮飞行已有一份不同结果的回执。");
           if(prior.state!==input.state||input.reason!==undefined&&prior.reason!==input.reason)
             throw new TaskConflict("本轮操作已有一份不同结果的回执。");
           if(!observation||prior.observation?.state===observation.state||

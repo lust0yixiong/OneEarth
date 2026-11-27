@@ -58,10 +58,12 @@ export function CasesView() {
     return ()=>window.removeEventListener("popstate",read);
   },[]);
   useEffect(()=>{if(explorer && explorer!=="live-lightning" && explorer!=="earthquakes" && (!detail || explorer==="rain"))openVisualization(explorer,null);},[explorer,detail,openVisualization]);
-  useLayoutEffect(()=>registerWorkspaceSurface(()=>({surface:"cases",
-    ...(explorer && (detail || explorer==="earthquakes" || explorer==="live-lightning") ? {
-      case:{id:explorer,title:explorer==="earthquakes"?"全球地震":explorer==="live-lightning"?weatherCaseTitle:globeCases[explorer].title},
-    } : {})})),[explorer,detail,registerWorkspaceSurface]);
+  useLayoutEffect(()=>{
+    if(explorer==="earthquakes" || explorer==="live-lightning")return;
+    return registerWorkspaceSurface(()=>({surface:"cases",
+      ...(explorer && detail ? {case:{id:explorer,title:globeCases[explorer].title}} : {}),
+    }));
+  },[explorer,detail,registerWorkspaceSurface]);
   function navigateLive(atlas:LiveAtlas|null){
     const url=new URL(location.href);
     if(atlas)url.searchParams.set("atlas",atlas);else url.searchParams.delete("atlas");

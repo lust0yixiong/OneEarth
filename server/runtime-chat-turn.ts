@@ -10,6 +10,8 @@ import type {Payload,TaskStore} from "./task-store";
 import {workspaceActionState} from "../src/domain/workspace-view-projection";
 import {isDeepStrictEqual} from "node:util";
 import {RuntimeConversationHistory} from "./conversation-history";
+import {stripLayerObservationContext,type LayerObservationBinding} from "./runtime-layer-observation";
+import type {CaseObservationBinding} from "./runtime-case-observation";
 import {runtimeTurnContext,boundTurnContext} from "./runtime-turn-context";
 
 export type ChatResearchHandoff = {
@@ -38,7 +40,7 @@ async function originalChatQuestion(tasks:TaskStore,first:RuntimeTurnInput) {
 }
 
 export async function prepareRuntimeChat(services: RuntimeServices, id: string, input: unknown,
-  latestCompleted: (conversationId: string) => Promise<string | undefined>,mode:{publicAnswer?:true}={}): Promise<ChatPreparation> {
+  latestCompleted: (conversationId: string) => Promise<string | undefined>,mode:{publicAnswer?:true;caseObservation?:CaseObservationBinding;layerObservation?:LayerObservationBinding}={}): Promise<ChatPreparation> {
   const {tasks} = services;
   const issue = await validateTurnStructure(tasks, input);
   if (issue) return {error: issue};
@@ -99,12 +101,13 @@ export async function prepareRuntimeChat(services: RuntimeServices, id: string, 
       const conversationHistory=rows?new RuntimeConversationHistory(rows,taskId):undefined;
       const turnContext=await runtimeTurnContext(tasks,taskId,preparedBody);
       if(conversationHistory)turnContext.conversation=conversationHistory.projection();
-      const cleanBody={...preparedBody,context:boundTurnContext(preparedBody.context,turnContext)};
+      const {caseObservationRef:_observationRef,...turnInputContext}=boundTurnContext(preparedBody.context,turnContext);
+      const cleanBody={...preparedBody,context:stripLayerObservationContext(turnInputContext)};
       const outcome = await runForegroundTurn(services, taskId, cleanBody, signal, emit, {
         observationAvailable: modelMaterials.length > 0,
         observationMaterials: modelMaterials.length ? modelMaterials : undefined,
         observationUnavailable: unavailable,
-        pending,turnContext,conversationHistory,...(mode.publicAnswer&&authorizedFlashApi(original.config)?{publicAnswer:true as const}:{}),
+        pending,turnContext,conversationHistory,caseObservation:mode.caseObservation,layerObservation:mode.layerObservation,...(mode.publicAnswer&&authorizedFlashApi(original.config)?{publicAnswer:true as const}:{}),
       });
       if (outcome.kind === "reply") return outcome;
       const selectedObservation = outcome.checkpoint.plan.observationUse === "selected";

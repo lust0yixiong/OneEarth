@@ -44,7 +44,7 @@ export function modelResultBatch(batch:ResultBatch){
 }
 function observationOwned(body:RuntimeTurnInput,result:DiscoveryResponse|undefined){
   return !!(body as any).observationCheck||body.context.attachedScope?.some(item=>item.kind==="observation")||
-    result?.answerNotes?.references?.some(ref=>ref.kind==="asset"&&ref.evidenceLevel==="observation-file");
+    !!result?.caseObservation||!!result?.layerObservation||result?.answerNotes?.references?.some(ref=>ref.kind==="asset"&&ref.evidenceLevel==="observation-file");
 }
 function contextRecord(task:Task,body:RuntimeTurnInput,result:DiscoveryResponse|undefined,receipt:WorkspaceReceipt|undefined,execution:ResearchExecution|undefined,
   frame:RuntimeTurnInput["context"]["browserTurnFrame"],terminal:Record<string,unknown>|undefined):ContextRecord{

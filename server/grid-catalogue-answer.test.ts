@@ -30,8 +30,9 @@ const a=paper("A"),b=paper("B"),selection={id:"871f8aa03ffffff",grid:gridSpec("h
 const ready=():GridCoverageEvidence=>({status:"ready",scopeId:randomUUID(),revision:"a".repeat(64),cellId:selection.id,gridKey:selection.grid.key,count:1,members:[a.dsKey],sourceIds:[a.id],
   summary:{selection,filters:{...emptyFilters(),source:"paper",period:[2003,2003]},caseId:null,layer:"all",metric:"products",candidateCount:1,candidateIdentity:"a".repeat(64)}});
 
-async function fixture(t:TestContext,action:"read"|"respond"|"search"|"clarify"="read",options:{coverage?:GridCoverageEvidence;archived?:boolean;foreign?:boolean;missing?:boolean;wrongId?:boolean;unavailable?:boolean;explicitPaper?:boolean;intent?:string;noGrid?:boolean;haina?:{record:HainaRecord;catalog?:HainaCatalogStatus}}={}){
+async function fixture(t:TestContext,action:"read"|"respond"|"search"|"clarify"="read",options:{coverage?:GridCoverageEvidence;archived?:boolean;foreign?:boolean;missing?:boolean;wrongId?:boolean;unavailable?:boolean;explicitPaper?:boolean;intent?:string;noGrid?:boolean;conditionRevision?:number;haina?:{record:HainaRecord;catalog?:HainaCatalogStatus}}={}){
   const directory=mkdtempSync(path.join(tmpdir(),"oe-grid-catalogue-")),prompts=path.join(directory,"prompts.jsonl"),tasks=openTaskStore(":memory:");
+  writeFileSync(prompts,"");
   const old={path:process.env.PATH,url:process.env.ONEEARTH_DISCOVERY_URL,protocol:process.env.ONEEARTH_DISCOVERY_PROTOCOL};
   const plan={action,...(options.coverage?.status!=="unknown"?{gridIntent:options.intent??"catalogue"}:{}),goal:"核对本轮所指对象",evidenceNeed:action==="search"?"discover":action==="read"?"read":action==="clarify"?"unclear":"existing",targets:action==="read"?[options.explicitPaper?"asset:"+a.id:"grid:h7/"+selection.id]:[],
     reason:"controlled planner",clarification:action==="clarify"?"是否需要论文的方法判断？":null,evidenceGap:action==="search"?"controlled gap":null,
@@ -64,7 +65,8 @@ async function fixture(t:TestContext,action:"read"|"respond"|"search"|"clarify"=
     ...(options.haina?{hainaRecords:[options.haina.record],...(options.haina.catalog?{hainaCatalog:options.haina.catalog}:{})}:{})}});
   const parentBefore=JSON.stringify(tasks.terminal(parentId));
   const context:DiscoveryContext={filters:{...emptyFilters(),source:"public",period:[2020,2020]},selection,gridSystem:"h3",caseId:null,citation:null,layer:"all",camera:{center:[0,0],zoom:1,reason:"client mirror"},
-    candidateIds:[b.id],attachedScope:[{kind:"grid",place:"client mirror",selection,coverageScope:{id:coverage.status==="ready"?coverage.scopeId:randomUUID(),revision:coverage.revision||"b".repeat(64)}},
+    candidateIds:[b.id],attachedScope:[{kind:"grid",place:"client mirror",selection,conditionRevision:options.conditionRevision,
+      coverageScope:{id:coverage.status==="ready"?coverage.scopeId:randomUUID(),revision:coverage.revision||"b".repeat(64)}},
       ...(options.explicitPaper?[{kind:"dataset" as const,id:a.id,title:a.need.product,source:a.need.source,version:null}]:[])]};
   if(options.noGrid){delete context.attachedScope;context.selection=null;context.candidateIds=[];}
   let coverageReads=0;
@@ -73,7 +75,7 @@ async function fixture(t:TestContext,action:"read"|"respond"|"search"|"clarify"=
     const body={query,context,conversationId,turnId:randomUUID(),previousTaskId:parentId,history:[],config:{executor:"codex" as const,model:""},deepseekTools:{search:false,fetch:false}};
     const id=randomUUID();tasks.submit(id,body);tasks.claim();const outcome=await executeTurn(services,id,body,new AbortController().signal,event=>tasks.append(id,event));
     tasks.finish(id,outcome.error?"failed":"complete",outcome);assert.equal(JSON.stringify(tasks.terminal(parentId)),parentBefore);
-    const modelCalls=readFileSync(prompts,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+    const modelCalls=readFileSync(prompts,"utf8").trim().split("\n").filter(Boolean).map(line=>JSON.parse(line));
     return {id,outcome,reply:outcome.result as any,promptCount:modelCalls.length,modelCalls};
   }
   return {run,requests,tasks,origin,coverageReads:()=>coverageReads};
@@ -94,6 +96,26 @@ for(const action of ["read","respond","search"] as const)test("original scoped c
   assert.ok(!JSON.stringify(reply).includes(b.id));assert.equal(f.coverageReads(),1);
   const record=await (await fetch(f.origin+"/api/tasks/"+id+"/record")).json();assert.deepEqual(record.result.paperRecords,[a]);assert.deepEqual(record.result.answerNotes.references,reply.answerNotes.references);
   const events=f.tasks.events(id,0);assert.ok(events.some(row=>(row.researchMaterials as any)?.papers?.[0]?.id===a.id));
+});
+
+test("only verified conditions are archived with their original scope and authoritative filters",async t=>{
+  const f=await fixture(t,"read",{conditionRevision:2}),{id,reply}=await f.run();
+  const record=await (await fetch(f.origin+"/api/tasks/"+id+"/record")).json();
+  assert.equal(record.researchRange.conditionRevision,2);
+  assert.deepEqual(record.researchRange.selection,selection);
+  assert.deepEqual(record.researchRange.coverageScope,{id:reply.gridCoverage.scopeId,
+    revision:reply.gridCoverage.revision,summary:reply.gridCoverage.summary});
+  assert.deepEqual(record.researchRange.coverageScope.summary.filters.period,[2003,2003]);
+  assert.equal(record.researchRange.coverageScope.summary.filters.source,"paper");
+});
+
+test("an expired adopted condition does not fall back to the visible map or spend a model call",async t=>{
+  const coverage:GridCoverageEvidence={status:"unknown",reason:"expired",cellId:selection.id,gridKey:selection.grid.key};
+  const f=await fixture(t,"search",{coverage,conditionRevision:3}),{id,reply,promptCount}=await f.run();
+  assert.match(reply.message,/覆盖范围已失效/);assert.equal(promptCount,0);
+  assert.deepEqual(reply.gridCoverage,coverage);assert.deepEqual(f.requests,[]);
+  const record=await (await fetch(f.origin+"/api/tasks/"+id+"/record")).json();
+  assert.equal(record.researchRange,undefined);
 });
 
 test("same-conversation full archived A is retained while current B is not queried or substituted",async t=>{

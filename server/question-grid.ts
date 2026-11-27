@@ -33,7 +33,8 @@ export function verifiedGridContext(context:DiscoveryContext,evidence:GridCovera
   return {...context,...candidateScope,filters,selection,caseId,layer,gridSystem:selection.grid.system,
     camera:{...context.camera,center:selection.point},
     attachedScope:attachments.map(item=>item.kind==="grid"&&item.coverageScope
-      ?{kind:"grid",selection,place,coverageScope:{id:item.coverageScope.id,revision:item.coverageScope.revision,summary}}:item)};
+      ?{kind:"grid",selection,place,coverageScope:{id:item.coverageScope.id,revision:item.coverageScope.revision,summary},
+        ...(item.conditionRevision!==undefined?{conditionRevision:item.conditionRevision}:{})}:item)};
 }
 
 export function gridCoverageSummary(evidence:GridCoverageEvidence){

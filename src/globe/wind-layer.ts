@@ -29,7 +29,7 @@ export function windLegendGradient(theme: WindTheme) {
   const stops = ramps[theme].map(([offset, r, g, b]) => `rgb(${r},${g},${b}) ${Math.round(offset * 100)}%`);
   return `linear-gradient(90deg, ${stops.join(", ")})`;
 }
-function windRgb(speed: number, max: number, theme: WindTheme): [number, number, number] {
+export function windRgb(speed: number, max: number, theme: WindTheme): [number, number, number] {
   const stops = ramps[theme];
   const t = Math.max(0, Math.min(1, speed / max));
   const upper = stops.findIndex((s) => s[0] >= t),

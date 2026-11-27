@@ -160,6 +160,11 @@ function editionOf(a: Asset): Asset {
 }
 export const assets = resources.flatMap(assetsFor).map(editionOf);
 export const assetById = new Map(assets.map((a) => [a.id, a]));
+const hainaRecordVersions=new WeakMap<Asset,string>();
+export function activeHainaRecordVersion(id:string) {
+  const asset=assetById.get(id);
+  return asset?hainaRecordVersions.get(asset):undefined;
+}
 let nonPaperCatalogue = [...assets];
 function refreshNonPaperCatalogue() {
   nonPaperCatalogue = assets.filter(asset => !paperId(asset.id));
@@ -209,6 +214,7 @@ export function registerHaina(records:HainaRecord[],synced:string,endpoint:strin
       const i=index<0?hainaGroup.needs.length:index;
       hainaGroup.needs[i]=n;
       const a=hainaAsset(n,i),ai=assets.findIndex(v=>v.id===a.id),ri=resources.findIndex(v=>v.id===a.id);
+      hainaRecordVersions.set(a,record.version);
       if(ai<0)assets.push(a);else assets[ai]=a;
       if(ri<0)resources.push(a);else resources[ri]=a;
       assetById.set(a.id,a);byIdentity.set(assetIdentity(a),[a]);
@@ -220,6 +226,7 @@ export function registerHaina(records:HainaRecord[],synced:string,endpoint:strin
   if(signature===hainaSignature)return false;
   const needs=records.map(r=>hainaNeed(r,synced,endpoint));
   const next=needs.map(hainaAsset);
+  next.forEach((asset,index)=>hainaRecordVersions.set(asset,records[index].version));
   for(let i=assets.length-1;i>=0;i--)if(assets[i].origins.includes("haina"))assets.splice(i,1);
   for(let i=resources.length-1;i>=0;i--)if(resources[i].origins.includes("haina"))resources.splice(i,1);
   for(const [key,items] of byIdentity){const kept=items.filter(a=>!a.origins.includes("haina"));if(kept.length)byIdentity.set(key,kept);else byIdentity.delete(key);}
