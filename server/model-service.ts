@@ -12,9 +12,12 @@ export function createModelService() {
   function deepSeekKey() {
     return credentials.get("https://api.deepseek.com") || process.env.DEEPSEEK_API_KEY;
   }
+  function lookupServiceKey(config:ChatModel) {
+    return config.provider==="deepseek" ? deepSeekKey() : credentials.get(destination(config));
+  }
   function serviceKey(config:ChatModel) {
-    const value=config.provider==="deepseek" ? deepSeekKey() : credentials.get(destination(config));
-    if(!value) throw Error("请先为此模型服务设置 API Key。");
+    const value=lookupServiceKey(config);
+    if(!value?.trim()) throw Error("请先为此模型服务设置 API Key。");
     return value;
   }
   async function serviceModels(config:ChatModel) {
@@ -51,7 +54,15 @@ export function createModelService() {
       env.ANTHROPIC_DEFAULT_OPUS_MODEL=config.model;
     }
   }
-  return {setServiceKey,deepSeekKey,serviceModels,configureService};
+  return {setServiceKey,deepSeekKey,hasServiceKey:(config:ChatModel)=>!!lookupServiceKey(config)?.trim(),serviceModels,configureService};
 }
 
-export const {deepSeekKey,configureService}=createModelService();
+const runtimeModelService=createModelService();
+export const {deepSeekKey,configureService}=runtimeModelService;
+
+export function runtimeModelCredentialIssue(config:ChatModel): string | undefined {
+  if(!config.provider || config.provider==="native" || runtimeModelService.hasServiceKey(config))return;
+  return config.provider==="deepseek"
+    ? "正式 Chat 需要部署端配置 DEEPSEEK_API_KEY。页面填写的密钥用于读取模型列表。"
+    : "此自定义服务没有运行时凭据。页面填写的密钥用于读取模型列表，请选择运行时已配置的服务。";
+}

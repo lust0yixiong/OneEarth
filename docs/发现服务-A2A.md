@@ -9,19 +9,41 @@
 | 操作 | 在 OneEarth 中的用途 |
 | --- | --- |
 | `GET /.well-known/agent-card.json` | 声明数据发现能力和流式订阅 |
-| `POST /message:send` | 确定性的论文查询、论文时空投影、海纳目录与指定条件逐景查询响应 `{message}`。开放发现和精确补读响应 `{task}`，运行时显式设置 `configuration.returnImmediately=true`，随后按已受理的 Task ID 取进展 |
-| `POST /message:stream` | 接收委托并打开该任务的 SSE |
-| `GET /tasks/{id}` | 读取已保存的受托任务状态与材料 |
-| `POST /tasks/{id}:subscribe` | 首帧给出 Task 快照，随后推送按序保存的进展。任务快速结束或连接断开时按同一 ID 取回快照 |
-| `POST /tasks/{id}:cancel` | 取消已验证受理的委托。服务不可达时保留取消未确认的诊断 |
+| `POST /message:send` | 论文查询、论文时空投影、海纳目录和指定条件逐景查询返回 `200 {message}`。开放发现、精确补读与私有观测委托返回 `200 {task}`。运行时设置 `configuration.returnImmediately=true`，受理后按原 Task ID 读取进展。 |
+| `POST /message:stream` | 提交受托任务并开启该任务的 SSE。直接 Message 查询使用 `/message:send`。 |
+| `GET /tasks/{id}` | 返回 Task 对象本身 `{id,contextId,status,artifacts}`。用于按原 ID 取回状态及已保存材料。 |
+| `POST /tasks/{id}:subscribe` | SSE 首帧为 `{task}`，随后按序发送 `artifactUpdate` 与状态变更 `statusUpdate`。请求体可为空或为 `{}`。 |
+| `POST /tasks/{id}:cancel` | 取消已验证受理的委托，成功返回 Task 对象本身。已取消的 Task 可重复核对取消结果。请求体可为空或为 `{}`。 |
 
-直接 Message 带服务端生成的 `contextId` 和 `messageId`。这种查询使用独立响应上下文，不生成 `taskId` 或受托任务。运行时接受提供方的非空上下文标识。参见 [A2A Message 规范](https://a2a-protocol.org/v1.0.1/specification/#414-message)。
+所有委托用一条 `ROLE_USER` 消息和一个 `message.parts[0].data = {kind,input}` 数据 part。开放发现的 kind 为 `oneearth.discovery.request.v1`，其输入描述本次目的、证据缺口、已确认范围、引用或已得材料及本轮 DeepSeek Search 和 DeepSeek Fetch 开关。其他操作使用下文所列的 kind。发现服务用自己的配置选择规划模型并管理查找计划。公开网络的实际执行经过运行时适配层。机构和项目权限、具体材料能否外发由各自权限边界约束。
 
-`message.parts` 携带一个带 `kind=oneearth.discovery.request.v1` 的数据 part。它描述本次目的、证据缺口、已确认范围、引用或已取得材料，以及本轮 DeepSeek Search 和 DeepSeek Fetch 两个开关。发现服务用自己的配置选择规划模型并管理查找计划。公开网络的实际执行经过下述运行时适配层。既有 Bing、DuckDuckGo 和 DataCite 可发公开查询。机构和项目权限、具体材料能否外发由各自权限边界约束。
+直接 Message 带每次响应新生成的 `contextId` 和 `messageId`，且没有 `taskId`。受托 Task 使用服务端生成的 Task ID，当前实现的 Task `contextId` 与 Task ID 相同。运行时分别保存提交消息 ID、发现 Task ID、上下文和消费进度。稳定的产物 ID 和保存的事件序号用于去重。首帧包含当前快照，断流时从同一个 Task 读回存档。SSE 数据帧为 `data: <JSON>` 加空行，也可能有 `: keepalive` 注释。[服务端路由](../server/discovery-a2a-server.ts) · [运行时客户端](../server/discovery-a2a-client.ts) · [A2A Message 规范](https://a2a-protocol.org/v1.0.1/specification/#414-message)
+
+常驻研究 worker 在持久步骤中通过 GET 核对原 Task，远端仍执行时保存进度并让出 worker 名额。普通发现客户端在无持久步骤时使用 GET 与 SSE 订阅。私有观测客户端按原 Task 短请求读取状态与产物。订阅与完成竞态时，已结束的 Task 返回 HTTP 400，`error.status` 为 `FAILED_PRECONDITION`，`error.details[].reason` 为 `UNSUPPORTED_OPERATION`。改用 GET 读取原档。完成先于取消时，同样返回 HTTP 400，细因为 `TASK_NOT_CANCELABLE`。运行时通过原 Task 的 GET 核对实际终态，服务不可达时记录取消未确认。[持久研究步骤](../server/runtime-step.ts) · [状态、订阅与取消](../server/discovery-a2a-client.ts)
+
+### 服务身份与凭据
+
+普通开放发现、精确补读的 A2A 提交及其非私有 Task 操作，以及直接目录 Message，在回环入口无需 Bearer。具体网页读取仍由独立回调授权。以下三类服务凭据按接口使用。
+
+| 凭据 | 调用方向及用途 |
+| --- | --- |
+| `ONEEARTH_DISCOVERY_RECOVERY_TOKEN` | 运行时 worker → 发现的本机回环受理查证。作为查证请求的 Bearer，另需原请求指纹。 |
+| `ONEEARTH_SKILL_SERVICE_TOKEN` | 运行时 → 发现的私有观测提交、继续提交读据、读取、订阅及取消。提交凭据无效时返回 401。合法路径和任务身份下，无权读、订阅或取消私有 Task 返回 404。 |
+| `runtimeWebToolGrant` | 运行时按本轮消息发给发现服务。发现 → 运行时的工具回调使用它作 Bearer，并出示实际受理身份和调用 ID。 |
+
+[服务端授权](../server/discovery-a2a-server.ts) · [观测客户端](../server/observation-discovery-client.ts) · [部署与恢复](部署与恢复.md#端口)
 
 ### 受理回执恢复
 
-传输中断而未取得 Task ID 时，worker 按原消息编号和请求指纹从发现端的 `GET /internal/discovery-delegations/{messageId}` 查询受理记录。该接口只允许本机 IPv4 回环服务请求，使用独立服务凭据及 `X-OneEarth-Request-Fingerprint`。观测类消息另带 `X-OneEarth-Delegation-Family: observation`。找到时返回原 `taskId`，请求指纹冲突返回 409。服务端明确返回 `DELEGATION_NOT_FOUND` 与 `idempotentReplay: true` 时，原请求、消息身份和原授权仍有效才可原样再送。无法核定是否受理时保留原执行记录。此查询只返回受理身份。
+持久委托请求发出后若未取得 Task ID，worker 在 IPv4 回环调用发现端 `GET /internal/discovery-delegations/{messageId}`，附查证 Bearer 及 `X-OneEarth-Request-Fingerprint`。观测类另带 `X-OneEarth-Delegation-Family: observation`。指纹是按对应业务种类选取身份和原输入后，对递归排序对象键的 JSON 求 SHA-256。数组顺序保留，传输选项不计入指纹。[指纹算法](../server/discovery-request-fingerprint.ts)
+
+| 查证返回 | 运行时处理 |
+| --- | --- |
+| `200 {taskId,idempotentReplay:true}` | 已确认受理。读取原 Task。 |
+| `404 {code:"DELEGATION_NOT_FOUND",idempotentReplay:true}` | 确认未受理。持久委托仅在原请求、消息身份和原授权仍有效，且剩余重送额度允许时原样提交。 |
+| 409、无受理身份的其他响应或网络失败 | 保留原执行记录。单独的 HTTP 404 不足以证明可重送。 |
+
+查证只返回受理身份。离开持久步骤的普通客户端在还未受理时使用同一个消息 ID 和原请求做有界重试，取得受理后按原 Task 读回。[恢复客户端](../server/discovery-delegation-recovery.ts) · [提交及恢复策略](../server/discovery-a2a-client.ts)
 
 ### 发现渠道范围
 
@@ -116,9 +138,37 @@
 
 ### 指定来源补读
 
-`kind=oneearth.source.read.v1` 发送 `question` 和最多三项明确来源。论文用精确内容 ID `{"kind":"paper","id":"earthnano:…"}`，公开网页和 PDF 用原地址和标题 `{"kind":"web","url":"https://example.org/report.pdf","title":"报告"}`。发现服务查询论文依据；公开页和 PDF 由运行时适配层按原地址读取，遵守现有公开 URL 及重定向约束。关闭 DeepSeek Fetch 供应时，获准的指定地址仍可按原站或 PDF 路径读取。
+在 `POST /message:send` 创建 `kind=oneearth.source.read.v1` 的新委托，提交 `input.question` 及 `input.targets` 中的 1–3 项明确来源。论文用精确内容 ID `{"kind":"paper","id":"earthnano:…"}`。网页与 PDF 用原地址和标题，可选 `discoveredBy` 为 `user` 或 `assistant`。查论文由发现服务执行。网页目标可通过语法校验，但实际读取须由运行时针对当前消息和指定 URL 签发 `runtimeWebToolGrant`，并在发现服务受理后绑定 Task。
 
-请求示例带 `configuration.returnImmediately=true`。确认受理后用 Task ID 获取快照、SSE 和取消。已保存的终态成果位于受托事件的 `sourceReadResult`，含取得的 `searches`、`papers`、`issues`，可包含带实际读取时间的 `paperEvidence`。新材料与旧档摘录由运行时分别保存。精确补读未取得新材料时保留真实失败，普通打开原站或传输 PDF 文件不产生这类研究任务。
+网页目标可附 `locators`，每个目标接受 1–4 项不重复的 `{kind,value}`。支持 `section`、`table`、`figure`、`page`、`equation`，页码 `value` 使用正整数的字符串。运行时的证据决策每次定位一个获准网页身份。同一来源已实际取得时计文内定位额度，尚未取得的获准来源计新外取额度。定位不会扩大 URL 授权。工具回调会核对其 `operation.url` 与 `operation.hit.url` 都属于受权集合，定位时还要求两者是同一规范化 URL。提供定位时走原站或 PDF 路径。常规获准 URL 也可在没有 DeepSeek Fetch 时沿原站或 PDF 路径读取。[补读输入校验](../server/discovery-material-operations.ts) · [定位结构](../src/domain/source-read-locator.ts) · [取证预算](../server/research-evidence.ts) · [工具授权](../server/runtime-web-tool-store.ts)
+
+以下是定向读取 PDF 第 2 页的委托示例。域名仅示意，须使用当前任务实际获准的 URL。运行时替换消息 ID，并填入绑定该消息及同一 URL 的实际授权。纸本专用委托可省略 `runtimeWebToolGrant`。
+
+```json
+{
+  "message": {
+    "messageId": "5a55e6ed-04e3-450f-a17c-836428dd17a9",
+    "role": "ROLE_USER",
+    "parts": [{"data": {
+      "kind": "oneearth.source.read.v1",
+      "input": {
+        "question": "核对该报告第 2 页的观测方法。",
+        "targets": [{
+          "kind": "web",
+          "url": "https://example.org/report.pdf",
+          "title": "报告",
+          "locators": [{"kind": "page", "value": "2"}]
+        }],
+        "deepseekFetch": false,
+        "runtimeWebToolGrant": "<由运行时为本消息和该 URL 签发>"
+      }
+    }}]
+  },
+  "configuration": {"returnImmediately": true}
+}
+```
+
+受理只确认已有 Task。终态成果位于保存事件中的 `sourceReadResult`，包含 `searches`、`papers` 和 `issues`，可附带具有实际读取时间的 `paperEvidence`。有定位请求时，`locatorResults` 跟随对应网页命中，按请求顺序返回 `found`、`partial`、`not_found` 或 `unsupported`，可附原文窗口。运行时分别保存新材料与旧档摘录。未取得新材料时保留实际失败。浏览器普通预览沿自己的读取入口。
 
 ### 公开网络工具的运行时执行
 
@@ -128,7 +178,20 @@
 
 工具入口与工作台共用端口，常驻地址为 `127.0.0.1:5474` 上的 `POST /internal/discovery-web-tool/v1`。局域网或浏览器请求该路径返回 404。发现服务使用 `Authorization: Bearer <runtimeWebToolGrant>`，发送 JSON `{taskId,messageId,callId,operation}`。例如一笔关键词查找的 `operation` 是 `{"kind":"search","provider":"Bing","query":"NASA IMERG Final Run"}`。取回正文时，`operation` 使用 `kind:"fetch"`，带提供方、所选 `url` 和来源标识 `hit`。原生搜索使用 `kind:"native-search"` 和 `queries`，仅凭运行时已授权的原生执行器配置运行。
 
-受理绑定之前返回 425，发现侧可原样重送。受理后排队或执行中返回 HTTP 202 和 `{"state":"pending"}`。原 `callId` 与相同输入可查询已保存的 HTTP 200 回执，成功为 `{state:"complete",value}`，失败为 `{state:"failed",error}`。越权返回 403，重用编号提交不同输入返回 409。运行时 API 侧的有界执行队列与等待发现的研究 worker 分开推进。取消、到期和委托结束时停止可取消的工作。执行中断且结果未知会留下明确失败回执；再次查询原执行不重新请求上游。网页入口不提供此路径。
+运行时先检查授权仍有效、父研究仍在运行，再按相同授权和原 `callId`、原输入读回结果。排队和回执由运行时 API 自己的执行队列管理。发现服务在 202、425 或部分网络中断时，使用同一授权和逐字相同的请求重试。已保存的调用复用原回执。执行中断且结果未知时，恢复同一调用可在授权有效期间读回失败回执，避免重复调用上游。
+
+| 回调 HTTP 状态 | 含义 |
+| --- | --- |
+| 202 | 已排队或正在执行，返回 `{"state":"pending"}`。 |
+| 200 | 终态回执。业务成功为 `{state:"complete",value}`，业务失败为 `{state:"failed",error}`。 |
+| 400 | 调用身份或输入格式无效。 |
+| 403 | 授权无效、无权、已撤销、到期或父研究已结束。既有回执也适用该授权校验。 |
+| 409 | 同一 `callId` 已用于不同授权或输入。 |
+| 425 | 已有有效授权，但尚未绑定发现 Task。 |
+| 429 | 本轮调用预算或执行队列已满。 |
+| 503 | 运行时工具通道暂不可用。 |
+
+取消、到期和委托结束时停止可取消的工作。回执失败是业务结果，调用方仍须检查 200 响应内的 `state`。[回调路由](../server/runtime-web-tool-router.ts) · [运行时回执与授权](../server/runtime-web-tool-store.ts) · [发现调用与重试](../server/discovery-web-tools.ts)
 
 ### 最小委托示例
 
@@ -185,7 +248,9 @@
 
 缺少发现模型配置时，新的开放发现委托返回 HTTP 503，正文例如 `{"error":{"code":503,"status":"UNAVAILABLE","message":"ONEEARTH_DISCOVERY_CHAT_MODEL 未配置。"}}`。确定性目录查询与精确补读按各自来源的可用性处理。已受理 Task 的读取、幂等、确认等待和终态竞态示例见[隔离 PostgreSQL 契约测试](../server/discovery-a2a.test.ts)及[客户端回归](../server/discovery-a2a-client.test.ts)。
 
-运行时消息的 `messageId` 用于同一委托提交的幂等。发现服务另行生成并保存外部 Task ID，返回后由运行时写入研究事件；服务进程用内部作业执行实际工作。相同的消息及业务输入只登记一次，改动内容后重用消息 ID 会失败。稳定的产物 ID 和保存的事件序号用于重放去重。浏览器刷新接回运行时的同一个任务，发现客户端断线则以已经确认受理的 A2A Task 恢复材料。运行时进程重启仍沿用已归档材料及 `worker_interrupted` 语义。
+受托 Task 的提交以 `messageId` 和业务指纹去重。相同身份和输入复用原 Task，复用消息 ID 却改变业务输入会返回 HTTP 409 `ALREADY_EXISTS`。发现服务另有内部作业 ID，用于实际执行。同一 Task 续答以新消息登记新作业，同时保留原 Task 和产物序列。直接 Message 查询每次执行查询逻辑，未纳入这套 Task 去重。显式论文 `search` 可更新目录，运行时在其响应不确定时停止自动重试。[直接查询与受托任务](../server/discovery-a2a-server.ts) · [论文查询重试](../server/discovery-a2a-client.ts)
+
+浏览器刷新按工作台自己的运行 ID 读取状态。运行时进程重启时，持久研究通过已存步骤与发现受理身份恢复原 Task 和材料。运行中断且缺少持久检查点时，原任务以 `worker_interrupted` 结束。[工作台断线恢复](工作台-AG-UI.md#原任务恢复取消和追问) · [后台恢复](../server/postgres-task-store.ts)
 
 发现结果需要研究者补充或确认时，对外状态为 `TASK_STATE_INPUT_REQUIRED`。明确的确认使用原 Task ID 和新的稳定消息 ID，并校验原提议、已确认范围和工具许可。服务将同一 Task 指向新的内部作业，重放保留旧确认记录，运行时通过事件水位读取本次进展。已经交付的受托任务保持完成状态，后续新缺口通过新消息创建有父关联的委托。一次受托任务的结束与整项研究的进度分别记录。
 
@@ -193,7 +258,7 @@
 
 隔离候选支持同一原消息上的人工追问弹框。有效发现计划保留原澄清文本，并可在结果中附 `clarificationOptions`（两至四个由服务端赋 ID 的选项，空数组表示只需输入文字）。运行时确认真实 Task 处于 `TASK_STATE_INPUT_REQUIRED` 后，才把这类问题投影成 `clarificationPrompt.kind = "research"`。旧记录和不带选项元数据的旧提供方仍可从原消息手动回复。观测执行器回执与其他机器等待不投影为人工弹框。
 
-正式工作台按[原生 AG-UI 追问续答](架构与接口现状.md#原生-ag-ui)提交同线程的新运行，绑定原问题及 `resume.interruptId`。运行时核实同会话归档和对应选项，再把实际文字续接到 A2A。A2A 请求为 `continuedFrom` 与 `clarificationReply: {text, afterSeq}`。本地校验发现答复不完整时，可在新的本地回复消息中重新提出问题，后续仍指向已经保存的原 Task 和等待水位。若用户改了原研究目标，沿用原有问题确认流程。
+正式工作台按[原生 AG-UI 追问续答](工作台-AG-UI.md#原任务恢复取消和追问)提交同线程的新运行，绑定原问题及 `resume.interruptId`。运行时核实同会话归档和对应选项，再把实际文字续接到 A2A。A2A 请求为 `continuedFrom` 与 `clarificationReply: {text, afterSeq}`。本地校验发现答复不完整时，可在新的本地回复消息中重新提出问题，后续仍指向已经保存的原 Task 和等待水位。若用户改了原研究目标，沿用原有问题确认流程。
 
 ### 只读观测核对与机器续接
 
@@ -264,7 +329,7 @@ Mac mini 隔离候选 `287b8dd` 接受显式能力输入 `POST /api/tasks` 的 `
 
 发现模型可选择请求读取、引用已得依据、澄清，或交回通用问答。读取需求引用一个获准资料版本和变量。报告实际单位、非空记录数及首尾日期时，需求使用 `purpose: "describe"`。对照已给标准时沿用明确的单位和起止日。两种需求使用相同只读执行链。运行时复核冻结的摘要与当前授权，并将结果交回同一个发现 Task。发现确认实际可用的证据，运行时据此保存可打开的版本引用。
 
-已得依据支持本轮时，发现模型可以在一次规划中选择复用，运行时回引归档中的文件版本，文件读取次数为零。文件中的变量全部为空时，已读单位和零非空条数仍可复用。后续撤掉模型使用许可时，原回答及其依据仍可重开，新提问按当前授权使用可用材料。显式 `input.observationCheck` 继续沿用原请求、执行及权限语义。选择来源卡时先加入待发送的提问范围，实际取证随用户提交的研究任务执行。
+已得依据支持本轮时，发现模型可以在一次规划中选择复用，运行时回引归档中的文件版本，文件读取次数为零。文件中的变量全部为空时，已读单位和零非空条数仍可复用。后续撤掉模型使用许可时，原回答及其依据仍可重开，新提问按当前授权使用可用材料。显式观测核对通过同源 `POST /api/ag-ui` 提交，核对字段为 `forwardedProps.oneearth.submission.observationCheck`。沿用上文的核对参数及版本权限。上文 `POST /api/tasks` 示例用于了解历史隔离候选。选择来源卡时先加入待发送的提问范围，实际取证随用户提交的研究任务执行。
 
 ### 从已保存来源读取已登记的 NetCDF 文件
 

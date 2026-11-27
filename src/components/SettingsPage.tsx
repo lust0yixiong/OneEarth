@@ -40,7 +40,7 @@ export function SettingsPage({onBack,resetLayout}:{onBack:()=>void;resetLayout:(
     try {
       const res=await fetch("/api/models/service/key",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({config,key:apiKey})});
       if(!res.ok)throw Error((await res.json()).error);
-      setApiKey("");setAttempt(n=>n+1);setNotice("密钥已用于当前服务进程。");
+      setApiKey("");setAttempt(n=>n+1);setNotice("模型列表密钥已应用。");
     } catch(err){setError(err instanceof Error?err.message:"设置密钥失败。");}
     finally {setKeyBusy(false);}
   }
@@ -53,10 +53,13 @@ export function SettingsPage({onBack,resetLayout}:{onBack:()=>void;resetLayout:(
   const [custom,setCustom] = useState(false);
   const [testing,setTesting] = useState(false);
   const [feedback,setFeedback] = useState("");
+  const [saving,setSaving] = useState(false);
   const testRequest = useRef<AbortController|null>(null);
+  const saveRequest = useRef<AbortController|null>(null);
   function clearTest() {
     testRequest.current?.abort();
-    setTesting(false);setFeedback("");setNotice("");setError("");
+    saveRequest.current?.abort();
+    setTesting(false);setSaving(false);setFeedback("");setNotice("");setError("");
   }
   useEffect(()=>{
     const controller=new AbortController();
@@ -73,7 +76,33 @@ export function SettingsPage({onBack,resetLayout}:{onBack:()=>void;resetLayout:(
     })();
     return ()=>controller.abort();
   },[executor,provider,endpoint,attempt]);
-  useEffect(()=>()=>testRequest.current?.abort(),[]);
+  useEffect(()=>()=>{
+    testRequest.current?.abort();
+    saveRequest.current?.abort();
+  },[]);
+  async function saveModelSettings(){
+    if(saving)return;
+    const names={codex:models.codex.trim(),claude:models.claude.trim()};
+    if(!validChatModel(config) || (provider!=="native" && !config.model)){
+      setError("请检查服务地址并选择有效的模型。");return;
+    }
+    const controller=new AbortController();
+    saveRequest.current?.abort();saveRequest.current=controller;
+    setError("");setNotice("");setSaving(true);
+    try {
+      if(provider!=="native"){
+        const response=await fetch("/api/models/service/status",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({config}),signal:controller.signal});
+        const result=await response.json();
+        if(!response.ok || result.ready!==true)throw Error(result.error || "无法确认 Chat 的运行时凭据。");
+      }
+      if(controller.signal.aborted)return;
+      try {saveChatModel(config,names);}
+      catch {throw Error("浏览器未能保存设置，请检查本地存储权限。");}
+      setNotice("已保存，下次提问使用 "+(executor==="claude"?"Claude Code":"Codex")+"。");
+    } catch(err){if(!controller.signal.aborted)setError(err instanceof Error?err.message:"无法确认 Chat 的运行时凭据。");}
+    finally{if(!controller.signal.aborted)setSaving(false);}
+  }
   async function testConnection(){
 
     if(!validChatModel(config) || (provider!=="native" && !config.model)){setFeedback("请检查服务地址并选择模型。");return;}
@@ -96,24 +125,16 @@ export function SettingsPage({onBack,resetLayout}:{onBack:()=>void;resetLayout:(
       <p className="settings-version">OneEarth v{version}</p>
       <ChatHomeSettings/>
       <section><h2><SlidersHorizontal size={19}/>模型与执行器</h2>
-        <form onSubmit={e=>{
-          e.preventDefault();
-          const names={codex:models.codex.trim(),claude:models.claude.trim()};
-          if (!validChatModel(config) || (provider!=="native" && !config.model)) {
-            setError("请检查服务地址并选择有效的模型。");return;
-          }
-          try {saveChatModel(config,names);setError("");setNotice("已保存，下次提问使用 "+(executor==="claude"?"Claude Code":"Codex")+"。");}
-          catch {setError("浏览器未能保存设置，请检查本地存储权限。");}
-        }}>
+        <form onSubmit={e=>{e.preventDefault();void saveModelSettings();}}>
           <label>当前执行器<select aria-label="执行器" value={executor} onChange={e=>{switchService(e.target.value as ChatModel["executor"],provider);}}>
             <option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
           <label>模型服务<select aria-label="模型服务" value={provider} onChange={e=>switchService(executor,e.target.value as typeof provider)}>
             <option value="native">执行器原有服务</option><option value="deepseek">DeepSeek</option><option value="custom">自定义兼容服务</option>
           </select></label>
           {provider==="custom" && <label>API 基础地址<input key={executor+provider} defaultValue={endpoint} placeholder={executor==="codex"?"https://…/v1（Responses）":"https://…（Anthropic Messages）"} onChange={e=>{clearTest();setEndpoint(e.target.value);}}/></label>}
-          {provider!=="native" && <><label>服务 API Key<input type="password" autoComplete="off" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="填写或更换密钥"/></label>
-            <button type="button" disabled={keyBusy || !apiKey.trim() || !validChatModel({...config,model:""})} onClick={applyKey}>应用密钥</button>
-            <small>{provider==="deepseek"?"优先使用已应用的密钥，也支持服务端 DEEPSEEK_API_KEY。":"密钥仅用于此服务地址。"} 页面输入的密钥保存在服务进程内存中。</small></>}
+          {provider!=="native" && <><label>模型列表 API Key<input type="password" autoComplete="off" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="填写或更换密钥"/></label>
+            <button type="button" disabled={keyBusy || !apiKey.trim() || !validChatModel({...config,model:""})} onClick={applyKey}>应用列表密钥</button>
+            <small>此密钥仅供工作台读取模型列表，保存在当前进程内存中。{provider==="deepseek"?"Chat 使用部署端配置的 DEEPSEEK_API_KEY。":"Chat 使用运行时获准的凭据。"}</small></>}
           <label>模型<select aria-label="模型" value={custom?"@custom":models[executor]} onChange={e=>{
             clearTest();setCustom(e.target.value==="@custom");
             if(e.target.value!=="@custom")setModels({...models,[executor]:e.target.value});
@@ -126,12 +147,12 @@ export function SettingsPage({onBack,resetLayout}:{onBack:()=>void;resetLayout:(
           {custom && <label>自定义模型名称<input value={models[executor]} maxLength={100} onChange={e=>{clearTest();setModels({...models,[executor]:e.target.value});}}/></label>}
           {listStatus && <small role="status">{listStatus} {listStatus!=="正在读取模型列表…" && <button type="button" onClick={()=>setAttempt(attempt+1)}>重新读取</button>}</small>}
           <button type="button" disabled={testing} onClick={testConnection}>{testing?"正在测试…":"测试连接"}</button>
-          <small role="status">{feedback || "测试将通过当前选择的模型发送一条简短请求。"}</small>
+          <small role="status">{feedback || "测试使用 Chat 的运行时凭据及前台通道，发送一条简短模型请求。"}</small>
           {error && <p role="alert">{error}</p>}
-          <button type="submit" className="settings-save">保存设置</button>
+          <button type="submit" className="settings-save" disabled={saving}>{saving?"正在检查…":"保存设置"}</button>
         </form>
       </section>
-      <DeepSeekToolsSettings keyRevision={attempt}/>
+      <DeepSeekToolsSettings/>
       <section><h2><Globe size={19}/>地球与工作区</h2>
         <label>在主导航显示「数据触达」<input type="checkbox" checked={dataAccessNavigation}
           aria-describedby="data-access-navigation-help" onChange={e=>setDataAccessNavigation(e.target.checked)}/></label>

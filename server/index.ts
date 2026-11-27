@@ -5,13 +5,14 @@ import {worldLightning} from "./world-lightning";
 import {lightning} from "./lightning";
 
 import {administrativeOrientation} from "./admin-orientation";
-import { createModelService } from "./model-service";
+import { createModelService, deepSeekKey, runtimeModelCredentialIssue } from "./model-service";
 import { mkdirSync } from "node:fs";
 import { accessGuard, ipv4LoopbackOnly, workbenchLan } from "./access";
 import { staticAssets } from "./static-assets";
 import { listModels } from "./model-list";
 import { randomUUID } from "node:crypto";
-import { createModelExecutor } from "./executor";
+import { runExecutor } from "./executor";
+import { modelExecutionContext } from "./model-execution-context";
 import { validChatModel } from "../src/domain/chat-model";
 import {chatHomeSettings} from "./chat-home";
 import {sourcePreview} from "./source-preview";
@@ -58,7 +59,6 @@ const runtime = await createRuntimeApi(stateDir).catch(async error => {
   throw error;
 });
 const modelSettings = createModelService();
-const runModelTest = createModelExecutor(modelSettings.configureService);
 app.disable("x-powered-by");
 app.all(webToolPath, ipv4LoopbackOnly, accessGuard(), runtime.internal);
 app.use("/internal", (_req,res)=>res.status(404).json({error:"未找到对应接口。"}));
@@ -104,12 +104,17 @@ app.post("/api/models/service/:action",async(req,res)=>{
   if(req.params.action==="key" && typeof key==="string" && key.trim() && key.length<8192 && !/[\r\n]/.test(key)){
     modelSettings.setServiceKey(config,key.trim());res.json({ok:true});return;
   }
+  if(req.params.action==="status"){
+    const error=runtimeModelCredentialIssue(config);
+    res.set("Cache-Control","no-store").json({ready:!error,...(error?{error}:{})});
+    return;
+  }
   if(req.params.action!=="list"){res.status(400).json({error:"无效的服务设置。"});return;}
   try {res.set("Cache-Control","no-store").json({models:await modelSettings.serviceModels(config)});}
   catch(err){res.status(502).json({error:err instanceof Error?err.message:"无法读取模型清单。"});}
 });
 app.get("/api/models/deepseek/tools", (_req,res) => res.set("Cache-Control","no-store").json({
-  configured:!!modelSettings.deepSeekKey(),
+  configured:!!deepSeekKey()?.trim(),
   defaults:{search:process.env.ONEEARTH_DEEPSEEK_SEARCH==="true",fetch:process.env.ONEEARTH_DEEPSEEK_FETCH==="true"},
 }));
 app.get("/api/models/:executor",async(req,res)=>{
@@ -120,13 +125,16 @@ app.get("/api/models/:executor",async(req,res)=>{
 });
 app.post("/api/models/test",async(req,res)=>{
   const config=req.body;
-  if(!validChatModel(config)){res.status(400).json({error:"模型配置无效。"});return;}
+  if(!validChatModel(config)||(config.provider&&config.provider!=="native"&&!config.model)){res.status(400).json({error:"模型配置无效。"});return;}
+  const credentialIssue=runtimeModelCredentialIssue(config);
+  if(credentialIssue){res.status(409).json({error:credentialIssue});return;}
   const controller=new AbortController();
   res.once("close",()=>{if(!res.writableEnded)controller.abort();});
   try {
     const token="OneEarth-"+randomUUID().slice(0,8);
     const start=Date.now();
-    const reply=await runModelTest(config,"Reply with exactly this text: "+token,controller.signal);
+    const reply=await modelExecutionContext.run({role:"foreground"},()=>runExecutor(
+      config,"Reply with exactly this text: "+token,controller.signal));
     if(!reply.includes(token))throw Error("执行器已响应，但回复未通过连接校验。");
     res.json({elapsedMs:Date.now()-start});
   } catch(err){if(!controller.signal.aborted)res.status(502).json({error:err instanceof Error?err.message:"连接失败。"});}
