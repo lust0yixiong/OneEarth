@@ -11,7 +11,7 @@ OneEarth 用于提出研究问题、核对数据和文献依据，以及在球�
 
 ## 当前工作台
 
-Mac mini 常驻版本为 **v0.2.0-rc.10**，设置页显示版本。工作台支持本机与获准的局域网访问。案例页提供四张使用统一球体缩略图尺寸的可视化卡片，科学问题案例区保持空白。[现状与访问范围](docs/架构与接口现状.md) · [最新正式验收](evidence/product/ACCEPTANCE.md#mac-mini-研究成文保全与球体卡片正式发布)
+Mac mini 常驻版本为 **v0.2.0-rc.11**，设置页显示版本。工作台支持本机与获准的局域网访问。案例页提供四张使用统一球体缩略图尺寸的可视化卡片，科学问题案例区保持空白。[现状与访问范围](docs/架构与接口现状.md) · [最新正式验收](evidence/product/ACCEPTANCE.md#mac-mini-白底球正式发布) · [GitHub 预发布](https://github.com/lust0yixiong/OneEarth/releases/tag/v0.2.0-rc.11)
 
 工作台与运行时 API 共用同源入口。Chat 以 AG-UI 1.0 提交运行并接收 SSE，断流后按原运行编号读取状态和归档。默认模型为 DeepSeek Flash。需要推理摘要时，可在设置中选择 Codex 原有服务下标有「思考摘要」的 `gpt-6.1-sol`。研究 worker、发现服务和时空服务独立运行。[浏览器接口](docs/工作台-AG-UI.md) · [现行进程拓扑](docs/架构与接口现状.md#现行进程拓扑)
 
