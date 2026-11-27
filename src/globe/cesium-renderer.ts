@@ -1,11 +1,15 @@
 import {
-  Cartesian2, Cartesian3, Cartographic, CesiumWidget, Color, EllipsoidalOccluder,
-  ImageryLayer, Math as CesiumMath, PolygonHierarchy, ScreenSpaceEventHandler,
-  ScreenSpaceEventType, TileMapServiceImageryProvider,
+  Cartesian2, Cartesian3, Cartographic, CesiumWidget, Color, ColorGeometryInstanceAttribute,
+  Credit, CreditDisplay, EllipsoidalOccluder, GeometryInstance, GroundPolylineGeometry,
+  GroundPolylinePrimitive, Math as CesiumMath, PolygonHierarchy, PolylineColorAppearance,
+  ScreenSpaceEventHandler, ScreenSpaceEventType,
 } from "cesium";
 import "cesium/Build/Cesium/Widgets/widgets.css";
 import {geoCentroid} from "d3-geo";
 import type {Geometry, Position} from "geojson";
+import {mesh} from "topojson-client";
+import type {GeometryCollection, Topology} from "topojson-specification";
+import atlas from "world-atlas/land-110m.json";
 import {resolution} from "../data/evidence/globe-navigation.mjs";
 import {answerEvidence} from "../domain/answer-map";
 import {catalogRevision} from "../domain/datasets";
@@ -26,6 +30,7 @@ type ProofRenderer = ReturnType<typeof createRenderer>;
 const globalDistance = 8100000;
 const edgeColor = Color.fromCssColorString("#2c715a");
 const focusColor = Color.fromCssColorString("#b2681a");
+const coastColor = Color.fromCssColorString("#a9bdb6");
 // Ignore subpixel pose changes, including rounding in Cesium's camera basis.
 const positionEpsilon = 0.01; // metres
 const orientationEpsilon = 1e-8; // unit-vector distance
@@ -38,6 +43,19 @@ const sameCamera = (a: Camera, b: Camera) =>
 
 function cartesian(point: Position) {
   return Cartesian3.fromDegrees(point[0], point[1]);
+}
+
+function createCoastlines() {
+  const topology = atlas as unknown as Topology<{land: GeometryCollection}>;
+  const {coordinates} = mesh(topology, topology.objects.land);
+  return new GroundPolylinePrimitive({
+    allowPicking: false,
+    appearance: new PolylineColorAppearance(),
+    geometryInstances: coordinates.map(points => new GeometryInstance({
+      geometry: new GroundPolylineGeometry({positions: points.map(cartesian), width: 1.15}),
+      attributes: {color: ColorGeometryInstanceAttribute.fromColor(coastColor)},
+    })),
+  });
 }
 
 export function createCesiumRenderer(
@@ -56,15 +74,19 @@ export function createCesiumRenderer(
   observationOverlay(layers:HTMLCanvasElement[]):ReturnType<typeof createCesiumObservationOverlay>;
 } {
   (globalThis as typeof globalThis & {CESIUM_BASE_URL: string}).CESIUM_BASE_URL = "/cesium/";
+  // Suppress the widget's default badge. Imagery providers still supply their own credits.
+  CreditDisplay.cesiumCredit = new Credit("");
   const widget = new CesiumWidget(host, {
     baseLayer: false, skyBox: false, skyAtmosphere: false, scene3DOnly: true,
     requestRenderMode: true, maximumRenderTimeChange: Infinity, showRenderLoopErrors: false,
   });
   const scene = widget.scene;
   const globe = scene.globe;
-  globe.baseColor = Color.fromCssColorString("#dcebf2");
+  globe.baseColor = Color.fromCssColorString("#f8faf9");
   globe.enableLighting = false;
-  scene.backgroundColor = Color.fromCssColorString("#eaf0e7");
+  globe.showGroundAtmosphere = false;
+  scene.backgroundColor = Color.fromCssColorString("#eef3f1");
+  scene.groundPrimitives.add(createCoastlines());
   if (scene.sun) scene.sun.show = false;
   if (scene.moon) scene.moon.show = false;
   scene.screenSpaceCameraController.enableTilt = false;
@@ -75,7 +97,7 @@ export function createCesiumRenderer(
   canvas.setAttribute("role", "img");
   canvas.setAttribute("aria-label", "可旋转、缩放与点选网格的数据地球");
   const handler = new ScreenSpaceEventHandler(canvas);
-  let disposed = false, moving = false, flying = false, imageryReady = false, requestedFrame = 0, presented = "";
+  let disposed = false, moving = false, flying = false, requestedFrame = 0, presented = "";
   let presentedFilters: Scene["filters"] | undefined, presentedBatch: Scene["mapResult"];
   let lastCatalogueFrame: string | undefined;
   let observationRevision=0;
@@ -366,13 +388,6 @@ export function createCesiumRenderer(
   }
 
   place(target);
-  void TileMapServiceImageryProvider.fromUrl("/cesium/Assets/Textures/NaturalEarthII/", {maximumLevel:2})
-    .then(provider => {
-      if (disposed) return;
-      widget.imageryLayers.add(new ImageryLayer(provider), 0);
-      imageryReady = true;
-      schedule();
-    }).catch(() => { if (!disposed) onError(new Error("Cesium 海陆底图无法载入。")); });
   // Scene updates still run between renders in request-render mode. Use them
   // to settle at a quiet pose without keeping rendered frames alive.
   const removeUpdate = scene.postUpdate.addEventListener(() => {
@@ -394,7 +409,7 @@ export function createCesiumRenderer(
       renderedHeight=canvas.clientHeight;
       observationRevision++;
     }
-    if (imageryReady && globe.tilesLoaded) {
+    if (globe.tilesLoaded) {
       canvas.dataset.painted = "true";
       if (!moving && !flying && canvas.isConnected && canvas.clientWidth && canvas.clientHeight &&
           document.visibilityState === "visible") observeCatalogueFrame();
