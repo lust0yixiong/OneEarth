@@ -50,6 +50,10 @@ export function sourcesFor(m:Message) {
   const inline:AnswerReference[]=notes?.references ?? (notes?.webSources || []).map(h=>({kind:"web",title:h.title,url:h.url}));
   const refs=inline.slice();
   const keys=new Set(refs.map(ref=>ref.kind==="asset"?ref.id:ref.url));
+  for(const ref of m.answerDelivery?.materials??[]){
+    const key=ref.kind==="asset"?ref.id:ref.url;
+    if(!keys.has(key)){keys.add(key);refs.push(ref);}
+  }
   const used=[...(notes?.sources.map(s=>s.id)||[]),...(m.research?.rows.flatMap(row=>[...row.ids,...(row.references||[])])||[]),...(m.dataSupport?.candidates.map(c=>c.assetId)||[])];
   for(const id of used) if(!keys.has(id)) {
     keys.add(id);const a=assetById.get(id);refs.push({kind:"asset",id,title:a?.title||id,source:a?.source||""});

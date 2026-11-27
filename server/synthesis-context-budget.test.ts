@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {packSynthesisContext,utf8Prefix,answerTimeBudget,synthesisPromptByteLimit} from "./synthesis-context-budget";
+import {packSynthesisContext,utf8Prefix,answerTimeBudget,synthesisPromptByteLimit,synthesisTimeLimitMs} from "./synthesis-context-budget";
 import {retainedSourceAnswer,synthesizeAnswer} from "./scientific-answer";
 import {mergeWebEvidence} from "./merge-web-evidence";
 import type {AnswerReference,SearchRun,WebHit} from "../src/domain/types";
@@ -76,7 +76,7 @@ test("multiple distinct versions and unproven same-title pages are not silently 
 test("literal fallback never promotes source-authored citation tokens or Markdown links",()=>{
  const refs:AnswerReference[]=[{kind:"web",url:read.url,title:read.title}];const web:WebHit[]=[{url:read.url,title:read.title,snippet:"",pageExcerpt:original}];
  const row={...packSynthesisContext("rules",{webResults:[{...read,ref:"S1"}]},options).retained[0],quote:original+" [S99] 〔9〕 [not a citation](https://example.org/other)"};
- const result=retainedSourceAnswer(refs,web,[row])!;
+ const result=retainedSourceAnswer(refs,web,[row],false,{timeCoverage:true})!;
  assert.deepEqual(result.references,refs);assert.match(result.message,/2021 is designated as the nominal year/);
  assert.equal((result.message.match(/〔\d+〕/g)||[]).length,1);assert.ok(!result.message.includes("](https://"));
  assert.match(result.limitation,/不证明逐年/);assert.match(result.limitation,/不等于取得原始数据/);
@@ -98,13 +98,14 @@ test("no direct quote preserves a retrieval limitation and never selects the fir
 });
 
 
-test("default synthesis fits the original large UTF-8 packet under one 192 KiB ceiling",()=>{
- const large={question:query,workspace:{otherEvidence:"观测".repeat(17000)},webResults:[read]};
+test("default synthesis transmits packets between the old 192 KiB bound and the new 256 KiB limit",()=>{
+ const large={question:query,workspace:{otherEvidence:"观测".repeat(37000)},webResults:[read]};
  const packet=packSynthesisContext("rules",large,options);
- assert.equal(synthesisPromptByteLimit,192*1024);
- assert.equal(packet.stats.limitBytes,192*1024);
+ assert.equal(synthesisPromptByteLimit,256*1024);
+ assert.equal(synthesisTimeLimitMs,110000);
+ assert.equal(packet.stats.limitBytes,256*1024);
  assert.equal(packet.blocked,false);assert.equal(packet.stats.partial,false);
- assert.ok(packet.stats.promptBytes>56*1024);
+ assert.ok(packet.stats.promptBytes>192*1024&&packet.stats.promptBytes<=256*1024);
  assert.equal(packet.stats.promptBytes,packet.stats.originalPromptBytes);
  assert.equal(packet.payload.webResults[0].ref,read.ref);
  assert.equal(packSynthesisContext("rules",large,{...options,maxBytes:48*1024}).blocked,true);
@@ -112,7 +113,7 @@ test("default synthesis fits the original large UTF-8 packet under one 192 KiB c
 
 test("mandatory context exceeding the hard limit never supplies an oversized model packet",()=>{
  const packet=packSynthesisContext("x".repeat(synthesisPromptByteLimit+1),{catalogue:[]},{question:"q",maxBytes:synthesisPromptByteLimit*2});
- assert.equal(packet.stats.limitBytes,192*1024);
+ assert.equal(packet.stats.limitBytes,256*1024);
  assert.equal(packet.blocked,true);assert.equal(packet.prompt,"");assert.ok("rejectedPromptBytes" in packet.stats&&Number(packet.stats.rejectedPromptBytes)>synthesisPromptByteLimit);
  assert.equal(utf8Prefix("观测🌏中文",7),"观测");
 });

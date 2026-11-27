@@ -24,6 +24,49 @@ import { emptyFilters } from "../domain/spatial";
 import { useWorkspace } from "../domain/store";
 import type { AnswerReference, Message } from "../domain/types";
 
+function RetainedResearch({message,open}:{message:Message;open:(ref:AnswerReference)=>void}){
+  const delivery=message.answerDelivery;
+  if(!delivery)return null;
+  const topics=message.researchProgress?.actions.filter(action=>action.area==="literature" && action.topic)??[];
+  const assets=new Map(delivery.materials.flatMap(ref=>ref.kind==="asset"?[[ref.id,ref] as const]:[]));
+  const grouped=new Set<string>();
+  const rows=topics.map(action=>{
+    const refs=(action.evidence??[]).flatMap(source=>{
+      const ref=assets.get(source.assetId);
+      if(!ref)return [];
+      grouped.add(ref.id);
+      return [ref];
+    });
+    const status=action.status==="not_started" || action.status==="queued" ? "文献渠道本轮未查"
+      : action.status==="timeout" ? "文献检索超时"
+      : action.status==="done" && action.count===0 ? "未找到论文依据"
+      : (action.count??0)>0 ? "已核实 "+action.count+" 篇论文用法"
+      : "文献核查未完成";
+    return {id:action.id,topic:action.topic,status,refs};
+  });
+  const remaining=delivery.materials.filter(ref=>ref.kind==="web" || !grouped.has(ref.id));
+  if(!rows.length && !remaining.length)return null;
+  const links=(refs:AnswerReference[])=>refs.length>0 && <ul className="oe-retained-links">
+    {refs.map(ref=><li key={ref.kind==="asset"?ref.id:ref.url}>
+      <button type="button" onClick={()=>open(ref)}>{ref.title} <ArrowUpRight size={12} aria-hidden="true"/></button>
+    </li>)}
+  </ul>;
+  return <section className="oe-retained-research" aria-label="本轮已保留资料">
+    <h3>{delivery.materials.length ? "本轮已保留的依据" : "本轮文献核查范围"}</h3>
+    {delivery.materials.length>0 && <p>以下为本轮已取得的论文用法或原文片段，适用性仍待核查。</p>}
+    {!!rows.length && <ul className="oe-retained-topics">
+      {rows.map(row=><li key={row.id}>
+        <div className="oe-retained-topic"><strong>{row.topic}</strong><span>{row.status}</span></div>
+        {links(row.refs)}
+      </li>)}
+    </ul>}
+    {!!remaining.length && <div>
+      {!!rows.length && <h4>其他已保留依据</h4>}
+      {links(remaining)}
+    </div>}
+  </section>;
+}
+
 export function AnswerBody({message,question,animate,archived,children,clarificationAction,onQuote,onReady,initiallyOpenProcess,showLiveMembership=true}:{message:Message;question:string;animate:boolean;archived:boolean;children?:ReactNode;clarificationAction?:ReactNode;onQuote?:(reference:AnswerReference,number:number)=>void;onReady?:(id:string)=>void;initiallyOpenProcess?:boolean;showLiveMembership?:boolean}){
   const m=useMemo(()=>literatureDisplay(message),[message]);
   const {state:s,inspectAsset,openVisualization,patch,focusAnswerEvidence}=useWorkspace();
@@ -79,8 +122,18 @@ export function AnswerBody({message,question,animate,archived,children,clarifica
   return <>
     <RunDetails initiallyOpen={initiallyOpenProcess} trace={m.runTrace} researchProgress={m.researchProgress} runs={notes?.searches} stage={notes?.paperTrace || notes?.basis} failed={m.failed} openFinding={inspect}/>
     <AnswerContent text={m.text} quote={onQuote} selectedReferences={s.draftScope?.flatMap(i=>i.kind==="reference"?[i.reference]:[]) || []} references={inlineRefs} details={referenceDetails} inspect={inspect} hover={hover} inCell={active?inCell:undefined} focused={active?s.mapFocus?.assetId:undefined}
-      limitation={notes?.limitation} onComplete={finish} animate={animate && !m.failed} open={refs=>setDrawer({refs,title:"本段来源与依据"})}
+      limitation={m.answerDelivery?undefined:notes?.limitation} onComplete={finish} animate={animate && !m.failed} open={refs=>setDrawer({refs,title:"本段来源与依据"})}
       savedActions={savedActions}/>
+    <RetainedResearch message={m} open={ref=>{
+      if(ref.kind==="asset"){void inspect(ref.id);return;}
+      const evidence=savedWebDocument(ref,m);
+      if(evidence)patch({evidence,previewKind:"text",inspector:null});
+      else setDrawer({refs:[ref],title:"本轮保留的依据"});
+    }}/>
+    {m.answerDelivery && notes?.limitation && <details className="oe-retained-limitations">
+      <summary>适用范围与限制</summary>
+      <p>{notes.limitation}</p>
+    </details>}
     {ready && <><AnswerMapContext message={m} locations={locations} cellCount={inCell.size} loading={!membership.members} error={membership.error} showCellRelation={showLiveMembership}/>
     {notes?.followUp && <p className="answer-question">{notes.followUp}</p>}
     {batch && remaining.length>0 && <details className="chat-role" onToggle={e=>setExpanded(e.currentTarget.open)}>

@@ -19,13 +19,15 @@ function currentExplorer():RegionalId|LiveAtlas|null {
 }
 const land = feature(atlas as any, (atlas as any).objects.land);
 function EarthquakePreview() {
+  const radius = 106;
+  const diameter = radius * 2;
   const projection = geoOrthographic()
     .rotate([143, -62])
-    .translate([150, 112])
-    .scale(106);
+    .translate([radius, radius])
+    .scale(radius);
   const path = geoPath(projection);
   return (
-    <svg viewBox="0 0 300 195" aria-hidden="true">
+    <svg viewBox={`0 0 ${diameter} ${diameter}`} aria-hidden="true">
       <path d={path({ type: "Sphere" }) || ""} fill="#d7e6db" />
       <path
         d={path(land as any) || ""}
@@ -33,10 +35,10 @@ function EarthquakePreview() {
         stroke="#9ebaa8"
         strokeWidth=".6"
       />
-      <circle cx="150" cy="112" r="5" fill="#258f5b" />
+      <circle cx={radius} cy={radius} r="5" fill="#258f5b" />
       <circle
-        cx="150"
-        cy="112"
+        cx={radius}
+        cy={radius}
         r="11"
         fill="none"
         stroke="#258f5b"
@@ -77,20 +79,20 @@ export function CasesView() {
       <section className="case-section" aria-labelledby="viz-case-heading">
         <h2 id="viz-case-heading">数据可视化</h2>
         <button className="visual-case" onClick={()=>navigateLive("live-lightning")}>
-          <img src="/visualizations/regional/lightning-globe.webp" width="100" height="100" alt=""/>
+          <img className="visual-case-preview" src="/visualizations/regional/lightning-globe.webp" width="100" height="100" alt=""/>
           <span><strong>{weatherCaseTitle}</strong><small>{weatherCaseCoverage}</small></span><ArrowUpRight size={18}/>
         </button>
         <button className="visual-case" onClick={()=>navigateLive("earthquakes")}>
-          <span className="quake-preview" aria-hidden="true"><EarthquakePreview/></span>
+          <span className="visual-case-preview" aria-hidden="true"><EarthquakePreview/></span>
           <span><strong>全球地震</strong><small>USGS 近 24 小时地震 · 全球地震台站</small></span><ArrowUpRight size={18}/>
         </button>
         {visualizationCatalog.map(v=><button key={v.id} className="visual-case" onClick={()=>openVisualization(v.id,null)}>
-          <img src={v.preview} width="100" height="100" alt="" />
+          <img className="visual-case-preview" src={v.preview} width="100" height="100" alt="" />
           <span><strong>{v.title}</strong><small>{v.dataset} · {v.level}</small><small>起报 {v.referenceTime}</small><small>预报时效 {v.forecastHours}</small></span>
           <ArrowUpRight size={18}/>
         </button>)}
         <button className="visual-case" onClick={()=>openVisualization("rain",null)}>
-          <img src="/visualizations/regional/rain-globe.webp" width="100" height="100" alt=""/>
+          <img className="visual-case-preview" src="/visualizations/regional/rain-globe.webp" width="100" height="100" alt=""/>
           <span><strong>{globeCases.rain.title}</strong><small>{globeCases.rain.dataset}</small><small>{rainCoverageLabel(publication)}</small></span>
           <ArrowUpRight size={18}/>
         </button>

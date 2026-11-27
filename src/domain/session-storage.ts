@@ -1,7 +1,7 @@
 import {mergeTaskLifecycle} from "./task-lifecycle-client";
 import {mergeNativeRunProcess} from "./native-summary-client";
 import {workspaceReceiptAdvances} from "./published-raster-observation";
-import type { Message,RunTrace } from "./types";
+import type { Message,RunTrace,WebHit } from "./types";
 import type { WorkspaceSnapshot } from "./store";
 
 const databaseName = "oneearth.sessions.v1";
@@ -190,7 +190,7 @@ export async function writeSession(
   return written;
 }
 
-export async function attachArchivedRunTrace(session:string,id:string,turnId:string,text:string,trace:RunTrace) {
+export async function attachArchivedRunTrace(session:string,id:string,turnId:string,text:string,trace:RunTrace,retainedReadings:WebHit[] = []) {
   const db=await database(),tx=db.transaction("messages","readwrite"),records=tx.objectStore("messages");
   const existing=records.get([session,id]);
   let updated:Message|undefined;
@@ -198,8 +198,10 @@ export async function attachArchivedRunTrace(session:string,id:string,turnId:str
     const previous:Message|undefined=existing.result?.message;
     if(!previous || !canAttachTrace(previous,{id,replyTo:turnId,text}))return;
     const runTrace=mergeNativeRunProcess(id,previous.runTrace,trace);
-    if(runTrace===previous.runTrace)return;
-    updated={...previous,runTrace};
+    const answerNotes=previous.answerDelivery&&previous.answerNotes&&retainedReadings.length
+      ? {...previous.answerNotes,webSources:retainedReadings} : previous.answerNotes;
+    if(runTrace===previous.runTrace && answerNotes===previous.answerNotes)return;
+    updated={...previous,runTrace,answerNotes};
     records.put({session,id,message:updated});
   };
   await completed(tx);

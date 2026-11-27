@@ -13,6 +13,7 @@ import { discoveryClarificationResult, loadResearchRecord, researchRecordId, can
 import {clarificationAnswerText,validClarificationPrompt,type ClarificationAnswer} from "./clarification";
 import {datasetScope,mergeScope,scopedQuestionContext,type ScopeItem} from "./question-scope";
 import {previewableTab} from "./web-preview";
+import {archivedAnswerDelivery,retainedWebReadings} from "./research-delivery";
 import {researchRegionCamera,validResearchRegion,sameResearchRegion,type ResearchRegion,type ResearchRegionLayer} from "./research-region";
 import {answerMapBatch,answerFilters,initialAnswerCamera,gridCamera,evidenceCamera,evidenceSelection} from "./answer-map";
 import { globeCases,layerFrameCount,datasetLayers,isForestDate,type RegionalId } from "./regional-cases";
@@ -521,6 +522,10 @@ function restoreGlobeState(state:State, workspace:Partial<WorkspaceSnapshot>) {
 const sessionFailure = "浏览器未能保存会话。请检查本地存储空间或权限，保留此标签页以便重试。";
 function archivedChatMessages(saved:ResearchRecord,runTrace?:Message["runTrace"]):Message[] {
   const reply=saved.result;
+  const researchProgress=readResearchProgress(saved.researchProgress,saved.id);
+  const answerDelivery=archivedAnswerDelivery(reply,researchProgress);
+  const retainedReadings=retainedWebReadings(reply,answerDelivery);
+  const answerNotes=reply.answerNotes && retainedReadings.length ? {...reply.answerNotes,webSources:retainedReadings} : reply.answerNotes;
   const nativeInterrupt=readOneEarthAgUiInterruptRecord(saved.interrupt,saved.id);
   const questionCheck=nativeInterrupt?.kind==="question-check" ? nativeInterrupt.questionCheck : reply.questionCheck;
   const clarificationPrompt=validClarificationPrompt(reply.clarificationPrompt) ? reply.clarificationPrompt : undefined;
@@ -546,7 +551,7 @@ function archivedChatMessages(saved:ResearchRecord,runTrace?:Message["runTrace"]
       },historicalReply:true} : {}),
       workspacePending:reply.workspacePending,researchIntent:reply.researchIntent,conversationContext:reply.conversationContext,
       conversationEvidence:reply.conversationEvidence,conversationAssertionEvidence:reply.conversationAssertionEvidence,
-      answerNotes:reply.answerNotes,runTrace,researchProgress:readResearchProgress(saved.researchProgress,saved.id),researchRegion:reply.researchRegion,
+      answerNotes,answerDelivery,runTrace,researchProgress,researchRegion:reply.researchRegion,
       gridCoverage:reply.gridCoverage,
       ...(reply.clarification || clarificationPrompt ? {clarification:true} : {}),
       clarificationPrompt,
@@ -601,7 +606,8 @@ async function loadInitialSession(): Promise<State> {
       ?.some(reference=>reference.kind==="asset"&&reference.evidenceLevel==="catalogue-record");
     const cachedReceipt=cachedResearch?.workspaceReceipt;
     const needsReceipt=!!cachedResearch?.workspaceEffect && (!cachedReceipt || cachedReceipt.observation?.state==="loading");
-    if(researchId&&(!cachedResearch||needsArchivedCatalogue||needsReceipt)){
+    const needsDelivery=!!cachedResearch&&!cachedResearch.answerDelivery&&cachedResearch.text.startsWith("回答整理未能完成。");
+    if(researchId&&(!cachedResearch||needsArchivedCatalogue||needsReceipt||needsDelivery)){
       try{
         const saved=await loadResearchRecord(researchId);
         const reply=saved.result;
@@ -618,11 +624,20 @@ async function loadInitialSession(): Promise<State> {
           state.sessionId=saved.conversationId;
           state.messages=mergeMessages(stored?.messages||[],messages);
           await writeSession(state.sessionId,saved.question,captureWorkspace(state),state.messages);
-        }else if(needsReceipt && saved.conversationId===state.sessionId && saved.turnId===cachedResearch.replyTo){
-          const workspaceTool=readWorkspaceToolRecord(saved.workspaceTool,saved.id,reply);
-          const receipt=saved.workspaceTool===undefined || workspaceTool ? readRecordWorkspaceReceipt(saved) : undefined;
-          if(receipt && receipt.effectId===cachedResearch.workspaceEffect?.effectId){
-            const updated={...cachedResearch,workspaceReceipt:receipt,verifiedWorkspaceCall:workspaceTool?.call};
+        }else if(saved.conversationId===state.sessionId && saved.turnId===cachedResearch.replyTo && saved.id===cachedResearch.id){
+          let updated=cachedResearch;
+          if(needsDelivery && cachedResearch.text===reply.message){
+            const [,message]=archivedChatMessages(saved);
+            if(message.answerDelivery)updated={...updated,answerDelivery:message.answerDelivery,
+              answerNotes:message.answerNotes,researchProgress:message.researchProgress??cachedResearch.researchProgress};
+          }
+          if(needsReceipt){
+            const workspaceTool=readWorkspaceToolRecord(saved.workspaceTool,saved.id,reply);
+            const receipt=saved.workspaceTool===undefined || workspaceTool ? readRecordWorkspaceReceipt(saved) : undefined;
+            if(receipt && receipt.effectId===cachedResearch.workspaceEffect?.effectId)
+              updated={...updated,workspaceReceipt:receipt,verifiedWorkspaceCall:workspaceTool?.call};
+          }
+          if(updated!==cachedResearch){
             state.messages=mergeMessages(state.messages,[updated]);
             await writeSession(state.sessionId,saved.question,undefined,[updated]);
           }
@@ -1675,8 +1690,10 @@ function useWorkspaceValue(initialState: State) {
     processReads.current.add(key);
     const record=saved ?? await loadResearchRecord(runId).catch(()=>undefined);
     const trace=record && readArchivedChatTrace(record,{id:runId,conversationId:threadId,turnId},text);
-    if(!trace)return;
-    const updated=await attachArchivedRunTrace(threadId,runId,turnId,text,trace).catch(()=>undefined);
+    if(!trace || !record)return;
+    const archivedDelivery=record.result.answerDelivery;
+    const retainedReadings=retainedWebReadings(record.result,archivedDelivery);
+    const updated=await attachArchivedRunTrace(threadId,runId,turnId,text,trace,retainedReadings).catch(()=>undefined);
     if(!updated)return;
     dispatch({type:"messages",sessionId:threadId,messages:[updated]});
     channel.current?.postMessage({sessionId:threadId,id:runId});
@@ -1786,7 +1803,7 @@ function useWorkspaceValue(initialState: State) {
           ...(state==="stale" ? {reason:"workspace-changed" as const} : reason ? {reason} : {}),
           ...(state==="applied" && target ? {observation:{...target,state:"loading" as const,observedAt:Date.now()}} : {})} : undefined;
       const completeWorkspace=async (message:string,extra:Partial<Message>,receipt?:BrowserWorkspaceReceipt)=>{
-        const ready=complete(canonicalResponse?.message??message,{answerNotes:canonicalResponse?.answerNotes,...extra,
+        const ready=complete(canonicalResponse?.message??message,{answerNotes:canonicalResponse?.answerNotes,answerDelivery:canonicalResponse?.answerDelivery,...extra,
           workspaceEffect:effect,workspaceReceipt:receipt,verifiedWorkspaceCall});
         if(receipt?.observation?.state==="loading")
           watchingRasters.current.set(delivery.id,{receipt,version:serial.current,ready});
@@ -1916,7 +1933,11 @@ function useWorkspaceValue(initialState: State) {
         const archivedTrace=record && readArchivedChatTrace(record,{id:run.runId,conversationId:run.threadId,turnId:run.turnId},response.message);
         const liveTrace=entry.progress.trace.providerReasoning?.length ? entry.progress.trace : undefined;
         const runTrace=mergeNativeRunProcess(run.runId,liveTrace,archivedTrace);
-        const r={...response,runTrace};
+        const answerDelivery=record ? archivedAnswerDelivery(record.result,archivedProgress) : response.answerDelivery;
+        const archivedReadings=record ? retainedWebReadings(record.result,answerDelivery) : [];
+        const answerNotes=response.answerNotes && archivedReadings.length
+          ? {...response.answerNotes,webSources:archivedReadings} : response.answerNotes;
+        const r={...response,answerDelivery,answerNotes,runTrace};
         canonicalResponse=r;
         hydrateCompletedProcess=!!liveResult && "response" in liveResult && !record;
         if(entry.progress.taskLifecycle?.runtimePhase?.phase==="cancelled"){

@@ -6,7 +6,7 @@ import type {AnswerReference,Message} from "../domain/types";
 import {doiFor} from "../domain/answer-sources";
 export function AnswerFooter({message:m,question,refs,open}:{message:Message;question:string;refs:AnswerReference[];open:()=>void}) {
   const [busy,setBusy]=useState(false),[error,setError]=useState("");
-  const completionLabel=m.taskLifecycle?.runtimePhase?.phase==="cancelled" ? "已取消" : "完成";
+  const completionLabel=m.taskLifecycle?.runtimePhase?.phase==="cancelled" ? "已取消" : m.answerDelivery ? "" : "完成";
   const name=(question || "OneEarth").slice(0,52).replace(/[\\/:*?"<>|]/g,"")+" · 研究记录.pdf";
   const notes=m.answerNotes;
   const referenceLines=refs.map(ref=>ref.title+" · "+(ref.kind==="web"?ref.url:doiFor(ref.id)||ref.source));

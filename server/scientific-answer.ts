@@ -243,7 +243,7 @@ const repairableSynthesisError=(error:unknown)=>error instanceof SourceReadClaim
  error instanceof AnswerStructureError||error instanceof SyntaxError;
 
 /** Last resort: expose only real returned identities, without inventing a scientific answer. */
-export function retainedSourceAnswer(materials:AnswerReference[],web:WebHit[],evidence:RetainedEvidence[]=[],allowEmpty=false):SynthesisAnswer|undefined{
+export function retainedSourceAnswer(materials:AnswerReference[],web:WebHit[],evidence:RetainedEvidence[]=[],allowEmpty=false,options:{hasSavedMaterials?:boolean;timeCoverage?:boolean}={}):SynthesisAnswer|undefined{
  if(!materials.length&&!allowEmpty)return;
  const title=(value:string)=>value.replace(/[\[\]〔〕`<>]/g,"").replace(/\s+/g," ").slice(0,300);
  const literal=(value:string)=>value.replace(/\[([^\]\n]+)\]\([^\s)]+\)/g,"$1").replace(/\[/g,"［").replace(/\]/g,"］").replace(/〔/g,"（").replace(/〕/g,"）");
@@ -255,8 +255,9 @@ export function retainedSourceAnswer(materials:AnswerReference[],web:WebHit[],ev
  eligible.forEach(add);
  const message=selected.length?"回答整理未能完成。以下仅保留实际材料中可定位的文字，尚未完成原目标的适用性分析：\n\n"+
    selected.map(row=>"- **"+title(row.title)+"**（"+row.level+"）：\n  > "+literal(row.quote!).replace(/\n/g,"\n  > ")+" ["+row.ref+"]").join("\n\n"):
-   "回答整理未能完成。本轮委托记录已保留，但当前没有足以直接回答原目标的可核片段；不能据目录标题、地区或变量关键词确认资料适用。可从本轮检索批次查看实际来源与读取记录。";
- return {...parseSynthesis(JSON.stringify({message,calculationRequests:[],limitation:"这不是完整研究回答。片段所述输入时段、标称年份或地域相交不证明逐年或完整研究区覆盖；原目标的完整年份、范围与变量口径仍未核实。目录/网页/文献片段不等于取得原始数据文件或实际测量，未完成的计算与核验不视作成功。"}),materials,web),recovery:{failedNodes:["final-answer"]}};
+   options.hasSavedMaterials?"回答整理未能完成。可打开本轮已保存的资料查看出处，现有资料尚不足以回答原问题。":
+   "回答整理未能完成。当前没有足以直接回答原目标的可核片段；不能据目录标题、地区或变量关键词确认资料适用。";
+ return {...parseSynthesis(JSON.stringify({message,calculationRequests:[],limitation:"这不是完整研究回答。"+(options.timeCoverage?"片段所述输入时段、标称年份或地域相交不证明逐年或完整研究区覆盖；原目标的时段、范围与变量口径仍未核实。":"现有片段尚不能确认资料是否适用于原问题。")+"目录、网页或文献片段不等于取得原始数据文件或实际测量，未完成的计算与核验不视作成功。"}),materials,web),recovery:{failedNodes:["final-answer"]}};
 }
 
 /** Calculation planning is a control step, never an answer. Keep a validated

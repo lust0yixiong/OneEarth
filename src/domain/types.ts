@@ -267,6 +267,11 @@ export type AnswerReference =
   | {kind:"asset"; id:string; title:string; source:string;referenceType?:CitationType;sourceChannel?:ReferenceChannel; evidenceLevel?:"catalogue-record"|"observation-file";
       observationEvidence?:import("./observation-evidence").ObservationEvidence}
   | {kind:"web"; title:string; url:string;referenceType?:CitationType;sourceChannel?:ReferenceChannel};
+export interface AnswerDelivery {
+  status: "partial" | "unavailable";
+  reason: "timeout" | "incomplete";
+  materials: AnswerReference[];
+}
 export interface ToolCall {
   id:string; kind:"Skill"|"MCP"|"tool"; name:string; input:string; output?:string;
   status:"running"|"done"|"partial"|"failed"; error?:string;
@@ -323,6 +328,7 @@ export interface Message {
   runTrace?:RunTrace;
   researchProgress?:import("./native-agui-research-progress").ResearchProgress;
   answerNotes?: AnswerNotes;
+  answerDelivery?: AnswerDelivery;
   catalogMatch?: DiscoveryResponse["catalogMatch"];
   dataSupport?: DataSupport;
   research?: ResearchAnswer;
@@ -420,6 +426,7 @@ export interface DiscoveryResponse {
   paperRecords?: import("./paper-record").PaperRecord[];
   paperOnly?: boolean;
   answerNotes?: AnswerNotes;
+  answerDelivery?: AnswerDelivery;
   modelIds?: string[];
   modelExecutor?: "codex" | "claude";
   pushFeed?: PushFeed;

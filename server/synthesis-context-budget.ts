@@ -2,7 +2,7 @@ import {runtimeStepContext} from "./runtime-step";
 import {rankEvidence} from "./evidence-ranking";
 import {modelSafeText,modelSafeValue} from "./model-context-safety";
 
-export const synthesisPromptByteLimit=192*1024;
+export const synthesisPromptByteLimit=256*1024;
 export const synthesisTimeLimitMs=110000;
 type Row=Record<string,any>&{ref:string};
 export type RetainedEvidence={ref:string;identity:string;title:string;quote?:string;level:string;sourceGroup:string;quality:number;score:number;mentionsRequestedYear:boolean;relevant:boolean;pinned:boolean};

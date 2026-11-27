@@ -194,9 +194,9 @@ test("large exact-source generation and corrective model call share the new cap 
     if(promptSizes.length===1)return JSON.stringify({...template,message:correctStatement+"。[S1]",sourceChanges:[{...valid,currentQuote:7}]});
     assert.equal(decoded(prompt).issue.comparison.path,"sourceChanges[0].currentQuote");
     return JSON.stringify({...template,message:correctStatement+"。[S1]",sourceChanges:[valid]});
-  },current("\n"+"原始测站校准记录。".repeat(3200)));
-  assert.equal(promptSizes.length,2);
-  assert.ok(promptSizes.every(bytes=>bytes>56*1024&&bytes<=192*1024));
+  },current("\n"+"原始测站校准记录。".repeat(6200)));
+  assert.equal(promptSizes.length,2,JSON.stringify(promptSizes));
+  assert.ok(promptSizes.every(bytes=>bytes>192*1024&&bytes<=256*1024));
   assert.equal(result.answerNotes?.references?.length,1);
   assert.match(result.message,new RegExp(correctStatement));
 });

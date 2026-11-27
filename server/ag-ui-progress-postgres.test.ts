@@ -14,6 +14,7 @@ import {runtimeTaskLease} from "./runtime-task-lease";
 import type {RuntimeTurnInput} from "./runtime-turn-handoff";
 import {readResearchProgressState} from "../src/domain/native-agui-research-progress";
 import {nativeAgUiStepLabels} from "../src/domain/native-agui-progress";
+import type {DiscoveryResponse} from "../src/domain/types";
 import {emptyFilters} from "../src/domain/spatial";
 
 const fixture=process.env.ONEEARTH_AGUI_TEST_DATABASE_URL;
@@ -98,6 +99,27 @@ test("native HTTP streams only persisted lifecycle steps across park, recovery a
  const starts=first.stream.frames.filter(frame=>frame.type==="STEP_STARTED").map(frame=>frame.stepName);assert.deepEqual(starts,["foreground","research-queued","research-executing","discovery-wait","research-resuming","source-read-wait","research-resuming","discovery-wait","research-resuming"]);
  assert.deepEqual((await tasks.terminal(first.id))?.result,result);assert.equal(await tasks.chat.latestCompleted(first.threadId),first.id);const archive=await(await fetch(origin+"/api/tasks/"+first.id+"/record")).json();assert.equal(archive.id,first.id);assert.equal(archive.turnId,first.turnId);assert.deepEqual(archive.result,result);assert.deepEqual(archive.researchProgress,research);
  assert.equal((await db.query("SELECT public_step FROM runtime_agui_runs WHERE id=$1",[first.id])).rows[0].public_step,null);const settled=(await tasks.chat.agUiEvents(first.id)).length;await tasks.append(first.id,{runtimePhase:{phase:"executing"},researchProgressFact:{id:"late",area:"synthesis",status:"done"}});await tasks.chat.append(first.id,{chatPhase:"foreground"});assert.equal(await tasks.finish(first.id,"failed",{error:"PRIVATE_LATE"}),false);assert.equal((await tasks.chat.agUiEvents(first.id)).length,settled);
+ // A synthesis timeout with one retained reference is a completed delivery
+ // with a partial result; progress and the original archive agree with SSE.
+ const partial=await begin();await queued(partial);const partialClaim=await claim(partial.id);
+ const answerDelivery={status:"partial",reason:"timeout",materials:[
+  {kind:"asset",id:"earthnano:"+"a".repeat(64),title:"实际已保存的论文资料",source:"文献资料",sourceChannel:"assertion"},
+ ]} satisfies NonNullable<DiscoveryResponse["answerDelivery"]>;
+ const partialResult={message:"回答整理未能完成。可打开本轮已保存的资料查看出处。",answerDelivery};
+ await runtimeTaskLease.run(partialClaim.lease,async()=>{
+  const fact={id:"answer-synthesis",area:"synthesis"};
+  await tasks.append(partial.id,{researchProgressFact:{...fact,status:"running"}});
+  await tasks.append(partial.id,{researchProgressFact:{...fact,status:"timeout"}});
+  assert.equal(await tasks.finish(partial.id,"complete",{result:partialResult}),true);
+ });
+ await partial.stream.done;assertBalanced(partial.stream.frames);
+ assert.deepEqual(partial.stream.frames.at(-1)?.result.oneearth.response,partialResult);
+ assert.equal((await getProgress(partial.id)).researchProgress.actions.at(-1).status,"timeout");
+ const partialRecord=await (await fetch(origin+"/api/tasks/"+partial.id+"/record")).json();
+ assert.equal(partialRecord.id,partial.id);
+ assert.equal(partialRecord.conversationId,partial.threadId);
+ assert.equal(partialRecord.turnId,partial.turnId);
+ assert.deepEqual(partialRecord.result,partialResult);
  // Business failure closes the source-read wait, but no private error/stage
  // or tool/model content is emitted as a standard progress field.
  const failed=await begin();await queued(failed);const failedClaim=await claim(failed.id);await runtimeTaskLease.run(failedClaim.lease,()=>tasks.park!(failed.id,{kind:"controlled-checkpoint"},Date.now()+10000,{runtimePhase:{phase:"waiting-discovery",operation:"read"},stage:"PRIVATE_READ"}));await until(()=>failed.stream.frames.at(-1)?.stepName==="source-read-wait");await tasks.finish(failed.id,"failed",{error:"PRIVATE_INTERNAL_FAILURE",code:"controlled_failure"});await failed.stream.done;assertBalanced(failed.stream.frames);assert.equal(failed.stream.frames.at(-1).type,"RUN_ERROR");assert.equal((await tasks.terminal(failed.id))?.code,"controlled_failure");

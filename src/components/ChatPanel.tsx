@@ -1,3 +1,4 @@
+import {answerDeliveryLabel} from "../domain/research-delivery";
 import type {TaskLifecycle} from "../domain/task-lifecycle-client";
 import { loadRemoteAssetIds } from "../domain/datasets";
 import {QuestionScope} from "./QuestionScope";
@@ -178,18 +179,17 @@ function runtimePhaseLabel(phase:NonNullable<TaskLifecycle["runtimePhase"]>){
   return phase.phase==="waiting-discovery" && phase.operation==="read" ? "等待读取资料" : runtimePhaseLabels[phase.phase];
 }
 
-function ChatTaskStatus({lifecycle,remoteOnly=false}:{lifecycle?:TaskLifecycle;remoteOnly?:boolean}){
+function ChatTaskStatus({lifecycle,remoteOnly=false,delivery}:{lifecycle?:TaskLifecycle;remoteOnly?:boolean;delivery?:Message["answerDelivery"]}){
   const phase=lifecycle?.runtimePhase;
   const stops=lifecycle?.remoteStops??[];
   const state=stops.some(stop=>stop.state==="pending")?"pending"
     : stops.some(stop=>stop.state==="unconfirmed")?"unconfirmed"
     : stops.length?"confirmed":undefined;
-  const showPhase=phase && !remoteOnly && (phase.phase==="complete" || phase.phase==="failed");
-  if(!state && !showPhase)return null;
-  return <div className="answer-reply-context" role="status">
-    {showPhase && <span>
-      {runtimePhaseLabel(phase)}
-    </span>}
+  const label=remoteOnly ? undefined : delivery ? answerDeliveryLabel(delivery)
+    : phase && (phase.phase==="complete" || phase.phase==="failed") ? runtimePhaseLabel(phase) : undefined;
+  if(!state && !label)return null;
+  return <div className="answer-reply-context" role="status" data-answer-delivery={delivery?.status}>
+    {label && <span>{label}</span>}
     {state && <span data-remote-stop={state}>{remoteStopLabels[state]}{stops.length>1&&
       "（"+stops.filter(stop=>stop.state==="confirmed").length+" / "+stops.length+" 项已确认）"}</span>}
   </div>;
@@ -379,7 +379,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
                   {regionsByQuestion.get(m.id)!.status!=="located"?" · 待定位":regionsByQuestion.get(m.id)!.precision==="approximate"?" · 示意范围":""}
                 </button></>:m.role==="user" && m.context && " · " + m.context}
               </small>
-              {m.role==="assistant" && !m.nativeInterrupt && <ChatTaskStatus lifecycle={m.taskLifecycle}/>}
+              {m.role==="assistant" && !m.nativeInterrupt && <ChatTaskStatus lifecycle={m.taskLifecycle} delivery={m.answerDelivery}/>}
               {m.role==="assistant" && (m.historicalReply || m.context?.startsWith("原问题 · ")) && <div className="answer-reply-context">
                 <span>保持当前地图</span><span aria-hidden="true">·</span>
                 <button disabled={!questions.has(m.id)} aria-controls={questions.has(m.id)?"message-"+questions.get(m.id)!.id:undefined}
