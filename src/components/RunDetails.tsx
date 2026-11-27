@@ -129,7 +129,7 @@ function ProviderReasoning({snapshots}:{snapshots:ProviderReasoningSnapshot[]}) 
     </div>;
   });
 }
-export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,working=false,failed=false,openFinding,initiallyOpen,onOpenChange,researchProgress}:{trace?:RunTrace;stage?:string;runs?:SearchRun[];working?:boolean;failed?:boolean;openFinding?:(id:string)=>void;initiallyOpen?:boolean;onOpenChange?:(open:boolean)=>void;researchProgress?:ResearchProgress}) {
+export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,working=false,failed=false,openFinding,initiallyOpen,onOpenChange,researchProgress,processStatus}:{trace?:RunTrace;stage?:string;runs?:SearchRun[];working?:boolean;failed?:boolean;openFinding?:(id:string)=>void;initiallyOpen?:boolean;onOpenChange?:(open:boolean)=>void;researchProgress?:ResearchProgress;processStatus?:string}) {
   const trace=useMemo(()=>literatureDisplay(rawTrace),[rawTrace]);
   const reported=useMemo(()=>literatureDisplay(rawReported),[rawReported]);
   const reasoning=useMemo(()=>mergeProviderReasoning(undefined,rawTrace?.providerReasoning) ?? [],[rawTrace?.providerReasoning]);
@@ -161,7 +161,7 @@ export function RunDetails({trace:rawTrace,stage:rawStage,runs:rawReported,worki
     <summary><Clock3 size={14}/><span>{researchProgress ? "执行过程" : working ? "已用时 "+elapsed+" 秒" : "思考过程"}</span>
       {researchProgress && <span className="oe-research-progress-summary">{currentAction
         ? (currentAction.topic ?? researchProgressAreas[currentAction.area].label)+" · "+elapsed+" 秒"
-        : researchProgress.actions.length+" 项操作"}</span>}
+        : processStatus ?? researchProgress.actions.length+" 项操作"}</span>}
       <ChevronDown size={13}/>
     </summary>
     {!working && findings}

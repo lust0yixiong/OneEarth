@@ -174,17 +174,21 @@ const remoteStopLabels={
   pending:"等待远端停止确认",unconfirmed:"远端停止未获确认",confirmed:"远端已确认停止",
 } as const;
 
-function ChatTaskStatus({lifecycle,active=false}:{lifecycle?:TaskLifecycle;active?:boolean}){
+function runtimePhaseLabel(phase:NonNullable<TaskLifecycle["runtimePhase"]>){
+  return phase.phase==="waiting-discovery" && phase.operation==="read" ? "等待读取资料" : runtimePhaseLabels[phase.phase];
+}
+
+function ChatTaskStatus({lifecycle,active=false,phaseInProcess=false}:{lifecycle?:TaskLifecycle;active?:boolean;phaseInProcess?:boolean}){
   const phase=lifecycle?.runtimePhase;
   const stops=lifecycle?.remoteStops??[];
   const state=stops.some(stop=>stop.state==="pending")?"pending"
     : stops.some(stop=>stop.state==="unconfirmed")?"unconfirmed"
     : stops.length?"confirmed":undefined;
-  const showPhase=phase && (active||phase.phase==="complete"||phase.phase==="failed");
+  const showPhase=phase && ((active && !phaseInProcess) || phase.phase==="complete" || phase.phase==="failed");
   if(!state && !showPhase)return null;
   return <div className="answer-reply-context" role={active?undefined:"status"}>
     {showPhase && <span>
-      {phase.phase==="waiting-discovery" && phase.operation==="read"?"等待读取资料":runtimePhaseLabels[phase.phase]}
+      {runtimePhaseLabel(phase)}
     </span>}
     {state && <span data-remote-stop={state}>{remoteStopLabels[state]}{stops.length>1&&
       "（"+stops.filter(stop=>stop.state==="confirmed").length+" / "+stops.length+" 项已确认）"}</span>}
@@ -524,20 +528,24 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
   for(const chat of s.activeChats){
     if(settledIds.has(chat.id))continue;
     const question=s.messages.find(message=>message.id===chat.userMessageId);
+    const phase=chat.taskLifecycle?.runtimePhase;
+    const processStatus=chat.researchProgress && phase &&
+      ["queued","executing","waiting-discovery","resuming"].includes(phase.phase) ? runtimePhaseLabel(phase) : undefined;
     append(<article className="message chat-reply-pending" id={"message-"+chat.id} key={chat.id}
       data-chat-id={chat.id} data-chat-phase={chat.phase} data-runtime-phase={chat.taskLifecycle?.runtimePhase?.phase} data-reply-to={chat.userMessageId}>
       <small className="answer-author"><AnswerAuthor/></small>
-      <ChatTaskStatus lifecycle={chat.taskLifecycle} active/>
+      <ChatTaskStatus lifecycle={chat.taskLifecycle} active phaseInProcess={!!processStatus}/>
       <div className="live-search pending" role="status">
-        {question && <button type="button" className="activity-link" onClick={()=>locateQuestion(question.id)}
-          aria-controls={"message-"+question.id}>{chat.phase==="research" ? "研究" : "回复"} · {question.text}</button>}
-        <RunDetails working trace={chat.trace} researchProgress={chat.researchProgress} onOpenChange={open=>liveProcessOpen.current.set(chat.id,open)} stage={chat.stage} runs={chat.searches}
+        <RunDetails working trace={chat.trace} researchProgress={chat.researchProgress} processStatus={processStatus}
+          onOpenChange={open=>liveProcessOpen.current.set(chat.id,open)} stage={chat.stage} runs={chat.searches}
           openFinding={async id=>{
             await loadRemoteAssetIds([id]).catch(()=>undefined);
             if(!assetById.has(id)){patch({error:"暂时无法打开这条线索。"});return;}
             if(matchMedia("(max-width: 600px)").matches)patch({chatOpen:false});
             inspectAsset(id,chat.scope.filters,chat.scope.selection);
           }}/>
+        {question && <button type="button" className="activity-link" onClick={()=>locateQuestion(question.id)}
+          aria-controls={"message-"+question.id}>查看原问题</button>}
         {chat.accepted && <button type="button" className="activity-link" disabled={chat.cancelling}
           onClick={()=>void cancelChat(chat.id)}>{chat.cancelling?"正在取消本轮":"取消本轮"}</button>}
         {chat.cancelError && <p role="alert">{chat.cancelError}</p>}
