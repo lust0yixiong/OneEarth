@@ -8,7 +8,7 @@ import type {WorkspaceEffectsStore} from "./postgres-workspace-effects";
 import {TaskParked,type Payload} from "./task-store";
 import {readWorkspaceResearchCoverage} from "./workspace-research-state";
 
-function presentationMessage(receipts:NonNullable<import("../src/domain/catalogue-presentation").CataloguePresentationWrite["items"]>){
+export function presentationMessage(receipts:NonNullable<import("../src/domain/catalogue-presentation").CataloguePresentationWrite["items"]>){
   const rendered=receipts.filter(item=>item.state==="rendered").length;
   const failed=receipts.filter(item=>item.state==="failed").length;
   const superseded=receipts.filter(item=>item.state==="superseded").length;
@@ -33,22 +33,34 @@ export async function runWorkspaceActionEffect(services:RuntimeServices,effects:
   if(flight.state!=="arrived")return finish(
     flight.state==="superseded"?"飞行已被后续地图操作替代，本轮未查询目录。":
     flight.state==="cancelled"?"原页面飞行已取消，本轮未查询目录。":"原页面未能核对可靠地面范围，本轮未查询目录。");
+  return readFlightCatalogue(services,{runId:id,body,flight,place:command.kind==="flight"?command.placeLabel:"",retained,
+    batchId:effect.effectId,scope:checkpoint.flightScope as ResearchRangeInput["scope"]|undefined,
+    saveScope:scope=>services.tasks.saveStep?.(id,{...checkpoint,flightScope:scope})},signal,emit);
+}
+
+export async function readFlightCatalogue(services:RuntimeServices,input:{runId:string;body:RuntimeTurnInput;
+  flight:Extract<import("../src/domain/flight-catalogue").FlightMapReceipt,{state:"arrived"}>;place:string;
+  retained:DiscoveryResponse;batchId:string;scope?:ResearchRangeInput["scope"];present?:boolean;
+  saveScope:(scope:ResearchRangeInput["scope"])=>boolean|Promise<boolean>|undefined},
+  signal:AbortSignal,emit:(payload:Payload)=>void){
+  const {flight,body,retained}=input;
   const {point,id:cell,level}=flight.ground;
   const selection={point,id:cell,grid:gridSpec("h3",level)};
   const unavailable="已收到实际到达回执，但暂时无法核对其地面范围的权威覆盖，本轮没有另行搜索。";
-  let scope=checkpoint.flightScope as ResearchRangeInput["scope"]|undefined;
+  const failure=()=>({result:{...retained,message:unavailable}});
+  let scope=input.scope;
   if(!scope){
     const attachment=await services.coverage.registerSelection?.(body.context.filters,selection,signal);
     if(!attachment||typeof attachment==="string"||!matchesFlightGround(flight.ground,attachment.summary.selection)||
       !sameResearchFilters(attachment.summary.filters,body.context.filters)||attachment.summary.candidateCount!==null||
       attachment.summary.candidateIdentity!==null||attachment.summary.caseId!==null||attachment.summary.layer!=="all"||
-      attachment.summary.metric!=="products")return finish(unavailable);
+      attachment.summary.metric!=="products")return failure();
     const summary=normalizeResearchCoverage(attachment.summary);
-    scope={kind:"grid",selection:summary.selection,place:command.kind==="flight"?command.placeLabel:"",
+    scope={kind:"grid",selection:summary.selection,place:input.place,
       coverageScope:{...attachment,summary}};
-    if(!await services.tasks.saveStep?.(id,{...checkpoint,flightScope:scope}))return new TaskParked();
+    if(!await input.saveScope(scope))return new TaskParked();
   }
-  if(!matchesFlightGround(flight.ground,scope.selection))return finish(unavailable);
+  if(!matchesFlightGround(flight.ground,scope.selection))return failure();
   const fact={id:"workspace-flight-catalogue",area:"catalog"} as const;
   emit({researchProgressFact:{...fact,status:"running"}});
   const evidence=await readWorkspaceResearchCoverage(scope,services.coverage,signal,true);
@@ -57,8 +69,9 @@ export async function runWorkspaceActionEffect(services:RuntimeServices,effects:
     return {result:{...retained,message:unavailable,gridCoverage:evidence}};
   }
   emit({researchProgressFact:{...fact,status:"done",...(evidence.count<=1_000_000?{count:evidence.count}:{})}});
-  const input={...body,serverWorkspaceResearch:undefined,serverWorkspaceResearchAction:undefined,
+  const queryBody={...body,serverWorkspaceResearch:undefined,serverWorkspaceResearchAction:undefined,
     context:{...body.context,workspaceView:undefined,layerObservationRef:undefined,caseObservationRef:undefined,
       gridSystem:selection.grid.system,selection,attachedScope:[scope],filters:evidence.summary.filters,caseId:null,layer:"all" as const}};
-  return executeTurn(services,id,input,signal,emit,{priorResult:null,flightCatalogue:{evidence,trace:retained.runTrace,batchId:effect.effectId}});
+  return executeTurn(services,input.runId,queryBody,signal,emit,{priorResult:null,flightCatalogue:{evidence,
+    trace:retained.runTrace,batchId:input.batchId,present:input.present}});
 }

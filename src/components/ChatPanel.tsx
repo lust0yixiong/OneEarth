@@ -574,6 +574,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
             aria-controls={"message-"+question.id}>查看原问题</button>}
           {chat.accepted && <button type="button" disabled={cancelling} onClick={()=>void cancelChat(chat.id)}>取消本轮</button>}
         </div>}
+        {chat.waitingForOriginalPage && <p role="status">地图操作在等待原页面确认。此页面可查看原任务或取消本轮。</p>}
         {chat.cancelError && <p role="alert">{chat.cancelError}</p>}
       </div>
       {chat.draftText && <div className="chat-stream-draft" data-stream-message-id={chat.id} aria-live="off">
@@ -737,7 +738,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
             <span className="composer-sources-icon" aria-hidden="true"><ListChecks size={14}/><Clock3 className="composer-sources-recent" size={8}/></span>本轮来源与依据 · <span>{latestSources.length}</span><ChevronRight size={13} aria-hidden="true"/>
           </button>
         </div>}
-        {clarification && activeClarification ? <ClarificationCard
+        {clarification && activeClarification && <ClarificationCard
           key={clarification.sessionId+"/"+clarification.parentTaskId}
           id={clarificationCardId} sessionId={clarification.sessionId} parentTaskId={clarification.parentTaskId}
           prompt={activeClarification.prompt} seed={clarification.seed} focusOnOpen={clarification.focusOnOpen}
@@ -747,7 +748,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
             if(!await answerClarification(answer))return false;
             closeClarification(true);
             return true;
-          }} close={()=>closeClarification()}/> :
+          }} close={()=>closeClarification()}/>}
         <div className={"chat-composer-input"+(s.citation || s.draftScope?.length ? " composer-with-reference" : "")}>
         {(s.citation || !!s.draftScope?.length) && <div className="composer-references">
         <QuestionScope items={s.draftScope || []} remove={key=>patch({draftScope:(s.draftScope || []).filter(i=>scopeKey(i)!==key)})}/>
@@ -802,7 +803,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
             </button>
           </div>
         </form>
-        </div>}
+        </div>
       </div>
       {composerSources && <SourceDrawer refs={sourcesFor(literatureDisplay(composerSources)).refs} message={composerSources} archived={historyIds.has(composerSources.id)}
         title="本条回答的来源与依据" question={questions.get(composerSources.id)?.text} close={()=>setComposerSources(null)}/>}

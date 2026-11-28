@@ -9,8 +9,11 @@ import {conversationHistorySchema, postgresConversationHistory} from "./postgres
 import {chatSchema, claimClarificationAnswer, lockRuntimeSubmission, postgresChatMessages, submissionFingerprint, type PostgresChatMessages} from "./postgres-chat-messages";
 import {cataloguePresentationSchema,postgresCataloguePresentation,type CataloguePresentationStore} from "./postgres-catalogue-presentation";
 import {cancelWorkspaceEffect,postgresWorkspaceEffects,workspaceEffectsSchema,type WorkspaceEffectsStore} from "./postgres-workspace-effects";
+import {postgresRuntimeOperations,runtimeOperationsSchema,runtimeOperationTransactions,type RuntimeOperationsStore,type RuntimeOperationBody} from "./runtime-operations";
 
-export function postgresTaskStore(namespace:"runtime"):Promise<TaskStore & {chat:PostgresChatMessages;cataloguePresentation:CataloguePresentationStore;workspaceEffects:WorkspaceEffectsStore}>;
+type StoreTask=Task&{task_type?:"run"|"operation"};
+
+export function postgresTaskStore(namespace:"runtime"):Promise<TaskStore & {chat:PostgresChatMessages;cataloguePresentation:CataloguePresentationStore;workspaceEffects:WorkspaceEffectsStore;operations:RuntimeOperationsStore}>;
 export function postgresTaskStore(namespace:"discovery"):Promise<TaskStore>;
 export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise<TaskStore>{
   const pool=productDatabase(namespace==="runtime"?"RUNTIME":"DISCOVERY");
@@ -68,6 +71,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         await db.query(cataloguePresentationSchema);
         await db.query(workspaceEffectsSchema);
         await db.query(conversationHistorySchema);
+        await db.query(runtimeOperationsSchema);
       }else{
         await db.query(`
           CREATE TABLE IF NOT EXISTS discovery_findings (
@@ -84,7 +88,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
       }
     });
   }catch(error){await pool.end();throw error;}
-  function row(value:Task):Task{
+  function row({task_type:_type,...value}:StoreTask):Task{
     return {...value,created:Number(value.created),updated:Number(value.updated)};
   }
   async function write(db:PoolClient,id:string,payload:Payload,at=Date.now()){
@@ -100,8 +104,8 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         [id,saved.rows[0].seq,JSON.stringify(payload.finding)]);
     }
   }
-  async function owns(db:PoolClient,id:string){
-    const lease=runtimeTaskLease.getStore();if(namespace!=="runtime"||!lease||lease.id!==id)return true;
+  async function owns(db:PoolClient,id:string,strict=false){
+    const lease=runtimeTaskLease.getStore();if(namespace!=="runtime"||!lease||lease.id!==id)return !strict;
     return !!(await db.query("SELECT 1 FROM runtime_tasks WHERE id=$1 AND lease_owner=$2 AND lease_fence=$3 AND lease_until>$4",[id,lease.owner,lease.fence,Date.now()])).rowCount;
   }
   async function submit(db:PoolClient,id:string,body:unknown,checkpoint?:Payload,options?:{created:number;handoff:true;workspaceEffectExpires?:number}){
@@ -142,6 +146,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   const chat=namespace==="runtime"?postgresChatMessages(pool,transaction,submit):undefined;
   const cataloguePresentation=namespace==="runtime"?postgresCataloguePresentation(pool,transaction):undefined;
   const workspaceEffects=namespace==="runtime"?postgresWorkspaceEffects(pool,transaction):undefined;
+  const operations=namespace==="runtime"?postgresRuntimeOperations(pool,transaction):undefined;
   const get=async(id:string)=>{
     const result=await pool.query<Task>(`SELECT * FROM ${tasks} WHERE id=$1`,[id]);
     return result.rows[0] ? row(result.rows[0]) : chat?.get(id);
@@ -149,7 +154,11 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   async function finish(id:string,status:Exclude<TaskStatus,"queued"|"running">,payload:Payload){
     return transaction(async db=>{
       if(status==="cancelled"&&await chat?.cancel(db,id,payload))return true;
-      await db.query(`SELECT id FROM ${tasks} WHERE id=$1 FOR UPDATE`,[id]);
+      const selected=(await db.query<StoreTask>(`SELECT * FROM ${tasks} WHERE id=$1 FOR UPDATE`,[id])).rows[0];
+      if(selected?.task_type==="operation"){
+        // Runtime tasks are the shared queue. An operation is not a native Chat run.
+        return runtimeOperationTransactions.finishInTransaction(db,id,status,payload);
+      }
       if(!await owns(db,id))return false;
       const now=Date.now();
       const updated=await db.query(`UPDATE ${tasks} SET status=$1,updated=$2 WHERE id=$3 AND status IN ('running','queued')`,[status,now,id]);
@@ -204,7 +213,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   let firstRecovery=true;
   const owned=new Map<string,RuntimeTaskLease>();
   const store={
-    ...(chat?{chat,cataloguePresentation,workspaceEffects,researchHandoff:chat.handoff,workspaceReceipt:chat.workspaceReceipt,conversationHistory:postgresConversationHistory(pool)}:{}),
+    ...(chat?{chat,cataloguePresentation,workspaceEffects,operations,researchHandoff:chat.handoff,workspaceReceipt:chat.workspaceReceipt,conversationHistory:postgresConversationHistory(pool)}:{}),
     get,
     ...(namespace==="runtime"?{async researchExecution(id:string):Promise<ResearchExecutionReceipt|undefined>{
       const {rows: [task]}=await pool.query<{status: TaskStatus}>("SELECT status FROM runtime_tasks WHERE id=$1", [id]);
@@ -243,7 +252,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
           const count=Number((await db.query("SELECT count(*) AS n FROM runtime_tasks WHERE status='running' AND lease_until>$1",[now])).rows[0].n);
           if(count>=runtimeStepConcurrency())return;
         }
-        const selected=(await db.query<Task>(namespace==="runtime"?`SELECT t.* FROM runtime_tasks t LEFT JOIN runtime_steps s ON s.id=t.id
+        const selected=(await db.query<StoreTask>(namespace==="runtime"?`SELECT t.* FROM runtime_tasks t LEFT JOIN runtime_steps s ON s.id=t.id
           WHERE (t.status='queued' OR (t.status='running' AND s.wake_at<=$1)) AND (t.lease_until IS NULL OR t.lease_until<$1)
           ORDER BY t.updated,t.created,t.id LIMIT 1 FOR UPDATE OF t SKIP LOCKED`:`SELECT * FROM ${tasks} WHERE status='queued'
           ORDER BY created,id LIMIT 1 FOR UPDATE SKIP LOCKED`,namespace==="runtime"?[now]:[])).rows[0];
@@ -254,15 +263,20 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
           const {rows:[saved]}=await db.query<{lease_fence:string}>("UPDATE runtime_tasks SET status='running',updated=$2,lease_owner=$3,lease_until=$4,lease_fence=lease_fence+1 WHERE id=$1 RETURNING lease_fence",[selected.id,now,owner,now+runtimeTaskLeaseMs]);
           lease={id:selected.id,owner,fence:Number(saved.lease_fence)};owned.set(selected.id,lease);
         }else await db.query(`UPDATE ${tasks} SET status='running',updated=$1 WHERE id=$2`,[now,selected.id]);
-        await write(db,selected.id,{...(selected.status==="queued"?{started:true,startedAt:now}:{}),runtimePhase:{phase:selected.status==="queued"?"executing":"resuming"}},now);
+        let body=JSON.parse(selected.body);
+        if(selected.task_type==="operation"){
+          const {rows:[operation]}=await db.query<{body:RuntimeOperationBody}>("UPDATE runtime_operations SET suspended=false WHERE operation_id=$1 RETURNING body",[selected.id]);
+          if(!operation)throw Error("操作队列缺少原记录。");
+          body=operation.body;
+        }else await write(db,selected.id,{...(selected.status==="queued"?{started:true,startedAt:now}:{}),runtimePhase:{phase:selected.status==="queued"?"executing":"resuming"}},now);
         const step=namespace==="runtime"?(await db.query<{checkpoint:Payload}>("UPDATE runtime_steps SET wake_at=NULL WHERE id=$1 RETURNING checkpoint",[selected.id])).rows[0]:undefined;
-        return {id:selected.id,body:JSON.parse(selected.body),...(step?{checkpoint:step.checkpoint}:{}),...(lease?{lease}:{})};
+        return {id:selected.id,body,...(step?{checkpoint:step.checkpoint}:{}),...(lease?{lease}:{})};
       });
     },
     async append(id,payload){
       await transaction(async db=>{
-        const active=await db.query(`SELECT id FROM ${tasks} WHERE id=$1 AND status='running' FOR UPDATE`,[id]);
-        if(active.rowCount&&await owns(db,id))await write(db,id,payload);
+        const active=await db.query<StoreTask>(`SELECT * FROM ${tasks} WHERE id=$1 AND status='running' FOR UPDATE`,[id]);
+        if(active.rows[0]&&active.rows[0].task_type!=="operation"&&await owns(db,id))await write(db,id,payload);
       });
     },
     finish,
@@ -288,47 +302,52 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
       async releaseLease(lease:RuntimeTaskLease){owned.delete(lease.id);await pool.query("UPDATE runtime_tasks SET lease_owner=NULL,lease_until=NULL WHERE id=$1 AND lease_owner=$2 AND lease_fence=$3",[lease.id,lease.owner,lease.fence]);},
       async step(id:string){return (await pool.query<{checkpoint:Payload}>("SELECT checkpoint FROM runtime_steps WHERE id=$1",[id])).rows[0]?.checkpoint;},
       async clearStep(id:string){return transaction(async db=>{
-        if(!(await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id])).rowCount||!await owns(db,id))return false;
+        if(!(await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='running' AND task_type='run' FOR UPDATE",[id])).rowCount||!await owns(db,id))return false;
         return !!(await db.query("DELETE FROM runtime_steps WHERE id=$1",[id])).rowCount;
       });},
       async saveStep(id:string,checkpoint:Payload,event?:Payload){return transaction(async db=>{
-        const active=await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id]);
-        if(!active.rowCount||!await owns(db,id))return false;
+        const {rows:[active]}=await db.query<Pick<StoreTask,"task_type">>("SELECT task_type FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id]);
+        if(!active||!await owns(db,id,active.task_type==="operation"))return false;
         await db.query("INSERT INTO runtime_steps VALUES($1,$2::jsonb,NULL) ON CONFLICT(id) DO UPDATE SET checkpoint=EXCLUDED.checkpoint",[id,JSON.stringify(checkpoint)]);
         if(event)await write(db,id,event);return true;
       });},
       async cancelStep(id:string,cancellation:Payload,event?:Payload){return transaction(async db=>{
-        if(!(await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='cancelled' FOR UPDATE",[id])).rowCount)return false;
+        if(!(await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='cancelled' AND task_type='run' FOR UPDATE",[id])).rowCount)return false;
         const saved=(await db.query<{checkpoint:Payload}>(`UPDATE runtime_steps SET checkpoint=jsonb_set(checkpoint,'{cancellation}',COALESCE(checkpoint->'cancellation','{}'::jsonb)||$2::jsonb)
           WHERE id=$1 RETURNING checkpoint`,[id,JSON.stringify(cancellation)])).rows[0];
         if(!saved)return false;
         if(event)await write(db,id,cancellationReceipt(event));return true;
       });},
       async park(id:string,checkpoint:Payload,wakeAt:number,event?:Payload){return transaction(async db=>{
-        const active=await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id]);
-        if(!active.rowCount||!await owns(db,id))return false;
+        const {rows:[active]}=await db.query<Pick<StoreTask,"task_type">>("SELECT task_type FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id]);
+        if(!active||!await owns(db,id,active.task_type==="operation"))return false;
         await db.query("INSERT INTO runtime_steps VALUES($1,$2::jsonb,$3) ON CONFLICT(id) DO UPDATE SET checkpoint=EXCLUDED.checkpoint,wake_at=EXCLUDED.wake_at",[id,JSON.stringify(checkpoint),wakeAt]);
         const now=Date.now();await db.query("UPDATE runtime_tasks SET updated=$2,lease_owner=NULL,lease_until=NULL WHERE id=$1",[id,now]);if(event)await write(db,id,event,now);return true;
       });},
       async cancelledSteps(){const {rows}=await pool.query<{id:string;body:string;checkpoint:Payload}>(`SELECT t.id,t.body,s.checkpoint FROM runtime_steps s JOIN runtime_tasks t ON t.id=s.id
-        WHERE t.status='cancelled' AND (s.checkpoint->'cancellation'->>'reconciled') IS DISTINCT FROM 'true' ORDER BY t.updated LIMIT 20`);
+        WHERE t.status='cancelled' AND t.task_type='run' AND (s.checkpoint->'cancellation'->>'reconciled') IS DISTINCT FROM 'true' ORDER BY t.updated LIMIT 20`);
         return rows.map(row=>({id:row.id,body:JSON.parse(row.body),checkpoint:row.checkpoint}));},
     }:{}),
     async recoverInterrupted(){
       if(namespace==="runtime"){
         await transaction(async db=>{
-          const {rows}=await db.query<{id:string;checkpoint:Payload|null}>(`SELECT t.id,s.checkpoint FROM runtime_tasks t LEFT JOIN runtime_steps s ON s.id=t.id
-            WHERE t.status='running' AND (t.lease_until IS NULL OR t.lease_until<$1) AND (t.lease_owner IS NOT NULL OR s.wake_at IS NULL OR ($2 AND t.recovered_fence<t.lease_fence)) ORDER BY t.updated FOR UPDATE OF t SKIP LOCKED`,[Date.now(),firstRecovery]);
+          const {rows}=await db.query<{id:string;checkpoint:Payload|null;task_type:StoreTask["task_type"]}>(`SELECT t.id,s.checkpoint,t.task_type
+            FROM runtime_tasks t LEFT JOIN runtime_steps s ON s.id=t.id LEFT JOIN runtime_operations o ON o.operation_id=t.id
+            WHERE t.status='running' AND (t.lease_until IS NULL OR t.lease_until<$1)
+              AND (t.lease_owner IS NOT NULL OR (o.suspended IS DISTINCT FROM true AND (s.wake_at IS NULL OR ($2 AND t.recovered_fence<t.lease_fence))))
+            ORDER BY t.updated FOR UPDATE OF t SKIP LOCKED`,[Date.now(),firstRecovery]);
           for(const item of rows){
             if(item.checkpoint){
               await db.query("UPDATE runtime_tasks SET lease_owner=NULL,lease_until=NULL,recovered_fence=lease_fence WHERE id=$1",[item.id]);
               await db.query("UPDATE runtime_steps SET wake_at=LEAST(coalesce(wake_at,$2),$2) WHERE id=$1",[item.id,Date.now()]);
-              await write(db,item.id,{stepRecovered:true,runtimePhase:{phase:"resuming"}});
+              if(item.task_type!=="operation")await write(db,item.id,{stepRecovered:true,runtimePhase:{phase:"resuming"}});
             }else{
               const now=Date.now(),payload={error:"后台进程中断，原执行结果不确定；未重复启动。",code:"worker_interrupted",runtimePhase:{phase:"failed"}};
               await db.query("UPDATE runtime_tasks SET status='failed',updated=$2,lease_owner=NULL,lease_until=NULL WHERE id=$1",[item.id,now]);
-              await finishAgUi(db,item.id,"failed",payload);
-              await write(db,item.id,payload,now);
+              if(item.task_type!=="operation"){
+                await finishAgUi(db,item.id,"failed",payload);
+                await write(db,item.id,payload,now);
+              }
             }
           }
         });firstRecovery=false;return;

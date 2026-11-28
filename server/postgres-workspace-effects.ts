@@ -70,7 +70,7 @@ export async function cancelWorkspaceEffect(db:PoolClient,id:string){
   if(row&&row.effect.status!=="cancelled")await update(db,{...row.effect,status:"cancelled"},true);
 }
 function receiptTimeFits(time:number,start:number,now:number){return time>=start-10000&&time<=now+10000;}
-function mergeReceipt(effect:StoredEffect,receipt:WorkspaceEffectReceipt,start:number,now:number):WorkspaceEffectReceipt|undefined {
+export function mergeWorkspaceEffectReceipt(effect:StoredEffect,receipt:WorkspaceEffectReceipt,start:number,now:number):WorkspaceEffectReceipt|undefined {
   const prior=effect.receipt;
   if(receipt.kind==="flight"&&effect.command.kind==="flight"){
     if(prior)return isDeepStrictEqual(prior,receipt)?prior:undefined;
@@ -124,7 +124,7 @@ export function postgresWorkspaceEffects(pool:Pool,transaction:Transaction){
       const row=task&&await find(db,id,true);
       if(!row||row.effect.conversationId!==conversationId||row.effect.effectId!==effectId||workspacePageHash(token)!==row.page_hash)
         return {status:404 as const};
-      const now=Date.now(),fact=mergeReceipt(row.effect,receipt,Number(row.started_at),now);
+      const now=Date.now(),fact=mergeWorkspaceEffectReceipt(row.effect,receipt,Number(row.started_at),now);
       if(!fact)return {status:409 as const};
       const active=task.status==="running"||task.status==="queued";
       const expired=row.effect.status==="waiting"&&row.effect.expiresAt<=now;

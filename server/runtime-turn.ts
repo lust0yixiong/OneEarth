@@ -123,7 +123,7 @@ const discoveryProgressAreas:ReadonlySet<ResearchProgressFact["area"]>=new Set([
 
 export async function executeTurn(services:RuntimeServices,taskId:string,body:RuntimeTurnInput,signal:AbortSignal,
   publish:(payload:Record<string,unknown>)=>void,internal:RuntimeTurnOptions&{foreground?:boolean;semanticDecision?:boolean;handoff?:RuntimeTurnHandoff;approvedConfirmation?:boolean;
-    flightCatalogue?:{evidence:GridCoverageEvidence;trace?:RunTrace;batchId:string}}={}):Promise<Record<string,unknown>>{
+    flightCatalogue?:{evidence:GridCoverageEvidence;trace?:RunTrace;batchId:string;present?:boolean}}={}):Promise<Record<string,unknown>>{
   const {tasks, push, coverage, researchRegionService, adminBoundaryDir, canonicalCache} = services;
   const turnContext=internal.turnContext??internal.handoff?.turnContext??await runtimeTurnContext(tasks,taskId,body);
   const batchOwner={batchId:internal.flightCatalogue?.batchId??runtimeStepContext.getStore()?.stableId("result-batch")??randomUUID(),taskId,turnId:body.turnId,conversationId:body.conversationId};
@@ -577,7 +577,7 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         resultBatch:gridCatalogueBatch(batchOwner,query,used,gridCoverage.revision,!incomplete&&!reply.clarification&&gridCoverage.status==="ready"),
         conversationContext:turn.conversationContext,conversationEvidence,conversationAssertionEvidence,
         hainaRecords,...(hainaCatalog?{hainaCatalog}:{})};
-      if(turn.workspaceOperation==="present-catalogue"){
+      if(turn.workspaceOperation==="present-catalogue"||internal.flightCatalogue?.present){
         const target=!result.clarification&&cataloguePresentationTarget(result,{runId:taskId,conversationId:body.conversationId,turnId:body.turnId});
         if(target)result.workspaceOperation={kind:"present-catalogue",batchId:target.batchId};
         else if(result.answerNotes)

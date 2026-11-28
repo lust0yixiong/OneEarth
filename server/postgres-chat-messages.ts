@@ -3,17 +3,19 @@ import type {WorkspaceResearchReference} from "../src/domain/workspace-research-
 import {newWorkspaceEffect,retainedWorkspaceEffectResult,saveWorkspaceEffect} from "./postgres-workspace-effects";
 import type {WorkspaceEffectCommand} from "../src/domain/workspace-action-effect";
 import {readAgUiWorkspaceRecord,pendingAgUiWorkspaceCalls,bindAgUiWorkspaceReplies,agUiWorkspaceResults,type AgUiWorkspaceReply} from "./postgres-ag-ui-workspace";
-import {readAgUiInterrupt,pendingAgUiInterrupt} from "./postgres-ag-ui-interrupt";
+import {readAgUiInterrupt,pendingAgUiInterrupt,readAgUiOperationInterrupt} from "./postgres-ag-ui-interrupt";
 import {agUiSchema,admitAgUi,appendAgUiText,finishAgUi,projectAgUiProgress,projectAgUiResearchProgress,projectAgUiSummary,type AgUiAdmission} from "./ag-ui-persistence";
 import {createHash} from "node:crypto";
 import {isDeepStrictEqual} from "node:util";
+import type {RuntimeStepState} from "./runtime-step";
+import type {OneEarthOperationReply} from "../src/domain/native-ag-ui";
 import type {Pool, PoolClient} from "pg";
 import {TaskConflict, taskIdPattern, type Payload, type Task} from "./task-store";
 import {validClarificationAnswer} from "../src/domain/clarification";
 import type {BrowserWorkspaceReceipt, WorkspaceReceipt, WorkspaceRecoveryInput, WorkspaceRecoveryAdvice} from "../src/domain/turn-context";
 import type {DiscoveryResponse} from "../src/domain/types";
 import {workspaceObservationTarget} from "../src/domain/workspace-published-layer";
-import type {RuntimeTurnInput} from "./runtime-turn-handoff";
+import {runtimeTurnFingerprint,type RuntimeTurnInput} from "./runtime-turn-handoff";
 
 const sameReceiptIdentity = (id:string,body:RuntimeTurnInput,result:DiscoveryResponse|undefined,input:Pick<BrowserWorkspaceReceipt,"effectId"|"conversationId"|"turnId">) =>
   input.conversationId===body.conversationId&&input.turnId===body.turnId&&result?.workspaceEffect?.state==="proposed"&&
@@ -88,6 +90,8 @@ export async function claimClarificationAnswer(db:PoolClient, id:string, input:u
     (!legacy&&!validClarificationAnswer(answer))||parent.toLowerCase()===id.toLowerCase()){
     throw new TaskConflict("本轮补充与原追问编号不一致。");
   }
+  if((await db.query("SELECT 1 FROM runtime_agui_interrupts WHERE id=$1 AND operation_id IS NOT NULL",[parent])).rowCount)
+    throw new TaskConflict("这条追问需要原操作和步骤编号。");
   const claim=await db.query(`INSERT INTO runtime_clarification_answers(parent_task_id,answer_id)
     VALUES($1,$2) ON CONFLICT(parent_task_id) DO NOTHING`,[parent,id]);
   if(!claim.rowCount)throw new TaskConflict("这条追问已有一份提交，请查看原答复的进度。");
@@ -203,7 +207,7 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
         SELECT id FROM (
           SELECT id,created FROM runtime_chat_messages WHERE status='complete' AND body::jsonb->>'conversationId'=$1
           UNION ALL
-          SELECT id,created FROM runtime_tasks WHERE status='complete' AND body::jsonb->>'conversationId'=$1
+          SELECT id,created FROM runtime_tasks WHERE task_type='run' AND status='complete' AND body::jsonb->>'conversationId'=$1
         ) AS conversation
         ORDER BY created DESC,id DESC LIMIT 1`, [conversationId])).rows[0]?.id;
     },
@@ -241,12 +245,23 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
         const {rows} = await db.query<{active: number}>("SELECT count(*)::int AS active FROM runtime_chat_messages WHERE status='planning'");
         if (rows[0].active >= limit) return;
         if(research && agUi)await assertWorkspaceResearchBinding(db,agUi.threadId,research);
-        await claimClarificationAnswer(db,id,body);
+        if(!agUi?.resume)await claimClarificationAnswer(db,id,body);
         const now = Date.now();
         const {rows: [saved]} = await db.query<ChatRow>(`
           INSERT INTO runtime_chat_messages(id,body,fingerprint,status,created,updated)
           VALUES ($1,$2,$3,'planning',$4,$4) RETURNING ${columns}`, [id, raw, fingerprint, now]);
-        if(agUi)await admitAgUi(db,id,agUi);
+        if(agUi)await admitAgUi(db,id,agUi,body as RuntimeTurnInput);
+        if(agUi?.resume?.operation){
+          if(agUi.resume.status==="cancelled"){
+            await finish(db,id,"cancelled",{error:"研究者明确放弃原追问。",code:"cancelled"});
+            return {task:view({...saved,status:"cancelled"}),started:true};
+          }
+          const checkpoint:RuntimeStepState={kind:"runtime-turn-step.v1",fingerprint:runtimeTurnFingerprint(body as RuntimeTurnInput),
+            startedAt:now,models:[],delegations:[],ids:{},windows:[]};
+          const task=await queue(db,id,body,checkpoint,{created:now,handoff:true});
+          await db.query("UPDATE runtime_chat_messages SET status='handed_off' WHERE id=$1",[id]);
+          return {task,started:true};
+        }
         await write(db, id, {chatPhase: "foreground"}, now);
         return {task: view(saved), started: true};
       });
@@ -259,6 +274,7 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
     async agUiFingerprint(id:string){return (await pool.query<{fingerprint:string}>("SELECT fingerprint FROM runtime_agui_runs WHERE id=$1",[id])).rows[0]?.fingerprint;},
     agUiInterrupt:(id:string)=>readAgUiInterrupt(pool,id),
     agUiPending:(threadId:string)=>pendingAgUiInterrupt(pool,threadId),
+    agUiOperationInterrupt:(threadId:string,operation:OneEarthOperationReply)=>readAgUiOperationInterrupt(pool,threadId,operation),
     async agUiEvents(id:string,after=0){return (await pool.query<{seq:string;event:Payload}>("SELECT seq,event FROM runtime_agui_events WHERE run_id=$1 AND seq>$2 ORDER BY seq LIMIT 128",[id,after])).rows.map(row=>({seq:Number(row.seq),event:row.event}));},
     async appendAgUiText(id:string,delta:string){return transaction(async db=>{
       if(!(await db.query("SELECT id FROM runtime_chat_messages WHERE id=$1 AND status='planning' FOR UPDATE",[id])).rowCount)return false;

@@ -23,12 +23,13 @@ import {WorkspaceResearchConflict,type WorkspaceResearchStateStore} from "./work
 import {retainedWorkspaceEffectResult,workspaceEffectCommand} from "./postgres-workspace-effects";
 import type {RuntimeTurnInput} from "./runtime-turn-handoff";
 import type {DiscoveryResponse} from "../src/domain/types";
+import type {runtimeMapOperations} from "./runtime-map-operation";
 
 /** Native producer: standard frames are persisted directly by the original
  * acceptance/finish transactions, never reconstructed from NDJSON events. */
 export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresChatMessages},prepare:(id:string,input:unknown,observation?:CaseObservationBinding,layerObservation?:LayerObservationBinding)=>Promise<ChatPreparation>,
  resolveObservation?:ResolveCaseObservation,resolveLayerObservation?:ResolveLayerObservation,workspaceResearch?:WorkspaceResearchStateStore,
- requireWorkspacePage=false){
+ requireWorkspacePage=false,mapOperations?:Pick<ReturnType<typeof runtimeMapOperations>,"start">){
  const {chat}=tasks;await chat.acquire();nativeWorkspaceReceiptRoutes(app,chat);let stopping=false;
  const active=new Map<string,{controller:AbortController;done:Promise<void>}>();
  function start(id:string,prepared:Exclude<ChatPreparation,{error:string}>,body:RuntimeTurnInput,pageHash:string|undefined){
@@ -50,7 +51,11 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
      const result=retained.result as DiscoveryResponse|undefined;
      const command=!retained.error&&workspaceEffectCommand(result,{runId:id,conversationId:body.conversationId,turnId:body.turnId});
      if(command&&result){
-      if(pageHash){await chat.waitForWorkspaceEffect(id,body,pageHash,command,result);return;}
+      if(pageHash){
+       if(mapOperations)await mapOperations.start(id,body,pageHash,command,result);
+       else await chat.waitForWorkspaceEffect(id,body,pageHash,command,result);
+       return;
+      }
       if(requireWorkspacePage){
        const original=retainedWorkspaceEffectResult(result);
        await chat.finish(id,"complete",{result:{...original,message:command.kind==="flight"?
@@ -124,12 +129,17 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
    if(resume?.status==="cancelled"){const issue=await validateTurnStructure(tasks,body);if(issue)throw new AgUiInputError(issue);}
 
    if("error" in prepared){res.status(resume?409:400).json({error:prepared.error});return;}
+   if(resume?.operation&&resume.status==="resolved"&&(prepared.kind!=="research"||prepared.checkpoint!==undefined)){
+    res.status(409).json({error:"原发现操作无法按保存的条件续行。",code:"OPERATION_RESUME_UNAVAILABLE"});return;
+   }
    const admitted=await chat.admit(id,{...body,...(observation?{serverCaseObservation:observation}:{}),
     ...(layerObservation?{serverLayerObservation:layerObservation}:{})},4,{threadId:body.conversationId,turnId:body.turnId,fingerprint,workspaceTool:decoded.workspaceTool,workspaceReplies:decoded.workspaceReplies,pendingWorkspaceToolCallIds,previousTaskId:decoded.body.previousTaskId,...(resume?{resume}:{})},reference);
    if(!admitted){res.status(429).set("Retry-After","2").json({error:"前台正在处理其他运行。"});return;}
    if(!admitted.started){res.status(409).set("Location","/api/tasks/"+id).json({error:"该运行已受理，请只读原状态与归档。",code:"RUN_ALREADY_ACCEPTED"});return;}
-   if(resume?.status==="cancelled")await tasks.finish(id,"cancelled",{error:"研究者明确放弃原追问。",code:"cancelled"});
-   else start(id,prepared,body,decoded.pageHash);
+   if(!resume?.operation){
+    if(resume?.status==="cancelled")await tasks.finish(id,"cancelled",{error:"研究者明确放弃原追问。",code:"cancelled"});
+    else start(id,prepared,body,decoded.pageHash);
+   }
    await stream(id,res);
   }catch(error){
    if(res.headersSent){res.destroy();return;}

@@ -13,6 +13,7 @@ export type WorkspaceEffectReceipt={kind:"flight";flight:FlightMapReceipt}|
   {kind:"catalogue-presentation";presentation:CataloguePresentationWrite};
 export type WorkspaceActionEffect={
   version:1;conversationId:string;runId:string;turnId:string;actionId:string;effectId:string;
+  operationId?:string;stepId?:string;stepOrder?:number;
   kind:WorkspaceEffectCommand["kind"];status:"waiting"|"received"|"expired"|"cancelled";expiresAt:number;
   command?:WorkspaceEffectCommand;receipt?:WorkspaceEffectReceipt;
 };
@@ -28,12 +29,19 @@ export function readWorkspaceEffectReceipt(value:unknown):WorkspaceEffectReceipt
   }
 }
 export function readWorkspaceActionEffect(value:unknown,runId:string):WorkspaceActionEffect|undefined{
-  if(!object(value)||!id(runId)||value.version!==1||value.runId!==runId||value.actionId!==runId||
+  if(!object(value)||!id(runId)||value.version!==1||value.runId!==runId||
     !id(value.conversationId)||!id(value.turnId)||!id(value.effectId)||typeof value.expiresAt!=="number"||
     !Number.isSafeInteger(value.expiresAt)||value.expiresAt<=0||
     value.status!=="waiting"&&value.status!=="received"&&value.status!=="expired"&&value.status!=="cancelled"||
     value.kind!=="flight"&&value.kind!=="catalogue-presentation")return;
   const {conversationId,turnId,actionId,effectId,kind,status,expiresAt}=value;
+  const {operationId,stepId,stepOrder}=value;
+  const operation=operationId!==undefined||stepId!==undefined||stepOrder!==undefined;
+  if(operation
+    ? !id(operationId)||operationId!==actionId||!id(stepId)||stepId!==effectId||
+      typeof stepOrder!=="number"||!Number.isSafeInteger(stepOrder)||stepOrder<1
+    : actionId!==runId) return;
+  if(!id(actionId))return;
   const receipt=readWorkspaceEffectReceipt(value.receipt);
   if(value.receipt!==undefined&&receipt?.kind!==kind||receipt?.kind==="catalogue-presentation"&&
     (receipt.presentation.conversationId!==conversationId||receipt.presentation.turnId!==turnId))return;
@@ -58,5 +66,7 @@ export function readWorkspaceActionEffect(value:unknown,runId:string):WorkspaceA
       command={kind,target:canonical,result:parsed};
     }
   }
-  return {version:1,conversationId,runId,turnId,actionId,effectId,kind,status,expiresAt,...(command?{command}:{}),...(receipt?{receipt}:{})};
+  return {version:1,conversationId,runId,turnId,actionId,effectId,kind,status,expiresAt,
+    ...(operation?{operationId:operationId as string,stepId:stepId as string,stepOrder:stepOrder as number}:{}),
+    ...(command?{command}:{}),...(receipt?{receipt}:{})};
 }

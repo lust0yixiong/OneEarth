@@ -17,7 +17,7 @@ import {boundCatalogueMapBatch,cataloguePresentationTarget,readCataloguePresenta
   type CataloguePresentation,type CataloguePresentationTarget} from "./catalogue-presentation";
 import {createCataloguePresentationObserver} from "./catalogue-presentation-client";
 import {readWorkspaceActionEffect,type WorkspaceActionEffect,type WorkspaceEffectReceipt} from "./workspace-action-effect";
-import {createWorkspacePageToken,reportWorkspaceActionEffect} from "./workspace-action-effect-client";
+import {advancesWorkspaceActionEffect,createWorkspacePageToken,reportWorkspaceActionEffect} from "./workspace-action-effect-client";
 
 import {caseObservationCase, readCaseObservation, readCaseObservationRef, readCaseObservationStatus} from "./case-observations";
 import {layerObservationMatchesView, readLayerObservation, readLayerObservationRef, readLayerObservationStatus} from "./layer-observations";
@@ -191,6 +191,7 @@ type ActiveChat = {
   cancelError?:string;
   draftText?:string;
   researchProgress?:ResearchProgress;
+  waitingForOriginalPage?:boolean;
   trace:import("./types").RunTrace;
   searches:import("./types").SearchRun[];
 };
@@ -767,13 +768,20 @@ function reducer(s: State, a: Action): State {
   const messages = mergeMessages(s.messages, a.messages);
   return messages === s.messages ? s : { ...s, messages };
 }
-const mapEffectFields = [
-  "view","caseId","overview","selection","filters","gridSystem","source","layer","mesh","mapResult",
-  "dataView","visualization","fieldLayer","publicLayer","globeLayers","globeLayerFocus","globeLayerFit","flight","camera",
+const mapNavigationFields = ["view","caseId","selection","gridSystem","globeLayerFit","flight","camera"] as const satisfies readonly (keyof State)[];
+const mapPresentationFields = [
+  "overview","filters","source","mapResult","dataView","visualization","fieldLayer","publicLayer","globeLayerFocus",
 ] as const satisfies readonly (keyof State)[];
 
-type MapEffectSubmission={sessionId:string;generation:number};
-type ActiveMapEffect={id:string;supersede:()=>void;observe?:(frame:CatalogueFrameObservation)=>void};
+type MapEffectRevisions={navigation:number;presentation:number};
+type MapEffectSubmission=MapEffectRevisions&{sessionId:string};
+type ActiveMapEffect={id:string;kind:WorkspaceActionEffect["kind"];supersede:()=>void;observe?:(frame:CatalogueFrameObservation)=>void};
+type MapEffectPage={
+  token:string;
+  submission:MapEffectSubmission;
+  latest?:WorkspaceActionEffect;
+  started:Set<string>;
+};
 
 const Context = createContext<ReturnType<typeof useWorkspaceValue> | null>(
   null,
@@ -783,17 +791,20 @@ function useWorkspaceValue(initialState: State) {
   const historyIds=useMemo(()=>new Set(state.messages.map(m=>m.id)),[state.sessionId]);
   const latest = useRef(state);
   latest.current = state;
-  const mapEffectGeneration=useRef(0);
+  const mapEffectRevisions=useRef<MapEffectRevisions>({navigation:0,presentation:0});
   const activeMapEffect=useRef<ActiveMapEffect|undefined>(undefined);
-  const workspacePageToken=useRef<string|undefined>(undefined);
-  const invalidateMapEffect=useCallback(()=>{
-    mapEffectGeneration.current++;
-    activeMapEffect.current?.supersede();
+  const mapEffectPages=useRef(new Map<string,MapEffectPage>());
+  const invalidateMapEffect=useCallback((scope:"navigation"|"presentation"="navigation")=>{
+    mapEffectRevisions.current[scope]++;
+    const active=activeMapEffect.current;
+    if(scope==="navigation" || active?.kind==="catalogue-presentation")active?.supersede();
   },[]);
   const publishResearchRange=useCallback((sessionId:string,snapshot:WorkspaceResearchState)=>{
     const current=latest.current,next=withWorkspaceResearchState(current,snapshot);
     if(sessionId!==snapshot.conversationId || next===current)return;
-    if(current.researchRangeRevision!==next.researchRangeRevision)invalidateMapEffect();
+    // The initial read establishes the range without changing an existing browser target.
+    if(current.researchRangeActionId!==undefined && current.researchRangeRevision!==next.researchRangeRevision)
+      invalidateMapEffect("presentation");
     latest.current=withWorkspaceResearchState(latest.current,snapshot);
     dispatch({type:"research-range",sessionId,snapshot});
   },[invalidateMapEffect]);
@@ -851,7 +862,9 @@ function useWorkspaceValue(initialState: State) {
   },[]);
   const patch = useCallback((value: Partial<State>,mapEffectOwner?:string) => {
     const scopeChange=["caseId","view","mapResult","filters","selection","gridSystem"].some(key=>Object.hasOwn(value,key));
-    if(scopeChange && !Object.hasOwn(value,"flight"))value={...value,flight:null};
+    if(scopeChange && !Object.hasOwn(value,"flight") && (latest.current.flight?.kind!=="catalogue" ||
+      mapNavigationFields.some(key=>Object.hasOwn(value,key) && !Object.is(value[key],latest.current[key]))))
+      value={...value,flight:null};
     if(["caseId","mapResult","filters"].some(key=>Object.hasOwn(value,key)) && !Object.hasOwn(value,"mapFocus"))value={...value,mapFocus:null};
     const controlChange = (["fieldLayer", "visualization", "dataView", "globeLayers", "globeLayerFocus", "inspector", "evidence", "readerPosition", "mapFocus"] as const)
       .some(key => Object.hasOwn(value, key) && value[key] !== latest.current[key]);
@@ -931,9 +944,11 @@ function useWorkspaceValue(initialState: State) {
       (value.view || (Object.hasOwn(value, "inspector") && value.inspector))
     )
       value = { ...value, listLibraryOpen: false };
-    if(mapEffectOwner!=="renderer-camera" && (!mapEffectOwner || mapEffectOwner!==activeMapEffect.current?.id) &&
-      mapEffectFields.some(key=>Object.hasOwn(value,key) && !Object.is(value[key],latest.current[key])))
-      invalidateMapEffect();
+    if(mapEffectOwner!=="renderer-camera" && (!mapEffectOwner || mapEffectOwner!==activeMapEffect.current?.id)){
+      const changed=(key:keyof State)=>Object.hasOwn(value,key) && !Object.is(value[key],latest.current[key]);
+      if(mapNavigationFields.some(changed))invalidateMapEffect();
+      else if(mapPresentationFields.some(changed))invalidateMapEffect("presentation");
+    }
     if (Object.hasOwn(value, "readerPosition")) {
       const doc = Object.hasOwn(value, "evidence") ? value.evidence : latest.current.evidence;
       try { saveReaderCheckpoint(latest.current.sessionId, doc || null, value.readerPosition || null); }
@@ -1931,12 +1946,12 @@ function useWorkspaceValue(initialState: State) {
     if(!command)return;
     const id=task.effectId;
     const submit=(receipt:WorkspaceEffectReceipt)=>reportWorkspaceActionEffect(task,token,receipt);
-    let generation=submission.generation;
     const isCurrent=()=>!signal.aborted && latest.current.sessionId===submission.sessionId &&
-      latest.current.view==="earth" && mapEffectGeneration.current===generation;
+      latest.current.view==="earth" && mapEffectRevisions.current.navigation===submission.navigation &&
+      (command.kind==="flight" || mapEffectRevisions.current.presentation===submission.presentation);
     const claimViewport=()=>{
       invalidateMapEffect();
-      generation=mapEffectGeneration.current;
+      submission.navigation=mapEffectRevisions.current.navigation;
     };
     const supersededFlight=():FlightMapReceipt=>({state:"superseded",observedAt:Date.now()});
     const canRender=()=>surfaceReading.current?.()?.catalogueRenderer==="cesium";
@@ -1960,14 +1975,14 @@ function useWorkspaceValue(initialState: State) {
         const unavailable=()=>finish({state:"ground-unavailable",observedAt:Date.now()});
         const cancelled=()=>finish({state:"cancelled",observedAt:Date.now()});
         claimViewport();
-        activeMapEffect.current={id,supersede:()=>finish(supersededFlight())};
+        activeMapEffect.current={id,kind:command.kind,supersede:()=>finish(supersededFlight())};
         catalogueFlights.current.set(id,receipt=>
           finish(receipt.state==="arrived" && !isCurrent() ? supersededFlight() : receipt));
         timer.addEventListener("abort",unavailable,{once:true});
         signal.addEventListener("abort",cancelled,{once:true});
         patch({flight:{id,kind:"catalogue",camera:command.camera,label:command.placeLabel}},id);
       });
-      return submit({kind:"flight",flight:flight.state==="arrived" && !isCurrent() ? supersededFlight() : flight});
+      return submit({kind:"flight",flight});
     }
     const {target,result}=command;
     const batch=boundCatalogueMapBatch(result,target);
@@ -2000,7 +2015,7 @@ function useWorkspaceValue(initialState: State) {
       const unavailable=()=>finish("failed");
       const superseded=()=>finish("superseded");
       claimViewport();
-      activeMapEffect.current={id,supersede:superseded,observe(frame){
+      activeMapEffect.current={id,kind:command.kind,supersede:superseded,observe(frame){
         if(!isCurrent()){superseded();return;}
         if(frame.runId!==target.runId || frame.batchId!==target.batchId)return;
         if(Date.now()>=task.expiresAt){unavailable();return;}
@@ -2019,7 +2034,8 @@ function useWorkspaceValue(initialState: State) {
   const workspaceAnchors=useRef(new Map<string,string>());
   const executeDiscovery = useCallback(
     async function runDiscovery(attempt: DiscoveryAttempt, retrying: boolean, saved?: ChatDelivery,
-      restoring=false, onResumeAccepted?:()=>void, mapEffectSubmission?:MapEffectSubmission):Promise<void> {
+      restoring=false, onResumeAccepted?:()=>void, mapEffectSubmission?:MapEffectSubmission,
+      parentClaim?:OneEarthAgUiInterruptRecord):Promise<void> {
       if ([...requests.current.values()].some(({progress})=>progress.userMessageId===attempt.userMessageId)) return;
       const q = attempt.query;
       const current = latest.current;
@@ -2033,7 +2049,7 @@ function useWorkspaceValue(initialState: State) {
       const abandon=attempt.nativeResume && attempt.abandonedQuestionCheckId;
       const parentId=reply?.parentTaskId ?? decision?.checkMessageId ?? (abandon || undefined);
       const parentMessage=current.messages.find(m=>m.id===parentId);
-      const parentInterrupt=parentMessage?.nativeInterrupt;
+      const parentInterrupt=parentClaim?.id===parentId ? parentClaim : parentMessage?.nativeInterrupt;
       const parentRun=parentMessage?.replyTo && parentInterrupt
         ? {threadId:current.sessionId,runId:parentMessage.id,turnId:parentMessage.replyTo} : undefined;
       let resume:ResumeEntry|undefined;
@@ -2054,7 +2070,8 @@ function useWorkspaceValue(initialState: State) {
         return;
       }
       const submission = {context:attempt.context,config:readChatModel(),previousTaskId:parentRun?.runId ?? previousTaskId,
-        workspaceResearch:attempt.workspaceResearch,workspaceResearchAction:attempt.workspaceResearchAction};
+        workspaceResearch:attempt.workspaceResearch,workspaceResearchAction:attempt.workspaceResearchAction,
+        ...(resume && parentInterrupt?.operation ? {operationReply:parentInterrupt.operation} : {})};
       const workspaceKey=(state:State)=>attempt.context.browserTurnFrame
         ? frozenWorkspaceKey(state,readWorkspaceSurface()) : requestWorkspaceKey(state);
       const originalRangeRevision=attempt.researchRangeRevision ?? 0;
@@ -2071,10 +2088,12 @@ function useWorkspaceValue(initialState: State) {
       const delivery: ChatDelivery = saved ?? {id: randomId(), attempt};
       const session = current.sessionId;
       const run = {threadId:session,runId:delivery.id,turnId:attempt.userMessageId};
-      const pageToken=mapEffectSubmission && !saved && !restoring && !resume && mapEffectSubmission.sessionId===session
-        ? (workspacePageToken.current??=createWorkspacePageToken()) : undefined;
-      let originalMapEffect:WorkspaceActionEffect|undefined;
-      const handledMapEffects=new Set<string>();
+      if(mapEffectSubmission && !saved && !restoring && !resume && mapEffectSubmission.sessionId===session){
+        mapEffectPages.current.set(run.runId,{token:createWorkspacePageToken(),submission:mapEffectSubmission,started:new Set()});
+      }
+      const mapPage=mapEffectPages.current.get(run.runId);
+      const pageToken=mapPage?.token;
+      let originalMapEffect=mapPage?.latest;
 
       const priorReasoning=saved ? savedNativeSummaries(run.runId,current.messages.find(message=>
         message.id===run.runId && message.replyTo===run.turnId)?.runTrace) : [];
@@ -2118,6 +2137,7 @@ function useWorkspaceValue(initialState: State) {
         const written=abandon ? undefined :
           complete("本地任务已取消。",{id:delivery.id,replyTo:attempt.userMessageId,runTrace:trace??entry.progress.trace,taskLifecycle});
         closeProgress();
+        mapEffectPages.current.delete(run.runId);
         controller.abort();
         await written;
         if(clarificationAttempt)rememberClarificationDelivery(delivery.id);
@@ -2197,17 +2217,22 @@ function useWorkspaceValue(initialState: State) {
             updateProgress({trace:{...trace,providerReasoning:[...(trace.providerReasoning ?? []),snapshot]}});
           },
           onWorkspaceEffect:(effect:WorkspaceActionEffect)=>{
-            if(!isCurrent() || (originalMapEffect && originalMapEffect.effectId!==effect.effectId))return;
-            if(originalMapEffect && effect.status==="waiting" && originalMapEffect.status!=="waiting")return;
+            if(!isCurrent() || !advancesWorkspaceActionEffect(originalMapEffect,effect))return;
             originalMapEffect=effect;
-            if(!pageToken || !mapEffectSubmission || !effect.command || effect.status!=="waiting" ||
-              handledMapEffects.has(effect.effectId) || entry.progress.cancelling)return;
-            handledMapEffects.add(effect.effectId);
+            if(mapPage)mapPage.latest=effect;
+            const missingPage=effect.status==="waiting" && !mapPage;
+            if(!!entry.progress.waitingForOriginalPage!==missingPage)updateProgress({waitingForOriginalPage:missingPage});
+            if(!mapPage || !effect.command || effect.status!=="waiting" ||
+              mapPage.started.has(effect.effectId) || entry.progress.cancelling)return;
+            mapPage.started.add(effect.effectId);
             updateProgress({stage:effect.kind==="flight"?"等待实际飞行到达":"等待目录标注实际绘制"});
-            void refreshResearchRange().then(()=>originalMapEffect?.status==="waiting"
-              ? executePageMapEffect(effect,pageToken,researchRevisionReadable ? mapEffectSubmission :
-                {...mapEffectSubmission,generation:-1},controller.signal) : undefined).then(saved=>{
-              if(saved && isCurrent() && originalMapEffect?.effectId===saved.effectId)originalMapEffect=saved;
+            void refreshResearchRange().then(()=>isCurrent() && !entry.progress.cancelling &&
+              originalMapEffect?.effectId===effect.effectId && originalMapEffect.status==="waiting"
+              ? executePageMapEffect(effect,mapPage.token,researchRevisionReadable || effect.kind==="flight"
+                ? mapPage.submission : {...mapPage.submission,presentation:-1},controller.signal) : undefined).then(saved=>{
+              if(!saved || !isCurrent() || originalMapEffect?.effectId!==saved.effectId ||
+                !advancesWorkspaceActionEffect(originalMapEffect,saved))return;
+              originalMapEffect=mapPage.latest=saved;
             }).catch(()=>{});
           },
           onResearchProgress:(researchProgress:ResearchProgress)=>{
@@ -3000,6 +3025,7 @@ function useWorkspaceValue(initialState: State) {
       } finally {
         if (isCurrent()) {
           closeProgress();
+          if(!keepDelivery)mapEffectPages.current.delete(run.runId);
           if(clarificationAttempt && !keepDelivery)rememberClarificationDelivery(delivery.id);
           if (!keepDelivery && !failedMessages.current.has(delivery.id))
             await removeChatDelivery(session, delivery.id).catch(() => {
@@ -3051,7 +3077,7 @@ function useWorkspaceValue(initialState: State) {
         context:structuredClone({...original,workspaceView,browserTurnFrame}),nativeResume:true,
         ...(decision ? {questionDecision:decision} : {abandonedQuestionCheckId:messageId})};
       return await new Promise<boolean>(resolve=>{
-        void executeDiscovery(attempt,false,undefined,false,()=>resolve(true)).then(()=>resolve(false),()=>resolve(false));
+        void executeDiscovery(attempt,false,undefined,false,()=>resolve(true),undefined,claim).then(()=>resolve(false),()=>resolve(false));
       });
     }catch{
       return false;
@@ -3188,7 +3214,7 @@ function useWorkspaceValue(initialState: State) {
         context:structuredClone({...scopedQuestionContext([],null),workspaceView,browserTurnFrame}),
         ...snapshot,clarificationAnswer:reply,nativeResume:true};
       return await new Promise<boolean>(resolve=>{
-        void executeDiscovery(attempt,false,undefined,false,()=>resolve(true)).then(()=>resolve(false),()=>resolve(false));
+        void executeDiscovery(attempt,false,undefined,false,()=>resolve(true),undefined,claim).then(()=>resolve(false),()=>resolve(false));
       });
     }catch{
       return false;
@@ -3202,7 +3228,7 @@ function useWorkspaceValue(initialState: State) {
     const q = query.trim(), s = latest.current;
     if (!q || s.attachingMapScope || preparingResearchTurn.current.has(s.sessionId)) return;
     const switchId=switchVersion.current;
-    const mapEffectSubmission=s.view==="earth" ? {sessionId:s.sessionId,generation:mapEffectGeneration.current} : undefined;
+    const mapEffectSubmission=s.view==="earth" ? {sessionId:s.sessionId,...mapEffectRevisions.current} : undefined;
     const batch=chatCandidateBatch(s);
     const {workspaceView,browserTurnFrame,...snapshot}=chatRequestSnapshot(s,batch);
     const visibleCase=workspaceView.surface==="cases" && workspaceView.case &&
@@ -3298,7 +3324,7 @@ function useWorkspaceValue(initialState: State) {
     const canApply=initial.view==="earth" && key===attempt.workspaceKey &&
       initial.researchRangeRevision===(attempt.researchRangeRevision??0);
     const target=attempt.context.workspaceView?.surface==="earth"
-      ? {sessionId:session,generation:canApply?mapEffectGeneration.current:-1} : undefined;
+      ? {sessionId:session,...(canApply ? mapEffectRevisions.current : {navigation:-1,presentation:-1})} : undefined;
     try {
       const saved=clarificationDeliveries.current.get(id) ?? (await unfinishedChatDeliveries(session)).find(item=>item.id===id);
       const current=latest.current;

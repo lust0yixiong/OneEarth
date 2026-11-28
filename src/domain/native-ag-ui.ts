@@ -28,10 +28,13 @@ export type OneEarthQuestionCheckResumePayload =
   | {choice:"original"|"proposed";dataQuestion?:never}
   | {choice:"edited";dataQuestion:string};
 
+export type OneEarthOperationReply = {operationId:string;stepId:string};
+
 type InterruptIdentity = {
   id: string;
   status: "pending" | "resolved" | "cancelled" | "unavailable";
   resumedBy?: string;
+  operation?: OneEarthOperationReply;
 };
 export type OneEarthAgUiInterruptRecord = InterruptIdentity & (
   | {kind?:"clarification";prompt:ClarificationPrompt}
@@ -42,6 +45,12 @@ const nativeId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
 
 function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function readOneEarthOperationReply(value:unknown):OneEarthOperationReply|undefined {
+  if (!isRecord(value) || Object.keys(value).length!==2 || typeof value.operationId!=="string" ||
+    typeof value.stepId!=="string" || !nativeId.test(value.operationId) || !nativeId.test(value.stepId)) return;
+  return {operationId:value.operationId,stepId:value.stepId};
 }
 
 function readOneEarthEnvelope(value: unknown): JsonRecord | undefined {
@@ -67,7 +76,9 @@ export function readOneEarthAgUiInterruptRecord(value: unknown, runId: string): 
   if (resumedBy !== undefined && (typeof resumedBy !== "string" || resumedBy === runId || !nativeId.test(resumedBy))) return;
   if ((status === "pending" || status === "unavailable") && resumedBy !== undefined) return;
   if (status === "resolved" && resumedBy === undefined) return;
-  const identity:InterruptIdentity={id:runId,status,...(resumedBy ? {resumedBy} : {})};
+  const operation=readOneEarthOperationReply(value.operation);
+  if(value.operation!==undefined&&!operation)return;
+  const identity:InterruptIdentity={id:runId,status,...(resumedBy ? {resumedBy} : {}),...(operation?{operation}:{})};
   if (value.kind==="question-check") {
     const check=value.questionCheck;
     if (!isRecord(check) || !isQuestion(check.originalQuestion) || !isQuestion(check.proposedQuestion)) return;

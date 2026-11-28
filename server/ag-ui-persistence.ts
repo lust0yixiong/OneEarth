@@ -1,4 +1,6 @@
 import {createHash} from "node:crypto";
+import {projectDiscoveryOperationEnding,receiveDiscoveryOperationReply} from "./ag-ui-operation-discovery";
+import type {RuntimeTurnInput} from "./runtime-turn-handoff";
 import {nativeAgUiSummaryPrefix} from "../src/domain/native-agui-summary";
 import {providerReasoningArchive,providerReasoningLimits} from "./provider-reasoning";
 import type {ProviderReasoningSnapshot} from "../src/domain/types";
@@ -143,9 +145,10 @@ export async function projectAgUiSummary(db:PoolClient,id:string,payload:Payload
   {type:"REASONING_END",messageId},
  ])await writeAgUiEvent(db,id,event);
 }
-export async function admitAgUi(db:PoolClient,id:string,input:AgUiAdmission){
+export async function admitAgUi(db:PoolClient,id:string,input:AgUiAdmission,body:RuntimeTurnInput){
  await claimAgUiResume(db,id,input.threadId,input.resume);
  await bindAgUiWorkspaceReplies(db,input.threadId,input.previousTaskId,input.workspaceReplies??[],id,input.pendingWorkspaceToolCallIds);
+ if(input.resume?.operation)await receiveDiscoveryOperationReply(db,id,body,input.resume);
  await db.query("INSERT INTO runtime_agui_runs(id,thread_id,turn_id,fingerprint,workspace_tool) VALUES($1,$2,$3,$4,$5)",[id,input.threadId,input.turnId,input.fingerprint,!!input.workspaceTool]);
  await writeAgUiEvent(db,id,{type:"RUN_STARTED",threadId:input.threadId,runId:id,protocolVersion:nativeAgUiProtocolVersion});
 }
@@ -167,14 +170,15 @@ export async function appendAgUiText(db:PoolClient,id:string,delta:string){
 /** Called from the original finish/cancel transaction. There is no second
  * task status: this row only records delivery of that same business ending. */
 export async function finishAgUi(db:PoolClient,id:string,status:"complete"|"failed"|"cancelled",payload:Payload){
- const {rows:[run]}=await db.query<{thread_id:string;message_open:boolean;public_text:string;workspace_tool:boolean;public_step:string|null;research_progress:unknown}>("SELECT thread_id,message_open,public_text,workspace_tool,public_step,research_progress FROM runtime_agui_runs WHERE id=$1 AND NOT terminal FOR UPDATE",[id]);
+ const {rows:[run]}=await db.query<{thread_id:string;turn_id:string;message_open:boolean;public_text:string;workspace_tool:boolean;public_step:string|null;research_progress:unknown}>("SELECT thread_id,turn_id,message_open,public_text,workspace_tool,public_step,research_progress FROM runtime_agui_runs WHERE id=$1 AND NOT terminal FOR UPDATE",[id]);
  if(!run)return;
  const progress=settleResearchProgress(readResearchProgress(run.research_progress,id));
  if(progress)await writeResearchProgress(db,id,progress);
  if(run.public_step&&nativeAgUiStepLabel(run.public_step))await writeAgUiEvent(db,id,{type:"STEP_FINISHED",stepName:run.public_step});
  const result=payload.result as DiscoveryResponse|undefined;
+ if(status==="complete"&&result&&run.workspace_tool)await lockAgUiThread(db,run.thread_id);
+ const operation=await projectDiscoveryOperationEnding(db,id,run.thread_id,run.turn_id,status,payload);
  if(status==="complete"&&result){
-  if(run.workspace_tool)await lockAgUiThread(db,run.thread_id);
   const response=publicAgUiResponse(result),message=response.message;
   // An incrementally delivered message is append-only. Never report success
   // for a different repaired/fallback draft under that same message identity.
@@ -187,11 +191,11 @@ export async function finishAgUi(db:PoolClient,id:string,status:"complete"|"fail
   if(check!==undefined){
    if(!validAgUiQuestionCheck(check)||validClarificationPrompt(prompt))throw Error("问题确认缺少唯一有效的原记录。");
    response.questionCheck={originalQuestion:check.originalQuestion,proposedQuestion:check.proposedQuestion};
-   await saveAgUiQuestionCheck(db,id,run.thread_id,response.questionCheck);
-   interrupt=agUiQuestionCheckDefinition(id,response.message);
+   await saveAgUiQuestionCheck(db,id,run.thread_id,response.questionCheck,operation);
+   interrupt=agUiQuestionCheckDefinition(id,response.message,operation);
   }else if(validClarificationPrompt(prompt)){
-   await saveAgUiInterrupt(db,id,run.thread_id,prompt);
-   interrupt=agUiInterruptDefinition(id,prompt);
+   await saveAgUiInterrupt(db,id,run.thread_id,prompt,operation);
+   interrupt=agUiInterruptDefinition(id,prompt,operation);
   }
   const call=run.workspace_tool&&!interrupt?workspaceToolCall(id,response):undefined;
   if(run.workspace_tool&&response.workspaceEffect&&!interrupt&&!call)throw Error("工作台原提案无法绑定唯一工具调用。");

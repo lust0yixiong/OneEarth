@@ -158,3 +158,31 @@ data: {"type":"RUN_ERROR","message":"本轮未完成。请查看该运行的已�
 ```
 
 [HTTP 受理和重号处理](../server/ag-ui-workbench.ts) · [终态投影](../server/ag-ui-persistence.ts) · [地图待办查询](../server/ag-ui-workspace-inventory.ts)
+
+## 持久业务操作（隔离候选）
+
+发现委托等待用户补答时，原卡在 `GET /api/tasks/:runId/record` 的 `interrupt.operation` 中给出 `operationId` 和 `stepId`。收到此字段时，在原生 `resume` 之外，把原卡上的两项值原样放入 `forwardedProps.oneearth.submission.operationReply`。下面是要合入正常续答请求的字段：
+
+```json
+{
+  "previousTaskId": "a6de3ccc-5532-43ca-a794-d62f99749cf5",
+  "operationReply": {
+    "operationId": "5f901d09-e501-4307-b450-cf62efefbe21",
+    "stepId": "23d3fc2a-56fd-45ce-9f2a-41778c69793f"
+  }
+}
+```
+
+`previousTaskId` 和标准 `resume[0].interruptId` 指向同一原卡，`runId` 和末条用户消息 ID 属于新的交互。普通提问可以在同会话里继续受理。过期、错步骤、已消费的补答返回 409。服务端无法为经核实的原操作准备续行时，返回 `OPERATION_RESUME_UNAVAILABLE`。
+
+同一地图业务可以发布多个 `STATE_SNAPSHOT.snapshot.oneearth.workspaceEffect`。每个待办包含原 `runId`、`operationId`、`stepId`、`stepOrder`。`stepOrder` 严格递增，中间可以有服务步骤。浏览器创建原轮时发送 `forwardedProps.oneearth.submission.workspacePage.token`，其值是本页面生成的 64 位十六进制凭据。原页面断流后带 `X-OneEarth-Workspace-Page` 读取原运行的当前待办。收到实际观察后，使用同一凭据发送：
+
+```http
+PUT /api/workspaces/<conversationId>/actions/<operationId>/effects/<stepId>/receipt
+Content-Type: application/json
+X-OneEarth-Workspace-Page: <原页面凭据>
+```
+
+飞行回执使用 `{kind:"flight",flight:{state,observedAt,...}}`，确认实际到达时带实际 H3 地面点。目录绘制使用 `{kind:"catalogue-presentation",presentation:{conversationId,turnId,batchId,coverageRevision,items}}`，每项绑定原数据集 ID 和版本。200 返回保存的事实；能力凭据或归属失配返回 404，事实与原待办冲突返回 409。归档的 `workspaceEffects` 可读本轮各浏览器步骤。等待状态表明尚未验证回执，整页刷新只恢复已存结果及原任务状态。用户可显式取消。
+
+[工作台运行时](../server/runtime-map-operation.ts) · [回执路由](../server/workspace-effect-routes.ts) · [原追问事务](../server/ag-ui-operation-discovery.ts)

@@ -6,9 +6,13 @@ export type FlightMapReceipt = {state:"arrived";observedAt:number;ground:FlightG
   | {state:"cancelled"|"superseded"|"ground-unavailable"|"coverage-unavailable";observedAt:number};
 export const flightCatalogueFollowUp = "请列出上一轮飞行完成后的中心地面网格命中的目录条目。只读取当前覆盖结果，不要扩大范围或另行搜索。";
 
+export function flightCatalogueIntent(query:string) {
+  const match=/^(?:请|帮我)?(?:飞到|飞往|飞向)\s*([^，,。；;！？?\n]{1,80})\s*[，,；;]\s*(?:然后|再|接着)(?:查|查询|检索)(?:一下)?(?:这里|到达点|中心(?:地面)?网格)(?:的?(?:真实)?(?:数据|资料)?目录)?(?:\s*[，,；;]\s*(?:(?:然后|再|接着)\s*)?((?:把|将)(?:本轮|这次)?(?:查询)?(?:的)?结果(?:上球|绘制到球上|显示在球上)))?[。！!]?$/u.exec(query.trim());
+  return match?{place:match[1].trim(),present:!!match[2]}:undefined;
+}
+
 export function flightCataloguePlace(query:string) {
-  return /^(?:请|帮我)?(?:飞到|飞往|飞向)\s*([^，,。；;！？?\n]{1,80})\s*[，,；;]\s*(?:然后|再|接着)(?:查|查询|检索)(?:一下)?(?:这里|当前视野)(?:的?(?:真实)?(?:数据|资料)?目录)?[。！!]?$/u
-    .exec(query.trim())?.[1].trim();
+  return flightCatalogueIntent(query)?.place;
 }
 
 export function validFlightMapReceipt(value:unknown):value is FlightMapReceipt {

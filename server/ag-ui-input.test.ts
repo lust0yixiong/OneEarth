@@ -30,3 +30,20 @@ test("native QuestionDecision mirrors are retired even without a resume entry",(
  const source=input();(source.forwardedProps.oneearth.submission as Record<string,unknown>).questionDecision={checkMessageId:source.runId,originalQuestion:"本轮原话",dataQuestion:"another",choice:"proposed"};
  assert.throws(()=>readAgUiInput(source));
 });
+
+test("native operation resume accepts only the explicit original operation and step",()=>{
+ const source=input(),interruption=randomUUID(),operation={operationId:randomUUID(),stepId:randomUUID()};
+ const submission={...source.forwardedProps.oneearth.submission,operationReply:operation};
+ const wire={...source,forwardedProps:{oneearth:{version:1,submission}},resume:[{interruptId:interruption,status:"resolved",payload:{text:"补充"}}]};
+ const decoded=readAgUiInput(wire);
+ assert.deepEqual(decoded.resume?.operation,operation);
+ assert.equal(decoded.resume?.interruptId,interruption);
+ assert.equal(Object.hasOwn(decoded.body,"operationReply"),false);
+ assert.notEqual(decoded.fingerprint,readAgUiInput({...wire,forwardedProps:{oneearth:{version:1,submission:{
+  ...submission,operationReply:{...operation,stepId:randomUUID()},
+ }}}}).fingerprint);
+ const {resume:_removed,...withoutResume}=wire;
+ assert.throws(()=>readAgUiInput(withoutResume),AgUiInputError);
+ for(const operationReply of [{...operation,runId:interruption},{operationId:operation.operationId},{...operation,stepId:operation.stepId.toUpperCase()}])
+  assert.throws(()=>readAgUiInput({...wire,forwardedProps:{oneearth:{version:1,submission:{...submission,operationReply}}}}),AgUiInputError);
+});

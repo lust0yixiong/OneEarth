@@ -4,7 +4,7 @@ import type {AgUiWorkspaceReply} from "./postgres-ag-ui-workspace";
 import type {AgUiResume} from "./ag-ui-interrupt";
 import {createHash} from "node:crypto";
 import {RunAgentInputSchema} from "@ag-ui/core/schemas";
-import {nativeAgUiProtocolVersion,readOneEarthAgUiSubmission} from "../src/domain/native-ag-ui";
+import {nativeAgUiProtocolVersion,readOneEarthAgUiSubmission,readOneEarthOperationReply} from "../src/domain/native-ag-ui";
 import {taskIdPattern} from "./task-store";
 import {readWorkspaceResearchObservation,readWorkspaceResearchReference} from "../src/domain/workspace-research-state";
 import {workspacePageTokenPattern} from "../src/domain/workspace-action-effect";
@@ -34,9 +34,13 @@ export function readAgUiInput(raw:unknown){
  const latest=run.messages.at(-1),submission=readOneEarthAgUiSubmission(run.forwardedProps);
  if(latest?.role!=="user"||typeof latest.content!=="string"||!taskIdPattern.test(latest.id)||!latest.content.trim()||!submission)
   throw new AgUiInputError("请提交实际用户消息与 OneEarth 工作台输入。");
- const allowed=new Set(["context","config","deepseekTools","previousTaskId","clarificationReply","clarificationAnswer","observationCheck","workspaceResearch","workspaceResearchAction","workspacePage"]);
+ const allowed=new Set(["context","config","deepseekTools","previousTaskId","clarificationReply","clarificationAnswer","observationCheck","workspaceResearch","workspaceResearchAction","workspacePage","operationReply"]);
  if(Object.keys(submission).some(key=>!allowed.has(key)))throw new AgUiInputError("工作台输入含未登记的字段。");
- const {workspaceResearch:rawResearch,workspaceResearchAction:rawAction,workspacePage,...turnSubmission}=submission;
+ const {workspaceResearch:rawResearch,workspaceResearchAction:rawAction,workspacePage,operationReply:rawOperationReply,...turnSubmission}=submission;
+ const operation=readOneEarthOperationReply(rawOperationReply);
+ if(rawOperationReply!==undefined&&(!operation||!resume))
+  throw new AgUiInputError("操作答复必须明确指定原操作、步骤和标准续接。");
+ if(resume&&operation)resume={...resume,operation};
  const pageHash=workspacePage&&typeof workspacePage==="object"&&Object.keys(workspacePage).length===1&&"token" in workspacePage
    ?workspacePageHash(workspacePage.token):undefined;
  if(workspacePage!==undefined&&!pageHash)throw new AgUiInputError("原页面的工作台凭据格式无效。");

@@ -4,6 +4,7 @@ import type {Pool,PoolClient} from "pg";
 import {TaskConflict} from "./task-store";
 import {validClarificationPrompt,type ClarificationPrompt} from "../src/domain/clarification";
 import type {AgUiResume,AgUiInterruptRecord} from "./ag-ui-interrupt";
+import type {OneEarthOperationReply} from "../src/domain/native-ag-ui";
 
 export const agUiInterruptSchema=`
  CREATE TABLE IF NOT EXISTS runtime_agui_interrupts (
@@ -13,42 +14,63 @@ export const agUiInterruptSchema=`
  ALTER TABLE runtime_agui_interrupts ALTER COLUMN prompt DROP NOT NULL;
  ALTER TABLE runtime_agui_interrupts ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'clarification';
  ALTER TABLE runtime_agui_interrupts ADD COLUMN IF NOT EXISTS question_check jsonb;
+ ALTER TABLE runtime_agui_interrupts ADD COLUMN IF NOT EXISTS operation_id uuid;
+ ALTER TABLE runtime_agui_interrupts ADD COLUMN IF NOT EXISTS operation_step_id uuid;
+ CREATE UNIQUE INDEX IF NOT EXISTS runtime_agui_interrupts_operation_step
+  ON runtime_agui_interrupts(operation_id,operation_step_id) WHERE operation_id IS NOT NULL;
  CREATE INDEX IF NOT EXISTS runtime_agui_interrupts_thread ON runtime_agui_interrupts(thread_id,ordinal DESC);
 `;
 export async function lockAgUiThread(db:PoolClient,threadId:string){await db.query("SELECT pg_advisory_xact_lock(7142550,hashtext($1))",[threadId]);}
-export async function saveAgUiInterrupt(db:PoolClient,id:string,threadId:string,prompt:ClarificationPrompt){
- await lockAgUiThread(db,threadId);
- await db.query("INSERT INTO runtime_agui_interrupts(id,thread_id,prompt) VALUES($1,$2,$3)",[id,threadId,prompt]);
+export async function saveAgUiInterrupt(db:PoolClient,id:string,threadId:string,prompt:ClarificationPrompt,operation?:OneEarthOperationReply){
+ if(!operation)await lockAgUiThread(db,threadId);
+ await db.query("INSERT INTO runtime_agui_interrupts(id,thread_id,prompt,operation_id,operation_step_id) VALUES($1,$2,$3,$4,$5)",
+  [id,threadId,prompt,operation?.operationId??null,operation?.stepId??null]);
 }
-export async function saveAgUiQuestionCheck(db:PoolClient,id:string,threadId:string,check:QuestionCheck){
- await lockAgUiThread(db,threadId);
- await db.query("INSERT INTO runtime_agui_interrupts(id,thread_id,kind,question_check) VALUES($1,$2,'question-check',$3)",[id,threadId,{originalQuestion:check.originalQuestion,proposedQuestion:check.proposedQuestion}]);
+export async function saveAgUiQuestionCheck(db:PoolClient,id:string,threadId:string,check:QuestionCheck,operation?:OneEarthOperationReply){
+ if(!operation)await lockAgUiThread(db,threadId);
+ await db.query("INSERT INTO runtime_agui_interrupts(id,thread_id,kind,question_check,operation_id,operation_step_id) VALUES($1,$2,'question-check',$3,$4,$5)",
+  [id,threadId,{originalQuestion:check.originalQuestion,proposedQuestion:check.proposedQuestion},operation?.operationId??null,operation?.stepId??null]);
 }
 export async function readAgUiInterrupt(db:Pick<Pool,"query">,id:string):Promise<AgUiInterruptRecord|undefined>{
- const {rows:[row]}=await db.query<{id:string;thread_id:string;kind:"clarification"|"question-check";question_check:QuestionCheck|null;prompt:ClarificationPrompt|null;consumed_by:string|null;resolution:"resolved"|"cancelled"|null;current:boolean;complete:boolean}>(`SELECT i.*,i.ordinal=(SELECT max(ordinal) FROM runtime_agui_interrupts WHERE thread_id=i.thread_id) AS current,
+ const {rows:[row]}=await db.query<{id:string;thread_id:string;kind:"clarification"|"question-check";question_check:QuestionCheck|null;prompt:ClarificationPrompt|null;consumed_by:string|null;resolution:"resolved"|"cancelled"|null;current:boolean;complete:boolean;operation_id:string|null;operation_step_id:string|null}>(
+ `SELECT i.*,CASE WHEN i.operation_id IS NULL THEN i.ordinal=(
+  SELECT max(ordinal) FROM runtime_agui_interrupts WHERE thread_id=i.thread_id AND operation_id IS NULL
+ ) ELSE EXISTS(
+  SELECT 1 FROM runtime_operations o
+  JOIN runtime_operation_steps s ON s.operation_id=o.operation_id AND s.step_id=o.current_step_id
+  WHERE o.operation_id=i.operation_id AND s.step_id=i.operation_step_id AND s.state='waiting'
+ ) END AS current,
   coalesce(t.status,m.status)='complete' AS complete FROM runtime_agui_interrupts i JOIN runtime_chat_messages m ON m.id=i.id LEFT JOIN runtime_tasks t ON t.id=i.id WHERE i.id=$1`,[id]);
  if(!row||(row.kind==="question-check"?!validAgUiQuestionCheck(row.question_check):!validClarificationPrompt(row.prompt)))return;
  let available=row.current&&row.complete;
- if(available&&!row.consumed_by&&row.kind!=="question-check"&&row.prompt?.kind==="confirmation"){
+ if(available&&!row.operation_id&&!row.consumed_by&&row.kind!=="question-check"&&row.prompt?.kind==="confirmation"){
   const {rows:[latest]}=await db.query<{id:string}>(`SELECT id FROM (
     SELECT id,created FROM runtime_chat_messages WHERE status='complete' AND body::jsonb->>'conversationId'=$1
-    UNION ALL SELECT id,created FROM runtime_tasks WHERE status='complete' AND body::jsonb->>'conversationId'=$1
+    UNION ALL SELECT id,created FROM runtime_tasks WHERE task_type='run' AND status='complete' AND body::jsonb->>'conversationId'=$1
    ) c ORDER BY created DESC,id DESC LIMIT 1`,[row.thread_id]);available=latest?.id===id;
  }
- const identity={id:row.id,status:row.consumed_by?row.resolution??"resolved":available?"pending" as const:"unavailable" as const,...(row.consumed_by?{resumedBy:row.consumed_by}:{})};
+ const operation=row.operation_id&&row.operation_step_id?{operationId:row.operation_id,stepId:row.operation_step_id}:undefined;
+ const identity={id:row.id,...(operation?{operation}:{}),status:row.consumed_by?row.resolution??"resolved":available?"pending" as const:"unavailable" as const,...(row.consumed_by?{resumedBy:row.consumed_by}:{})};
  return row.kind==="question-check"?{...identity,kind:"question-check",questionCheck:{originalQuestion:row.question_check!.originalQuestion,proposedQuestion:row.question_check!.proposedQuestion}}:{...identity,prompt:row.prompt!};
 }
 export async function pendingAgUiInterrupt(db:Pick<Pool,"query">,threadId:string){
- const {rows:[row]}=await db.query<{id:string;consumed_by:string|null}>("SELECT id,consumed_by FROM runtime_agui_interrupts WHERE thread_id=$1 ORDER BY ordinal DESC LIMIT 1",[threadId]);
+ const {rows:[row]}=await db.query<{id:string;consumed_by:string|null}>("SELECT id,consumed_by FROM runtime_agui_interrupts WHERE thread_id=$1 AND operation_id IS NULL ORDER BY ordinal DESC LIMIT 1",[threadId]);
  return row&&!row.consumed_by?readAgUiInterrupt(db,row.id):undefined;
+}
+export async function readAgUiOperationInterrupt(db:Pick<Pool,"query">,threadId:string,operation:OneEarthOperationReply){
+ const {rows:[row]}=await db.query<{id:string}>(
+  "SELECT id FROM runtime_agui_interrupts WHERE thread_id=$1 AND operation_id=$2 AND operation_step_id=$3",
+  [threadId,operation.operationId,operation.stepId]);
+ return row?readAgUiInterrupt(db,row.id):undefined;
 }
 /** Checked again in the original message admission transaction; an earlier
  * read or model decision never claims a parent on its own. */
 export async function claimAgUiResume(db:PoolClient,id:string,threadId:string,resume?:AgUiResume){
  await lockAgUiThread(db,threadId);
- const pending=await pendingAgUiInterrupt(db,threadId);
+ const pending=resume?.operation?await readAgUiOperationInterrupt(db,threadId,resume.operation):await pendingAgUiInterrupt(db,threadId);
  if(!resume){if(pending)throw new TaskConflict("当前会话有未消费的原问题。");return;}
- if(!pending||pending.id!==resume.interruptId||resume.status==="resolved"&&pending.status!=="pending")throw new TaskConflict("原问题已过期或已有一份答复。");
+ if(!pending||pending.id!==resume.interruptId||pending.resumedBy||
+    (resume.status==="resolved"&&pending.status!=="pending"))throw new TaskConflict("原问题已过期或已有一份答复。");
  const {rows}=await db.query(`INSERT INTO runtime_clarification_answers(parent_task_id,answer_id) VALUES($1,$2)
   ON CONFLICT(parent_task_id) DO UPDATE SET answer_id=runtime_clarification_answers.answer_id WHERE runtime_clarification_answers.answer_id=EXCLUDED.answer_id RETURNING answer_id`,[resume.interruptId,id]);
  if(!rows.length)throw new TaskConflict("原问题已有一份提交。");

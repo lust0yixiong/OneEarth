@@ -22,6 +22,7 @@ import {resolveCaseObservation} from "./case-observations";
 import {resolveLayerObservation} from "./layer-observations";
 import {workspaceResearchStateRoutes,workspaceResearchStateStore} from "./workspace-research-state";
 import {workspaceEffectRoutes} from "./workspace-effect-routes";
+import {runtimeMapOperations} from "./runtime-map-operation";
 
 const badRequest: express.ErrorRequestHandler = (_error, _req, res, next) => {
   if (res.headersSent) { next(_error); return; }
@@ -54,6 +55,8 @@ export async function createRuntimeApi(state: string) {
   try {
     const tasks = await postgresTaskStore("runtime");
     dispose.push(() => tasks.close());
+    if(!tasks.operations)throw Error("运行时业务操作存储不可用。");
+    const mapOperations=runtimeMapOperations(tasks.operations);
     const webTools = await runtimeWebToolStore();
     dispose.push(() => webTools.close());
     const webChannel = await runtimeWebToolChannel(webTools);
@@ -76,23 +79,36 @@ export async function createRuntimeApi(state: string) {
     business.use(["/api/paper-records", nativeAgUiPath], express.json({limit:"256kb"}));
     business.use("/api/workspaces",express.json({limit:"24kb"}));
     workspaceResearchStateRoutes(business,workspaceResearch);
-    workspaceEffectRoutes(business,tasks.workspaceEffects);
+    workspaceEffectRoutes(business,{write:async(...input)=>
+      (await mapOperations.receipt(...input))??tasks.workspaceEffects.write(...input)});
     business.put("/api/tasks/:taskId/tool-calls/:toolCallId/receipt", express.json({limit:"16kb"}));
     business.use("/api/paper-records", runtimePaperRoutes());
     business.use(observationMaterialsRoutes());
     const chat = await agUiWorkbench(business, tasks, (id,input,caseObservation,layerObservation) =>
       prepareRuntimeChat(services, id, input, tasks.chat.latestCompleted, {publicAnswer:true,caseObservation,layerObservation}),
-      resolveCaseObservation,resolveLayerObservation,workspaceResearch,true);
+      resolveCaseObservation,resolveLayerObservation,workspaceResearch,true,mapOperations);
     stopWork.push(() => chat.close());
     cataloguePresentationRoutes(business,tasks.cataloguePresentation);
     agUiWorkspaceInventory(business, tasks, tasks.chat.agUiPendingWorkspaceCalls,
       async id => typeof await tasks.chat.agUiFingerprint(id) === "string");
-    taskStatusRoutes(business, "/api/tasks", tasks,
+    taskStatusRoutes(business, "/api/tasks", {...tasks,
+      get:async id=>{
+        const task=await tasks.get(id);
+        return task&&JSON.parse(task.body)?.type!=="workspace-operation"?task:undefined;
+      },
+      finish:async(id,status,result)=>{
+        if(status==="cancelled"){
+          const answer=await mapOperations.cancelRun(id,result);
+          if(answer!==undefined)return answer;
+        }
+        return tasks.finish(id,status,result);
+      }},
       {researchRecords:true,chatIdentity:true,
         readInterrupt:id=>tasks.chat.agUiInterrupt(id),
         readWorkspaceTool:id=>tasks.chat.agUiWorkspaceRecord(id),
         readCataloguePresentation:tasks.cataloguePresentation.read,
-        readWorkspaceEffect:tasks.workspaceEffects.read,
+        readWorkspaceEffect:async(...input)=>(await mapOperations.read(...input))??tasks.workspaceEffects.read(...input),
+        readWorkspaceEffects:mapOperations.history,
         recoverRecord:async task=>(await recoverObservationRecord(tasks,task))??recoverObservationResearchRecord(tasks,task),
         onCancelled:id=>chat.cancel(id)});
     business.use(badRequest);

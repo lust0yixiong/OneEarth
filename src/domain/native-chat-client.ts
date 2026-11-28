@@ -199,7 +199,8 @@ export async function submitNativeChat<T extends object>(
         const [item]=terminal.interrupts;
         const response=readOneEarthAgUiResult(terminal.event.result,runId);
         if(!response || !item || terminal.interrupts.length!==1)return;
-        const identity={id:item.id,status:"pending"};
+        const operation=(item as {metadata?:{oneearth?:{operation?:unknown}}}).metadata?.oneearth?.operation;
+        const identity={id:item.id,status:"pending",...(operation===undefined ? {} : {operation})};
         if(item.reason==="oneearth.question-check" && item.message===response.message && !response.clarificationPrompt){
           const interrupt=readOneEarthAgUiInterruptRecord({...identity,kind:"question-check",questionCheck:response.questionCheck},runId);
           if(interrupt?.kind==="question-check" && interrupt.questionCheck.originalQuestion===question)
@@ -354,8 +355,10 @@ export async function recoverNativeChat(
     signal.throwIfAborted();
     const task=await readNativeTask(run.runId,signal,workspacePageToken);
     if(matchesTaskIdentity(task,identity) && taskStates.has(task.status)){
-      const effect=boundWorkspaceActionEffect(task.workspaceEffect,run);
-      if(effect)progress.onWorkspaceEffect?.(effect);
+      if(task.status==="queued" || task.status==="running"){
+        const effect=boundWorkspaceActionEffect(task.workspaceEffect,run);
+        if(effect)progress.onWorkspaceEffect?.(effect);
+      }
       // Only missing or inconsistent results time out. A confirmed active
       // research run can outlast the recovery window after a page reload.
       if(task.status==="queued" || task.status==="running")until=Date.now()+unavailableTimeout;

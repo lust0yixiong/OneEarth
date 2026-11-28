@@ -3,7 +3,7 @@ import {readWorkspaceEffectReceipt,workspacePageHeader,workspacePageTokenPattern
 import {workspaceIdPattern} from "../src/domain/workspace-research-state";
 import type {WorkspaceEffectsStore} from "./postgres-workspace-effects";
 
-export function workspaceEffectRoutes(router:Router,store:WorkspaceEffectsStore){
+export function workspaceEffectRoutes(router:Router,store:Pick<WorkspaceEffectsStore,"write">){
   router.put("/api/workspaces/:conversationId/actions/:actionId/effects/:effectId/receipt",express.json({limit:"16kb"}),async(req,res)=>{
     const {conversationId,actionId,effectId}=req.params;
     const token=req.get(workspacePageHeader),receipt=req.is("application/json")?readWorkspaceEffectReceipt(req.body):undefined;

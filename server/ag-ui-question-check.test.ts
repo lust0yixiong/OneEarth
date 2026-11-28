@@ -34,7 +34,10 @@ async function setup(t:TestContext,runtimeParent=false){
  const snapshot=()=>({id:remote,contextId:remoteContext,status:{state:confirmed?"TASK_STATE_COMPLETED":"TASK_STATE_INPUT_REQUIRED"},artifacts:runtimeParent?[{artifactId:"new-task-result",parts:[{data:{kind:"oneearth.discovery.event.v1",event:{seq:1,result:result(selectedQuestion,"confirmed")}}}]}]:[{artifactId:"question",parts:[{data:{kind:"oneearth.discovery.event.v1",event:{seq:waitingSeq,result:{...result(check.originalQuestion,"reframe"),questionCheck:check}}}}]},...(confirmed?[{artifactId:"confirmed-result",parts:[{data:{kind:"oneearth.discovery.event.v1",event:{seq:waitingSeq+1,result:result(selectedQuestion,"confirmed")}}}]}]:[])]});
  const provider=express();provider.use(express.json({type:"application/a2a+json"}));provider.post("/message:send",(req,res)=>{requests.push(req.body);const message=req.body.message,input=message.parts[0].data.input;
   if(runtimeParent){assert.equal(message.taskId,undefined);assert.equal(input.decision,undefined);assert.equal(input.continuedFrom,undefined);selectedQuestion=input.query;confirmed=true;}
-  else if(message.taskId){assert.equal(message.taskId,remote);assert.equal(message.contextId,remoteContext);assert.equal(input.continuedFrom,remote);assert.equal(input.query,check.originalQuestion);assert.equal(input.decision.checkMessageId,parentId);assert.equal(input.decision.originalQuestion,check.originalQuestion);selectedQuestion=input.decision.dataQuestion;confirmed=true;}
+  else if(message.taskId){assert.equal(message.taskId,remote);assert.equal(message.contextId,remoteContext);assert.equal(input.continuedFrom,remote);assert.equal(input.query,check.originalQuestion);assert.equal(input.decision.checkMessageId,parentId);assert.equal(input.decision.originalQuestion,check.originalQuestion);
+   const original=requests[0].message.parts[0].data.input;
+   assert.deepEqual(input.scope,original.scope);assert.deepEqual(input.deepseekTools,original.deepseekTools);
+   selectedQuestion=input.decision.dataQuestion;confirmed=true;}
   res.json({task:snapshot()});});provider.get("/tasks/:id",(_req,res)=>res.json(snapshot()));
  const upstream=provider.listen(0,"127.0.0.1");await once(upstream,"listening");const pa=upstream.address();assert.ok(pa&&typeof pa!=="string");process.env.ONEEARTH_DISCOVERY_URL="http://127.0.0.1:"+pa.port;
  const services={tasks,push:{latest:()=>({records:[]})},coverage:async()=>undefined,researchRegionService:{locate:async()=>null},adminBoundaryDir:dir,canonicalCache:new Map()} as unknown as RuntimeServices;
@@ -46,9 +49,15 @@ async function setup(t:TestContext,runtimeParent=false){
  const post=(body:unknown)=>fetch(base+"/api/ag-ui",{method:"POST",headers:{"Content-Type":"application/json",Accept:"text/event-stream"},body:JSON.stringify(body)});
  const decode=(text:string)=>text.split("\n\n").filter(line=>line.startsWith("data: ")).map(line=>EventSchema.parse(JSON.parse(line.slice(6)))) as any[];
  const parent=input(),response=await post(parent);assert.equal(response.status,200);const events=decode(await response.text()),end=events.at(-1);assert.equal(end.type,"RUN_FINISHED");assert.equal(end.outcome.type,"interrupt");assert.equal(end.outcome.interrupts[0].reason,"oneearth.question-check");assert.equal(end.outcome.interrupts[0].id,parentId);
- const card=await(await fetch(base+"/api/tasks/"+parentId+"/record")).json();assert.deepEqual(card.interrupt,{id:parentId,status:"pending",kind:"question-check",questionCheck:check});assert.deepEqual(readOneEarthAgUiInterruptRecord(card.interrupt,parentId),card.interrupt);assert.equal(card.result.clarificationPrompt,undefined);assert.deepEqual(card.result.questionCheck,check);
+ const card=await(await fetch(base+"/api/tasks/"+parentId+"/record")).json();
+ const operation=end.outcome.interrupts[0].metadata?.oneearth.operation;
+ if(runtimeParent)assert.equal(operation,undefined);
+ else assert.ok(operation?.operationId&&operation?.stepId);
+ assert.deepEqual(card.interrupt,{id:parentId,status:"pending",kind:"question-check",questionCheck:check,...(operation?{operation}:{})});
+ assert.deepEqual(readOneEarthAgUiInterruptRecord(card.interrupt,parentId),card.interrupt);
+ assert.equal(card.result.clarificationPrompt,undefined);assert.deepEqual(card.result.questionCheck,check);
  const reopen=await postgresTaskStore("runtime");assert.deepEqual(await reopen.chat.agUiInterrupt(parentId),card.interrupt);await reopen.close();
- const resume=(payload:unknown)=>({...input(randomUUID()),forwardedProps:{oneearth:{version:1,submission:{context,config,previousTaskId:parentId,deepseekTools:{search:false,fetch:false}}}},resume:[{interruptId:parentId,status:"resolved",payload}]});
+ const resume=(payload:unknown)=>({...input(randomUUID()),forwardedProps:{oneearth:{version:1,submission:{context,config,previousTaskId:parentId,deepseekTools:{search:false,fetch:false},...(operation?{operationReply:operation}:{})}}},resume:[{interruptId:parentId,status:"resolved",payload}]});
  const count=async()=>{try{return(await readFile(log,"utf8")).trim().split("\n").filter(Boolean).length;}catch{return 0;}};
  return {tasks,audit,parentId,remote,threadId,requests,resume,post,decode,count,card,setSeq:(value:number)=>{waitingSeq=value;},selected:()=>selectedQuestion};
 }
@@ -61,6 +70,7 @@ for(const choice of ["original","proposed","edited"] as const)test("native Quest
  const wrongParent=f.resume({choice:"original"});wrongParent.forwardedProps.oneearth.submission.previousTaskId=randomUUID();assert.equal((await f.post(wrongParent)).status,409);
  f.setSeq(2);assert.equal((await f.post(f.resume({choice:"original"}))).status,409);f.setSeq(1);assert.equal(await f.count(),before);assert.equal(f.requests.length,requestCount);
  const payload=choice==="edited"?{choice,dataQuestion:"  "+edited+"  "}:{choice},wire=f.resume(payload);let response:globalThis.Response;
+ if(choice==="proposed")wire.forwardedProps.oneearth.submission.deepseekTools={search:true,fetch:true};
  if(choice==="edited"){const other={...wire,runId:randomUUID(),messages:[{...wire.messages[0],id:randomUUID()}]};const responses=await Promise.all([f.post(wire),f.post(other)]);assert.deepEqual(responses.map(r=>r.status).sort(),[200,409]);if(responses[0].status===200)response=responses[0];else{wire.runId=other.runId;wire.messages=other.messages;response=responses[1];}}
  else response=await f.post(wire);
  assert.equal(response.status,200);const final=f.decode(await response.text());assert.equal(final.at(-1).type,"RUN_FINISHED");assert.equal(final.at(-1).outcome,undefined);assert.equal(f.requests.length,2);assert.equal(f.selected(),choice==="original"?check.originalQuestion:choice==="proposed"?check.proposedQuestion:edited);

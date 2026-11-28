@@ -8,16 +8,32 @@ import {TaskParked,type Payload} from "./task-store";
 import {readChatResearchHandoff} from "./runtime-chat-turn";
 import {runWorkspaceActionEffect} from "./runtime-workspace-effect";
 import type {WorkspaceEffectsStore} from "./postgres-workspace-effects";
+import type {RuntimeOperationsStore} from "./runtime-operations";
+import {failWorkspaceMapOperation,runWorkspaceMapOperation} from "./runtime-map-operation";
 
 /** Both explicit capabilities and ordinary research use this production worker. */
 export function runtimeWorkerRunner(services:RuntimeServices,engine?:RuntimeObservationEngine,options:Omit<Parameters<typeof runtimeObservation>[0],"tasks"|"engine">&{
   authority?:ObservationAuthority;chatHandoff?:(id:string)=>Promise<Payload|undefined>;workspaceEffects?:Pick<WorkspaceEffectsStore,"execution">;
+  operations?:RuntimeOperationsStore;
 }={}){
-  const {chatHandoff,workspaceEffects,...observationOptions}=options;
+  const {chatHandoff,workspaceEffects,operations,...observationOptions}=options;
   const observation=runtimeObservation({tasks:services.tasks,engine,...observationOptions});
   const research=runtimeObservationResearch({tasks:services.tasks,engine,...observationOptions});
   return {maintenance:async()=>{await reconcileRuntimeStops(services.tasks);if(engine||process.env.ONEEARTH_SKILL_SERVICE_TOKEN){await observation.reconcileCancelled();await research.reconcileCancelled();}},
     run:async(task:{id:string;body:any;checkpoint?:Payload},signal:AbortSignal,emit:(payload:Payload)=>void)=>modelExecutionContext.run({role:"background",taskId:task.id,tasks:services.tasks},async()=>{
+      if(task.body.type==="workspace-operation"){
+        const operation=await operations?.read(task.id);
+        if(!operations||!operation)return {error:"原业务操作不可用。",code:"operation_unavailable"};
+        if(operation.kind==="workspace-map"){
+          try{return await runWorkspaceMapOperation(services,operations,operation,task.checkpoint,signal,emit);}
+          catch(error){
+            if(signal.aborted)throw error;
+            await failWorkspaceMapOperation(operations,operation);
+            return new TaskParked();
+          }
+        }
+        return {error:"原业务操作未登记可执行能力。",code:"operation_handler_unavailable"};
+      }
       if(task.checkpoint?.kind==="workspace-action-effect.v1"){
         if(!workspaceEffects)return {error:"原工作台待办不可用。",code:"workspace_effect_unavailable"};
         return runWorkspaceActionEffect(services,workspaceEffects,{...task,checkpoint:task.checkpoint},signal,emit);

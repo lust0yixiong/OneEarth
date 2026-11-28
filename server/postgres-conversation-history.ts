@@ -54,7 +54,7 @@ export function postgresConversationHistory(pool:Pool) {
         UNION ALL
         SELECT t.id,t.created,first_event.seq,true
         FROM current_admission c
-        JOIN runtime_tasks t ON ${conversationKey("t.body")}=$1 AND ($4::uuid[] IS NULL OR t.id=ANY($4))
+        JOIN runtime_tasks t ON t.task_type='run' AND ${conversationKey("t.body")}=$1 AND ($4::uuid[] IS NULL OR t.id=ANY($4))
         JOIN LATERAL (
           SELECT seq FROM runtime_events e WHERE e.id=t.id ORDER BY seq LIMIT 1
         ) first_event ON first_event.seq<c.admitted

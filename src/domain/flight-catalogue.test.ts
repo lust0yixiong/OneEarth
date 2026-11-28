@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import {latLngToCell} from "h3-js";
-import {flightCataloguePlace,matchesFlightGround,validFlightMapReceipt} from "./flight-catalogue";
+import {flightCatalogueIntent,flightCataloguePlace,matchesFlightGround,validFlightMapReceipt} from "./flight-catalogue";
 import {validBrowserWorkspaceReceipt} from "./turn-context";
 import {gridSpec} from "./spatial";
 
@@ -9,6 +9,9 @@ test("the supported compound request establishes a flight dependency",()=>{
   assert.equal(flightCataloguePlace("飞到祁连山，再查这里"),"祁连山");
   assert.equal(flightCataloguePlace("不要飞到祁连山，再查这里"),undefined);
   assert.equal(flightCataloguePlace("飞到祁连山，再查敦煌"),undefined);
+  assert.equal(flightCataloguePlace("飞到祁连山，再查当前视野"),undefined);
+  assert.deepEqual(flightCatalogueIntent("飞到祁连山，再查这里，把结果上球"),{place:"祁连山",present:true});
+  assert.deepEqual(flightCatalogueIntent("飞到祁连山，再查中心地面网格"),{place:"祁连山",present:false});
 });
 
 test("flight receipt distinguishes actual ground, cancelled, unavailable and superseded outcomes",()=>{

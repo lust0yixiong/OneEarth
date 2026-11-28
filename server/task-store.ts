@@ -202,6 +202,7 @@ type TaskStatusRouteOptions = {
   readWorkspaceTool?:(id:string)=>Promise<NativeWorkspaceToolRecord | undefined>;
   readCataloguePresentation?:(id:string)=>Promise<import("../src/domain/catalogue-presentation").CataloguePresentation|undefined>;
   readWorkspaceEffect?:(id:string,token?:string)=>Promise<WorkspaceActionEffect|undefined>;
+  readWorkspaceEffects?:(id:string)=>Promise<WorkspaceActionEffect[]|undefined>;
   onCancelled?:(id:string)=>void;
 };
 
@@ -255,14 +256,14 @@ export function taskStatusRoutes(router: Router, base: string, store: TaskStore,
     const {query,turnId,conversationId,context,serverWorkspaceResearch}=JSON.parse(task.body);
     const workspaceResearch=readWorkspaceResearchReference(serverWorkspaceResearch);
     const researchRange=archivedResearchRange(context,result as DiscoveryResponse,workspaceResearch);
-    const [workspaceReceipt,interrupt,workspaceTool,researchProgress,legacyPresentation,workspaceEffect]=await Promise.all([
+    const [workspaceReceipt,interrupt,workspaceTool,researchProgress,legacyPresentation,workspaceEffect,workspaceEffects]=await Promise.all([
       store.workspaceReceipt?.(id),options.readInterrupt?.(id),options.readWorkspaceTool?.(id),store.researchProgress?.(id),
-      options.readCataloguePresentation?.(id),options.readWorkspaceEffect?.(id),
+      options.readCataloguePresentation?.(id),options.readWorkspaceEffect?.(id),options.readWorkspaceEffects?.(id),
     ]);
     const receipt=workspaceEffect?.receipt;
     const cataloguePresentation=receipt?.kind==="catalogue-presentation"?{runId:id,...receipt.presentation}:legacyPresentation;
     res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,
-      result,workspaceReceipt,interrupt,workspaceTool,researchProgress,researchRange,workspaceResearch,cataloguePresentation,workspaceEffect});
+      result,workspaceReceipt,interrupt,workspaceTool,researchProgress,researchRange,workspaceResearch,cataloguePresentation,workspaceEffect,workspaceEffects});
   });
   router.delete(base + "/:taskId", async (req, res) => {
     const id=String(req.params.taskId);

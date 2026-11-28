@@ -1,46 +1,70 @@
 import {makeQuestionDecision} from "../src/domain/question-confirmation";
 import type {QuestionCheck} from "../src/domain/types";
-import type {OneEarthAgUiInterruptRecord} from "../src/domain/native-ag-ui";
+import type {OneEarthAgUiInterruptRecord,OneEarthOperationReply} from "../src/domain/native-ag-ui";
 import {validateTurnStructure} from "./runtime-input";
 import {discoveryConfirmation} from "./discovery-bindings";
 import {clarificationParent} from "./clarification-guard";
 import {assertDiscoveryWaiting} from "./discovery-a2a-client";
 import {validClarificationPrompt,clarificationAnswerText,validClarificationAnswer,type ClarificationPrompt} from "../src/domain/clarification";
-import type {TaskStore} from "./task-store";
+import {taskIdPattern,type TaskStore} from "./task-store";
 import type {RuntimeTurnInput} from "./runtime-turn-handoff";
 import {AgUiInputError} from "./ag-ui-input";
 
-export type AgUiResume={interruptId:string;status:"resolved"|"cancelled";payload?:unknown};
+export type AgUiResume={interruptId:string;status:"resolved"|"cancelled";payload?:unknown;operation?:OneEarthOperationReply};
 export type AgUiInterruptRecord=OneEarthAgUiInterruptRecord;
 export function validAgUiQuestionCheck(value:unknown):value is QuestionCheck{
  if(!value||typeof value!=="object"||Array.isArray(value))return false;
  const check=value as QuestionCheck;
  return [check.originalQuestion,check.proposedQuestion].every(text=>typeof text==="string"&&!!text.trim()&&text.length<=4000&&!text.includes("\0"));
 }
-export function agUiQuestionCheckDefinition(id:string,message:string){
+export function agUiQuestionCheckDefinition(id:string,message:string,operation?:OneEarthOperationReply){
  return {id,reason:"oneearth.question-check",message,responseSchema:{oneOf:[
   {type:"object",additionalProperties:false,properties:{choice:{enum:["original","proposed"]}},required:["choice"]},
   {type:"object",additionalProperties:false,properties:{choice:{const:"edited"},dataQuestion:{type:"string",minLength:1,maxLength:4000}},required:["choice","dataQuestion"]},
- ]},metadata:{oneearth:{version:1,kind:"question-check"}}};
+ ]},metadata:{oneearth:{version:1,kind:"question-check",...(operation?{operation}:{})}}};
 }
-export function agUiInterruptDefinition(id:string,prompt:ClarificationPrompt){
+export function agUiInterruptDefinition(id:string,prompt:ClarificationPrompt,operation?:OneEarthOperationReply){
  const optionIds=prompt.options?.map(option=>option.id),exclusive=prompt.kind==="confirmation";
  return {id,reason:"oneearth.clarification",message:prompt.question,responseSchema:{
   type:"object",additionalProperties:false,properties:{...(optionIds?.length?{optionId:{type:"string",enum:optionIds}}:{}),text:{type:"string",minLength:1,maxLength:4000}},
   anyOf:[...(optionIds?.length?[{required:["optionId"],...(exclusive?{not:{required:["text"]}}:{})}]:[]),{required:["text"],...(exclusive?{not:{required:["optionId"]}}:{})}],
- },metadata:{oneearth:{version:1,kind:prompt.kind,...(prompt.options?{options:prompt.options}:{})}}};
+ },metadata:{oneearth:{version:1,kind:prompt.kind,...(operation?{operation}:{}),...(prompt.options?{options:prompt.options}:{})}}};
 }
-export type AgUiResumeStore=TaskStore&{chat:{agUiInterrupt(id:string):Promise<AgUiInterruptRecord|undefined>;agUiPending(threadId:string):Promise<AgUiInterruptRecord|undefined>}};
+export type AgUiResumeStore=TaskStore&{chat:{
+ agUiInterrupt(id:string):Promise<AgUiInterruptRecord|undefined>;
+ agUiPending(threadId:string):Promise<AgUiInterruptRecord|undefined>;
+ agUiOperationInterrupt?(threadId:string,operation:OneEarthOperationReply):Promise<AgUiInterruptRecord|undefined>;
+}};
 /** Parent cards and choices come only from the persisted native ending. */
 export async function bindAgUiResume(tasks:AgUiResumeStore,body:RuntimeTurnInput,resume:AgUiResume|undefined){
- const latest=await tasks.chat.agUiPending(body.conversationId);
- if(!resume){if(latest)throw new AgUiInputError("当前会话有待回答的原问题，请明确回答或放弃。",409);return body;}
- if(body.previousTaskId!==resume.interruptId)throw new AgUiInputError("续接必须明确引用同一原问题。",409);
- const stored=await tasks.chat.agUiInterrupt(resume.interruptId),parent=await tasks.get(resume.interruptId);
- if(!stored||!parent)throw new AgUiInputError("找不到原生追问。",404);
+ if(!resume){
+  const rawParent=body.clarificationAnswer?.parentTaskId??body.clarificationReply?.parentTaskId;
+  if(typeof rawParent==="string"&&taskIdPattern.test(rawParent)&&(await tasks.chat.agUiInterrupt(rawParent))?.operation)
+    throw new AgUiInputError("这条追问需要原操作和步骤编号。",409);
+  if(await tasks.chat.agUiPending(body.conversationId))throw new AgUiInputError("当前会话有待回答的原问题，请明确回答或放弃。",409);
+  return body;
+ }
+ if((!resume.operation||body.previousTaskId!==undefined)&&body.previousTaskId!==resume.interruptId)throw new AgUiInputError("续接必须明确引用同一原问题。",409);
+ const stored=resume.operation?await tasks.chat.agUiOperationInterrupt?.(body.conversationId,resume.operation):
+  await tasks.chat.agUiInterrupt(resume.interruptId);
+ if(!stored)throw new AgUiInputError(resume.operation?"该追问与原操作或会话不一致。":"找不到原生追问。",resume.operation?409:404);
+ const parent=await tasks.get(stored.id);
+ if(!parent)throw new AgUiInputError("找不到原生追问。",404);
  const original=JSON.parse(parent.body) as RuntimeTurnInput;
- if(original.conversationId!==body.conversationId||body.turnId===original.turnId||body.previousTaskId===undefined||
-   latest?.id!==stored.id||stored.resumedBy)throw new AgUiInputError("原问题已过期、已回答或不属于当前会话。",409);
+ const eligible=resume.operation
+  ?stored.operation?.operationId===resume.operation.operationId&&stored.operation?.stepId===resume.operation.stepId
+  :!stored.operation&&(await tasks.chat.agUiPending(body.conversationId))?.id===stored.id;
+ if(!eligible||stored.id!==resume.interruptId||original.conversationId!==body.conversationId||
+   body.turnId===original.turnId||stored.resumedBy)throw new AgUiInputError("原问题已过期、已回答或不属于当前会话。",409);
+ if(resume.operation){
+  const handoff=await tasks.researchHandoff?.(stored.id);
+  const prepared=handoff?.kind==="chat-research.v1"?handoff.body as RuntimeTurnInput|undefined:undefined;
+  const frozen=prepared?.conversationId===original.conversationId&&prepared.turnId===original.turnId?prepared:original;
+  // The answer supplies a decision. Scope, source permissions and execution
+  // configuration continue to come from the archived original request.
+  body={...body,previousTaskId:stored.id,context:frozen.context,deepseekTools:frozen.deepseekTools,
+    config:frozen.config,serverWorkspaceResearch:frozen.serverWorkspaceResearch};
+ }
  if(stored.kind==="question-check"?!validAgUiQuestionCheck(stored.questionCheck):!validClarificationPrompt(stored.prompt))throw new AgUiInputError("原问题记录不可用。",409);
  if(resume.status==="cancelled"){if(resume.payload!==undefined)throw new AgUiInputError("放弃追问不能同时提交答案。");return body;}
  if(stored.status!=="pending")throw new AgUiInputError("原问题已不可回答，请明确放弃后重新提出。",409);
