@@ -2,9 +2,9 @@
 
 ## 公开逻辑主图
 
-[OneEarth 5474 现行架构图](oneearth-public-architecture.png)由 [README](../../README.md#当前工作台) 和[架构与接口现状](../架构与接口现状.md#公开逻辑架构)共用。图中包括同一浏览器工作台内的 Chat 与 Cesium、5474 的同源网关和运行时、持久化队列、多实例 worker、独立发现与时空服务。[连线说明](../架构与接口现状.md#主图连线说明)
+[OneEarth 主架构图](oneearth-public-architecture.png)由 [README](../../README.md#当前工作台) 和[架构与接口现状](../架构与接口现状.md#公开逻辑架构)共用。图中包括同一浏览器工作台内的 Chat 与 Cesium、5474 的同源网关和运行时、持久化队列、多实例 worker、独立发现与时空服务。实线用于现行组件，虚线用于预留接入。[连线说明](../架构与接口现状.md#主图连线说明)
 
-[预留与规划图](oneearth-planned-architecture.png)保留数据处理智能体、统一表征数据服务和独立工具服务的连线。其生成源为 [render-planned-architecture.py](render-planned-architecture.py)。
+[规划图快照](oneearth-planned-architecture.png)记录数据处理智能体、统一表征数据服务和独立工具服务的连线。其生成源为 [render-planned-architecture.py](render-planned-architecture.py)。
 
 修改主图可编辑[生成脚本](render-public-architecture.py)。在仓库根目录运行下列命令生成 SVG，再用 Chromium 按 SVG 原始画布大小导出 PNG，更新 README 引用的主图。
 

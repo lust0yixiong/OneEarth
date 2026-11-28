@@ -15,9 +15,9 @@ Mac mini 常驻 5474 运行提交 `5c8697c`，设置页显示 `v0.2.0-rc.11`。G
 
 工作台与运行时 API 共用同源入口。Chat 以 AG-UI 1.0 提交运行并接收 SSE，断流后按原运行编号读取状态和归档。默认模型为 DeepSeek Flash。需要推理摘要时，可在设置中选择 Codex 原有服务下标有「思考摘要」的 `gpt-6.1-sol`。研究 worker 支持多实例，从同一队列按租约领取。工作台「查找资料」与 Chat 明确发起的资料发现共用运行时受理。[浏览器接口](docs/工作台-AG-UI.md) · [现行进程拓扑](docs/架构与接口现状.md#现行进程拓扑)
 
-[![OneEarth 5474 现行架构，点击查看大图](docs/diagrams/oneearth-public-architecture.png)](docs/diagrams/oneearth-public-architecture.png)
+[![OneEarth 主架构图，点击查看大图](docs/diagrams/oneearth-public-architecture.png)](docs/diagrams/oneearth-public-architecture.png)
 
-主图按 5474 的已部署链路绘制。Chat 和 Cesium 球体共用工作台和同源后端。运行时将会话研究状态、任务和持久操作写入 PostgreSQL，多个 worker 按租约领取步骤。[主图连线说明](docs/架构与接口现状.md#主图连线说明) · [规划图及其他版本](docs/diagrams/README.md)
+主图的实线显示 5474 已部署链路，虚线标出预留接入。Chat 和 Cesium 共用工作台。运行时 API 与多个 worker 通过 PostgreSQL 交接，各服务的存储沿所属服务连线。[主图连线说明](docs/架构与接口现状.md#主图连线说明) · [规划图及其他版本](docs/diagrams/README.md)
 
 ## 从这里开始
 
