@@ -106,8 +106,8 @@ text(86, 380, "统一入口（Express）", 22, MUTED)
 
 card("runtime-api", 447, 241, 375, 125, "运行时 API",
      ("受理 Chat，按配置选择执行器", "判断与回复，研究任务入库"), body_size=21)
-card("research-worker", 447, 435, 375, 113, "研究 worker",
-     ("从 PostgreSQL 领取任务", "委托发现并归档研究证据"), body_size=20)
+card("research-worker", 447, 435, 375, 113, "研究 worker（多实例）",
+     ("按租约从 PostgreSQL 领取", "委托发现并归档研究证据"), body_size=20)
 card("executor-adapters", 447, 622, 375, 95, "执行器适配层",
      (r"可选执行器  Codex CLI \ Claude Code",), fill="#f1edf8", border="#ddd2ee", body_size=19)
 

@@ -159,7 +159,7 @@ data: {"type":"RUN_ERROR","message":"本轮未完成。请查看该运行的已�
 
 [HTTP 受理和重号处理](../server/ag-ui-workbench.ts) · [终态投影](../server/ag-ui-persistence.ts) · [地图待办查询](../server/ag-ui-workspace-inventory.ts)
 
-## 持久业务操作（隔离候选）
+## 持久业务操作
 
 发现委托等待用户补答时，原卡在 `GET /api/tasks/:runId/record` 的 `interrupt.operation` 中给出 `operationId` 和 `stepId`。收到此字段时，在原生 `resume` 之外，把原卡上的两项值原样放入 `forwardedProps.oneearth.submission.operationReply`。下面是要合入正常续答请求的字段：
 
@@ -187,7 +187,7 @@ X-OneEarth-Workspace-Page: <原页面凭据>
 
 [工作台运行时](../server/runtime-map-operation.ts) · [回执路由](../server/workspace-effect-routes.ts) · [原追问事务](../server/ag-ui-operation-discovery.ts)
 
-### 从工作台独立发现资料（隔离候选）
+### 从工作台独立发现资料
 
 工作台使用当前输入和会话修订，在原会话提交长操作。此路径直接保存资料批次。用户选择「引用到 Chat」后，下次实际发送的消息才读取相应原批次。
 
