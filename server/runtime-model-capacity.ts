@@ -2,6 +2,7 @@ import {hostname} from "node:os";
 import {randomUUID} from "node:crypto";
 import type {Pool} from "pg";
 import {productDatabase} from "./product-database";
+import {reserveRuntimeModelRequest,runtimeModelBudgetSchema,type ModelRequestKind} from "./runtime-model-budget";
 
 export const runtimeLeaseMs=15000;
 export class ModelCapacityUnavailable extends Error {constructor(){super("模型执行容量暂满；本次没有启动模型请求。");}}
@@ -13,6 +14,7 @@ export async function createRuntimeModelCapacity(pool:Pick<Pool,"query"|"connect
   await migration.query("BEGIN");await migration.query("SET LOCAL lock_timeout='5000ms'");await migration.query("SELECT pg_advisory_xact_lock(7142540)");
   await migration.query(`CREATE TABLE IF NOT EXISTS runtime_model_slots(slot integer PRIMARY KEY,owner uuid,role text,task_id uuid,lease_until bigint NOT NULL DEFAULT 0)`);
   await migration.query("ALTER TABLE runtime_model_slots ADD COLUMN IF NOT EXISTS owner_host text;ALTER TABLE runtime_model_slots ADD COLUMN IF NOT EXISTS owner_pid integer;ALTER TABLE runtime_model_slots ADD COLUMN IF NOT EXISTS child_pid integer");
+  await migration.query(runtimeModelBudgetSchema);
   for(let slot=0;slot<limits.total;slot++)await migration.query("INSERT INTO runtime_model_slots(slot) VALUES($1) ON CONFLICT DO NOTHING",[slot]);
   await migration.query("COMMIT");
  }catch(error){await migration.query("ROLLBACK").catch(()=>{});throw error;}finally{migration.release();}
@@ -27,7 +29,9 @@ export async function createRuntimeModelCapacity(pool:Pick<Pool,"query"|"connect
    if(!slot)throw new ModelCapacityUnavailable();
    await client.query("UPDATE runtime_model_slots SET owner=$2,role=$3,task_id=$4,lease_until=(extract(epoch FROM clock_timestamp())*1000)::bigint+$5,owner_host=$6,owner_pid=$7,child_pid=NULL WHERE slot=$1",[slot.slot,owner,role,taskId??null,runtimeLeaseMs,hostname(),process.pid]);
    await client.query("COMMIT");
-   return {async attachProcess(pid:number){
+   return {async reserveRequest(body:Buffer,kind:ModelRequestKind){
+     if(taskId)return reserveRuntimeModelRequest(pool,taskId,body,kind,{slot:slot.slot,owner});
+    },async attachProcess(pid:number){
      if(!Number.isSafeInteger(pid)||pid<=0||!(await pool.query("UPDATE runtime_model_slots SET child_pid=$3 WHERE slot=$1 AND owner=$2 AND lease_until>(extract(epoch FROM clock_timestamp())*1000)::bigint",[slot.slot,owner,pid])).rowCount)throw new ModelCapacityUnavailable();
     },async renew(){return !!(await pool.query(`UPDATE runtime_model_slots SET lease_until=(extract(epoch FROM clock_timestamp())*1000)::bigint+$3
     WHERE slot=$1 AND owner=$2 AND lease_until>(extract(epoch FROM clock_timestamp())*1000)::bigint`,[slot.slot,owner,runtimeLeaseMs])).rowCount;},

@@ -20,6 +20,8 @@ import { closeRuntimeModelCapacity } from "./runtime-model-capacity";
 import { cataloguePresentationRoutes } from "./catalogue-presentation";
 import {resolveCaseObservation} from "./case-observations";
 import {resolveLayerObservation} from "./layer-observations";
+import {workspaceResearchStateRoutes,workspaceResearchStateStore} from "./workspace-research-state";
+import {workspaceEffectRoutes} from "./workspace-effect-routes";
 
 const badRequest: express.ErrorRequestHandler = (_error, _req, res, next) => {
   if (res.headersSent) { next(_error); return; }
@@ -61,6 +63,9 @@ export async function createRuntimeApi(state: string) {
     stopWork.push(() => services.push.endStreams());
     const queries = runtimeWorkbenchQueries(state, queryPapers, queryHainaCatalog, services.push);
     dispose.push(() => queries.close());
+    const workspaceResearch=await workspaceResearchStateStore();
+    dispose.push(workspaceResearch.close);
+    services.workspaceResearch=workspaceResearch;
     const snapshots = await resultSnapshots();
     dispose.push(() => snapshots.close());
 
@@ -69,12 +74,15 @@ export async function createRuntimeApi(state: string) {
     business.use(queries.router);
     business.use("/api/results", snapshots.router);
     business.use(["/api/paper-records", nativeAgUiPath], express.json({limit:"256kb"}));
+    business.use("/api/workspaces",express.json({limit:"24kb"}));
+    workspaceResearchStateRoutes(business,workspaceResearch);
+    workspaceEffectRoutes(business,tasks.workspaceEffects);
     business.put("/api/tasks/:taskId/tool-calls/:toolCallId/receipt", express.json({limit:"16kb"}));
     business.use("/api/paper-records", runtimePaperRoutes());
     business.use(observationMaterialsRoutes());
     const chat = await agUiWorkbench(business, tasks, (id,input,caseObservation,layerObservation) =>
       prepareRuntimeChat(services, id, input, tasks.chat.latestCompleted, {publicAnswer:true,caseObservation,layerObservation}),
-      resolveCaseObservation,resolveLayerObservation);
+      resolveCaseObservation,resolveLayerObservation,workspaceResearch,true);
     stopWork.push(() => chat.close());
     cataloguePresentationRoutes(business,tasks.cataloguePresentation);
     agUiWorkspaceInventory(business, tasks, tasks.chat.agUiPendingWorkspaceCalls,
@@ -84,6 +92,7 @@ export async function createRuntimeApi(state: string) {
         readInterrupt:id=>tasks.chat.agUiInterrupt(id),
         readWorkspaceTool:id=>tasks.chat.agUiWorkspaceRecord(id),
         readCataloguePresentation:tasks.cataloguePresentation.read,
+        readWorkspaceEffect:tasks.workspaceEffects.read,
         recoverRecord:async task=>(await recoverObservationRecord(tasks,task))??recoverObservationResearchRecord(tasks,task),
         onCancelled:id=>chat.cancel(id)});
     business.use(badRequest);

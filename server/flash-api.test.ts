@@ -12,6 +12,7 @@ import {createModelExecutor} from "./executor";
 import {createModelService} from "./model-service";
 import {modelExecutionContext} from "./model-execution-context";
 import {openTaskStore} from "./task-store";
+import {assertRuntimeModelRequestSize,runtimeModelBudgetLimits} from "./runtime-model-budget";
 import type {ProviderReasoningSnapshot} from "../src/domain/types";
 const frame=(type:string,seq:number,fields:Record<string,unknown>={})=>"data: "+JSON.stringify({type,sequence_number:seq,item_id:"one",output_index:0,content_index:0,...fields})+"\n\n";
 async function upstream(t:TestContext,handler:http.RequestListener){const server=http.createServer(handler);server.listen(0,"127.0.0.1");await once(server,"listening");const address=server.address();assert.ok(address&&typeof address!=="string");t.after(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});return ((options:any,callback:any)=>{assert.equal(options.protocol,"https:");assert.equal(options.hostname,"api.deepseek.com");assert.equal(options.path,"/responses");assert.equal(options.headers["accept-encoding"],"identity");return http.request({...options,protocol:"http:",hostname:"127.0.0.1",port:address.port},callback);}) as typeof https.request;}
@@ -46,4 +47,29 @@ test("normal background models still use one CLI spawn rather than the foregroun
  const dir=await mkdtemp(path.join(tmpdir(),"oneearth-background-cli-")),prior=process.env.PATH;await writeFile(path.join(dir,"codex"),'#!/bin/sh\ncat >/dev/null\nprintf \'{"background":true}\'\n',{mode:0o700});process.env.PATH=dir+path.delimiter+(prior||"");t.after(async()=>{process.env.PATH=prior;await rm(dir,{recursive:true,force:true});});
  const tasks=openTaskStore(":memory:");t.after(()=>tasks.close());const run=createModelExecutor(()=>{},(()=>assert.fail("no API transport")) as typeof https.request);
  assert.equal(await modelExecutionContext.run({role:"background",taskId:randomUUID(),tasks},()=>run({executor:"codex",model:"gpt-6-luna"},"Original background task.",AbortSignal.timeout(3000))),'{"background":true}');
+});
+
+
+test("reserves the complete serialized HTTPS request before dispatch, separately recording provider usage",async t=>{
+ let calls=0;
+ const actual:Buffer[]=[],accounting:unknown[]=[];
+ let reserved:Buffer|undefined;
+ const transport=await upstream(t,async(req,res)=>{
+  calls++;
+  const chunks:Buffer[]=[];for await(const bytes of req)chunks.push(bytes);
+  actual.push(Buffer.concat(chunks));
+  res.writeHead(200,{"Content-Type":"text/event-stream"});
+  res.end(frame("response.output_text.done",0,{text:"Verified completion"})+
+    frame("response.completed",1,{response:{status:"completed",usage:{input_tokens:12000,output_tokens:8,total_tokens:12008}}}));
+ });
+ const reserveRequest:import("./runtime-model-budget").ReserveModelRequest=async (bytes,kind)=>{
+  assertRuntimeModelRequestSize(bytes.length);assert.equal(kind,"responses-api");assert.equal(calls,0);
+  reserved=bytes;return {recordUsage:async usage=>{accounting.push(usage);}};
+ };
+ const nearSynthesisLimit=("science \"").repeat(26210);
+ assert.equal(await runFlashApi(nearSynthesisLimit,"CONTROLLED_KEY",AbortSignal.timeout(3000),{transport,reserveRequest}),"Verified completion");
+ assert.deepEqual(actual,[reserved]);assert.ok(actual[0].length>Buffer.byteLength(nearSynthesisLimit));
+ assert.deepEqual(accounting,[{inputTokens:12000,outputTokens:8}]);
+ await assert.rejects(runFlashApi("x".repeat(runtimeModelBudgetLimits.requestBytes),"CONTROLLED_KEY",AbortSignal.timeout(3000),{transport,reserveRequest}),/字节预算/);
+ assert.equal(calls,1);
 });

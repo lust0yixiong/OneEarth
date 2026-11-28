@@ -138,7 +138,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
     setFilters,
     attachScope, adoptCurrentResearchRange,
     openVisualization,inspectAsset,inspectCandidates,flyToGrid,focusAnswerEvidence,flyToEvidence,flyToResearchRegion,
-    leaveDetail, registerWorkspaceSurface, noteManualNavigation, focusGlobeLayer, setGlobeLayerVisible, observePublishedRasters,observeCatalogueFrame,
+    leaveDetail, registerWorkspaceSurface, noteManualNavigation, reportGlobeCamera, focusGlobeLayer, setGlobeLayerVisible, observePublishedRasters,observeCatalogueFrame,
     settleCatalogueFlight,cancelCatalogueFlight,
   } = useWorkspace();
   const stackMode=s.globeLayers.length>0;
@@ -166,7 +166,8 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
   },[]);
   const geoOrientation=orientation.locate;
   const revision=useCatalogRevision();
-  const activeAnswer=s.messages.find(m=>m.id===s.mapResult?.answerId);
+  const activeAnswer=s.messages.find(m=>m.id===s.mapResult?.answerId) ??
+    (s.pendingMapPresentation?.id===s.mapResult?.answerId ? s.pendingMapPresentation : null);
   const answerReferences=useMemo(()=>activeAnswer?.answerNotes?.references
     ? activeAnswer.answerNotes.references.flatMap((r,i)=>r.kind==="asset"?[{assetId:r.id,number:i+1}]:[])
     : (activeAnswer?.answerNotes?.sources || []).map((r,i)=>({assetId:r.id,number:i+1})),[activeAnswer]);
@@ -509,7 +510,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
     const element = canvas.current, root = controls.current, host = cesiumHost.current;
     if (!root || (cesiumProof ? !host : !element)) return;
     const readScene = () => latest.current as Scene;
-    const updateCamera = (camera: Scene["camera"]) => patch({camera});
+    const updateCamera = reportGlobeCamera;
     const select = (selection: NonNullable<Scene["selection"]>) => {
       const {dataView,filters}=latest.current;
       const samples=dataView ? dataSelection(dataView,filters,selection) : [];
@@ -574,7 +575,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
         error: e instanceof Error ? e.message : "数据地球暂时无法绘制。",
       });
     }
-  }, [cesiumProof,patch,noteManualNavigation,observePublishedRasters,observeCatalogueFrame]);
+  }, [cesiumProof,patch,noteManualNavigation,reportGlobeCamera,observePublishedRasters,observeCatalogueFrame]);
   useEffect(()=>{
     const flight=s.flight;
     if(!flight){renderer.current?.stopFlight();return;}
@@ -1014,7 +1015,7 @@ export function GlobeView({haina:legacyHaina,onLayerHaina,rightInset=0,toolsHost
       }
     }
     return {
-      surface: "earth", camera: renderer.current?.currentCamera(), activeLayer, applyControl, resolvePublishedChoice,rasterPresentations,
+      surface: "earth", camera: renderer.current?.currentCamera(), activeLayer, applyControl, resolvePublishedChoice,rasterPresentations,selectedCoverage,
       layerObservation,
       ...(canvas.current?.dataset.globeEngine==="cesium"?{catalogueRenderer:"cesium" as const}:{}),
       panels: {layerMenu:basemapOpen},candidateBatch:gridList??undefined,candidateListExpanded:!!gridList&&!s.evidence,

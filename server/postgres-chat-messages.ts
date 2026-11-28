@@ -1,3 +1,7 @@
+import {assertWorkspaceResearchBinding} from "./workspace-research-state";
+import type {WorkspaceResearchReference} from "../src/domain/workspace-research-state";
+import {newWorkspaceEffect,retainedWorkspaceEffectResult,saveWorkspaceEffect} from "./postgres-workspace-effects";
+import type {WorkspaceEffectCommand} from "../src/domain/workspace-action-effect";
 import {readAgUiWorkspaceRecord,pendingAgUiWorkspaceCalls,bindAgUiWorkspaceReplies,agUiWorkspaceResults,type AgUiWorkspaceReply} from "./postgres-ag-ui-workspace";
 import {readAgUiInterrupt,pendingAgUiInterrupt} from "./postgres-ag-ui-interrupt";
 import {agUiSchema,admitAgUi,appendAgUiText,finishAgUi,projectAgUiProgress,projectAgUiResearchProgress,projectAgUiSummary,type AgUiAdmission} from "./ag-ui-persistence";
@@ -41,7 +45,7 @@ type ChatStatus = "planning" | "handed_off" | "complete" | "failed" | "cancelled
 type ChatRow = Omit<Task, "status"> & {status: ChatStatus};
 type Transaction = <T>(work: (client: PoolClient) => Promise<T>) => Promise<T>;
 type Queue = (db: PoolClient, id: string, body: unknown, checkpoint?: Payload, options?: {
-  created: number; handoff: true;
+  created: number; handoff: true;workspaceEffectExpires?:number;
 }) => Promise<Task>;
 
 export const chatSchema = `
@@ -222,7 +226,7 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
         owner = client;
       } catch (error) { client.release(true); throw error; }
     },
-    async admit(id: string, body: unknown, limit: number, agUi?:AgUiAdmission) {
+    async admit(id: string, body: unknown, limit: number, agUi?:AgUiAdmission, research?:WorkspaceResearchReference) {
       return transaction(async db => {
         await db.query("SELECT pg_advisory_xact_lock(7142532)");
         await lockRuntimeSubmission(db, id);
@@ -236,6 +240,7 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
         }
         const {rows} = await db.query<{active: number}>("SELECT count(*)::int AS active FROM runtime_chat_messages WHERE status='planning'");
         if (rows[0].active >= limit) return;
+        if(research && agUi)await assertWorkspaceResearchBinding(db,agUi.threadId,research);
         await claimClarificationAnswer(db,id,body);
         const now = Date.now();
         const {rows: [saved]} = await db.query<ChatRow>(`
@@ -267,6 +272,23 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
     },
     finish: (id: string, status: "complete" | "failed", payload: Payload) => transaction(db => finish(db, id, status, payload)),
     cancel: (db: PoolClient, id: string, payload: Payload) => finish(db, id, "cancelled", payload),
+    async waitForWorkspaceEffect(id:string,body:RuntimeTurnInput,pageHash:string,command:WorkspaceEffectCommand,result:DiscoveryResponse){
+      const retained=retainedWorkspaceEffectResult(result);
+      if(command.kind==="flight")retained.message="已为本轮保存飞行目标。目录查询须等待原页面的真实到达回执。";
+      return transaction(async db=>{
+        const {rows:[message]}=await db.query<{body:string;created:string}>(
+          "SELECT body,created FROM runtime_chat_messages WHERE id=$1 AND status='planning' FOR UPDATE",[id]);
+        if(!message)return false;
+        const original=JSON.parse(message.body) as RuntimeTurnInput;
+        if(original.conversationId!==body.conversationId||original.turnId!==body.turnId)throw Error("工作台待办归属不一致。");
+        const now=Date.now(),effect=newWorkspaceEffect({runId:id,conversationId:body.conversationId,turnId:body.turnId},command,now);
+        const checkpoint={kind:"workspace-action-effect.v1",effectId:effect.effectId,result:retained,cancelledResult:retained,failedResult:retained};
+        await queue(db,id,original,checkpoint,{created:Number(message.created),handoff:true,workspaceEffectExpires:effect.expiresAt});
+        await saveWorkspaceEffect(db,effect,pageHash,now);
+        await db.query("UPDATE runtime_chat_messages SET status='handed_off',updated=$2 WHERE id=$1",[id,now]);
+        return true;
+      });
+    },
     async promote(id: string, handoff?: Payload, checkpoint?: Payload) {
       return transaction(async db => {
         const {rows: [message]} = await db.query<{body: string; created: string}>(`

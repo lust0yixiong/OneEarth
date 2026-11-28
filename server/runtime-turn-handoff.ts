@@ -10,9 +10,11 @@ import type {RuntimeConversationHistory} from "./conversation-history";
 import type {LayerObservationBinding} from "./runtime-layer-observation";
 import type {CaseObservationBinding} from "./runtime-case-observation";
 import type {RuntimeTurnContext} from "./runtime-turn-context";
+import type {WorkspaceResearchObservation,WorkspaceResearchReference} from "../src/domain/workspace-research-state";
 
 export type RuntimeTurnInput={query:string;conversationId:string;turnId:string;previousTaskId?:string;context:DiscoveryContext;
-  history:TurnHistory;config:ChatModel;questionDecision?:QuestionDecision;deepseekTools?:DeepSeekTools;clarificationReply?:ClarificationReply;clarificationAnswer?:ClarificationAnswer};
+  history:TurnHistory;config:ChatModel;questionDecision?:QuestionDecision;deepseekTools?:DeepSeekTools;clarificationReply?:ClarificationReply;clarificationAnswer?:ClarificationAnswer;
+  serverWorkspaceResearch?:WorkspaceResearchReference;serverWorkspaceResearchAction?:WorkspaceResearchObservation};
 export type ObservationTurnMaterial={artifactId:string;version:string;title:string;variables:string[]};
 export type RuntimeWorkspacePending={taskId:string;question:string;originalQuestion?:string;proposedAction?:import("../src/domain/workspace-view-context").WorkspaceViewAction;
   proposalOrigin?:{layerId:string;controlId:string;valueId:string};clarificationPrompt?:ClarificationPrompt;answer?:ClarificationAnswer};
@@ -28,8 +30,8 @@ function canonical(value:any):any{
   return value;
 }
 export function runtimeTurnFingerprint(body:RuntimeTurnInput){
-  const {query,conversationId,turnId,previousTaskId,context,history,config,questionDecision,deepseekTools,clarificationReply,clarificationAnswer}=body;
-  return createHash("sha256").update(JSON.stringify(canonical({query,conversationId,turnId,previousTaskId,context,history,config,questionDecision,deepseekTools,clarificationReply,clarificationAnswer}))).digest("hex");
+  const {query,conversationId,turnId,previousTaskId,context,history,config,questionDecision,deepseekTools,clarificationReply,clarificationAnswer,serverWorkspaceResearch,serverWorkspaceResearchAction}=body;
+  return createHash("sha256").update(JSON.stringify(canonical({query,conversationId,turnId,previousTaskId,context,history,config,questionDecision,deepseekTools,clarificationReply,clarificationAnswer,serverWorkspaceResearch,serverWorkspaceResearchAction}))).digest("hex");
 }
 export function validRuntimeTurnHandoff(value:unknown):value is RuntimeTurnHandoff{
   if(!value||typeof value!=="object"||Array.isArray(value))return false;

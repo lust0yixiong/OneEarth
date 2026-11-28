@@ -16,7 +16,7 @@ const webTools=await runtimeWebToolStore();
 const services=runtimeServices(state,tasks,webTools);
 const engine=process.env.ONEEARTH_SKILL_REGISTRY&&(process.env.ONEEARTH_SKILL_SERVICE_TOKEN?.length??0)>=32?
   await observationExecution({follower:process.env.ONEEARTH_OBSERVATION_COORDINATOR==="false"}):undefined;
-const runner=runtimeWorkerRunner(services,engine,{chatHandoff:id=>tasks.chat.handoff(id)});
+const runner=runtimeWorkerRunner(services,engine,{chatHandoff:id=>tasks.chat.handoff(id),workspaceEffects:tasks.workspaceEffects});
 const stop=await workTasks(services.tasks, (task, signal, emit) => {
   const timings:ExecutorTiming[]=[];
   return requestPerformance.run(timings, () => runner.run(task,signal,emit));

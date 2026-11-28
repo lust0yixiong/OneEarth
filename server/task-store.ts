@@ -9,6 +9,10 @@ import type { NativeWorkspaceToolRecord } from "../src/domain/native-workspace-t
 import type { AnswerReference, DiscoveryContext, DiscoveryResponse, EvidenceStage } from "../src/domain/types";
 import type { ScopeItem } from "../src/domain/question-scope";
 import {isBoundCoverageSummary} from "../src/domain/coverage-attachment";
+import {readResearchRangeScope} from "../src/domain/research-range";
+import {readWorkspaceResearchReference,type WorkspaceResearchReference} from "../src/domain/workspace-research-state";
+import {sameWorkspaceCoverageSummary} from "./workspace-research-state";
+import {workspacePageHeader,type WorkspaceActionEffect} from "../src/domain/workspace-action-effect";
 
 export const taskIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export type TaskStatus = "queued" | "running" | "complete" | "failed" | "cancelled";
@@ -27,6 +31,9 @@ export type ConversationHistoryTurn = {
   assistantText?: string;
   references?: (AnswerReference & {webEvidenceStage?: EvidenceStage})[];
   observationRestricted: boolean;
+  indexOnly?: true;
+  bodyOmitted?: true;
+  windowLimited?: true;
 };
 type EventRow = {seq: number; at: number; payload: string};
 
@@ -182,7 +189,7 @@ export type TaskStore = {
   renewLease?:(lease:RuntimeTaskLease)=>Promise<boolean>;releaseLease?:(lease:RuntimeTaskLease)=>Promise<void>;materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>;researchHandoff?:(id:string)=>Promise<Payload|undefined>;
   workspaceReceipt?:(id:string)=>Promise<import("../src/domain/turn-context").WorkspaceReceipt|undefined>;
   researchExecution?:(id:string)=>Promise<ResearchExecutionReceipt|undefined>;
-  conversationHistory?:(conversationId:string,currentTaskId:string)=>Promise<ConversationHistoryTurn[]>}&{
+  conversationHistory?:(conversationId:string,currentTaskId:string,request?:import("./conversation-history").ConversationHistoryRequest)=>Promise<ConversationHistoryTurn[]>}&{
   [Method in "step"|"clearStep"|"saveStep"|"park"|"cancelStep"|"cancelledSteps"]?:(...args:Parameters<LocalTaskStore[Method]>)=>ReturnType<LocalTaskStore[Method]>|Promise<ReturnType<LocalTaskStore[Method]>>;
 };
 
@@ -194,23 +201,30 @@ type TaskStatusRouteOptions = {
   readInterrupt?:(id:string)=>Promise<OneEarthAgUiInterruptRecord | undefined>;
   readWorkspaceTool?:(id:string)=>Promise<NativeWorkspaceToolRecord | undefined>;
   readCataloguePresentation?:(id:string)=>Promise<import("../src/domain/catalogue-presentation").CataloguePresentation|undefined>;
+  readWorkspaceEffect?:(id:string,token?:string)=>Promise<WorkspaceActionEffect|undefined>;
   onCancelled?:(id:string)=>void;
 };
 
 /** Historical range state only comes from a condition that the spatial service verified for this run. */
-function archivedResearchRange(context:DiscoveryContext|undefined,result:DiscoveryResponse):Extract<ScopeItem,{kind:"grid"}>|undefined {
+function archivedResearchRange(context:DiscoveryContext|undefined,result:DiscoveryResponse,
+  workspaceResearch?:WorkspaceResearchReference):Extract<ScopeItem,{kind:"grid"}>|undefined {
   const items=context?.attachedScope;
   const attached=Array.isArray(items)?items.find(item=>item?.kind==="grid"):undefined;
   const evidence=result?.gridCoverage;
   const revision=attached?.conditionRevision;
   if(typeof revision!=="number"||!Number.isSafeInteger(revision)||revision<1||!attached?.coverageScope||
-    evidence?.status!=="ready"||evidence.scopeId!==attached.coverageScope.id||
+    evidence?.status!=="ready"||
     evidence.revision!==attached.coverageScope.revision||evidence.cellId!==attached.selection.id||
     evidence.gridKey!==attached.selection.grid.key||
     !isBoundCoverageSummary(evidence.summary,evidence.cellId,evidence.gridKey))return;
   const {selection}=evidence.summary;
   if(selection.grid.system!=="h3"||selection.point[0]!==attached.selection.point[0]||
     selection.point[1]!==attached.selection.point[1])return;
+  if(evidence.scopeId!==attached.coverageScope.id){
+    const original=readResearchRangeScope(attached);
+    if(!original||workspaceResearch?.revision!==revision||original.coverageScope.summary.candidateCount!==null||
+      !sameWorkspaceCoverageSummary(original.coverageScope.summary,evidence.summary))return;
+  }
   return {kind:"grid",selection,place:attached.place,conditionRevision:revision,
     coverageScope:{id:evidence.scopeId,revision:evidence.revision,summary:evidence.summary}};
 }
@@ -229,22 +243,26 @@ export function taskStatusRoutes(router: Router, base: string, store: TaskStore,
       if (typeof conversationId === "string") identity.conversationId = conversationId;
       if (typeof turnId === "string") identity.turnId = turnId;
     }
-    const [runtimeStatus,researchProgress]=await Promise.all([store.runtimeStatus?.(task.id),store.researchProgress?.(task.id)]);
-    res.set("Cache-Control", "no-store").json({id:task.id, status:task.status, created:task.created, updated:task.updated,...identity,...runtimeStatus,researchProgress});
+    const [runtimeStatus,researchProgress,workspaceEffect]=await Promise.all([store.runtimeStatus?.(task.id),store.researchProgress?.(task.id),
+      options.readWorkspaceEffect?.(task.id,task.status==="queued"||task.status==="running"?req.get(workspacePageHeader):undefined)]);
+    res.set("Cache-Control", "no-store").json({id:task.id, status:task.status, created:task.created, updated:task.updated,...identity,...runtimeStatus,researchProgress,workspaceEffect});
   });
   if(options.researchRecords)router.get(base+"/:taskId/record",async(req,res)=>{
     const id=String(req.params.taskId);
     const task=await store.get(id);
     const result=(await store.terminal(id))?.result??(task?await options.recoverRecord?.(task):undefined);
     if(!task||!result){res.status(404).json({error:"没有找到已完成的研究记录。"});return;}
-    const {query,turnId,conversationId,context}=JSON.parse(task.body);
-    const researchRange=archivedResearchRange(context,result as DiscoveryResponse);
-    const [workspaceReceipt,interrupt,workspaceTool,researchProgress,cataloguePresentation]=await Promise.all([
+    const {query,turnId,conversationId,context,serverWorkspaceResearch}=JSON.parse(task.body);
+    const workspaceResearch=readWorkspaceResearchReference(serverWorkspaceResearch);
+    const researchRange=archivedResearchRange(context,result as DiscoveryResponse,workspaceResearch);
+    const [workspaceReceipt,interrupt,workspaceTool,researchProgress,legacyPresentation,workspaceEffect]=await Promise.all([
       store.workspaceReceipt?.(id),options.readInterrupt?.(id),options.readWorkspaceTool?.(id),store.researchProgress?.(id),
-      options.readCataloguePresentation?.(id),
+      options.readCataloguePresentation?.(id),options.readWorkspaceEffect?.(id),
     ]);
+    const receipt=workspaceEffect?.receipt;
+    const cataloguePresentation=receipt?.kind==="catalogue-presentation"?{runId:id,...receipt.presentation}:legacyPresentation;
     res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,
-      result,workspaceReceipt,interrupt,workspaceTool,researchProgress,researchRange,cataloguePresentation});
+      result,workspaceReceipt,interrupt,workspaceTool,researchProgress,researchRange,workspaceResearch,cataloguePresentation,workspaceEffect});
   });
   router.delete(base + "/:taskId", async (req, res) => {
     const id=String(req.params.taskId);

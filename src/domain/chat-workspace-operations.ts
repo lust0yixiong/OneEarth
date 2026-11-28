@@ -79,6 +79,8 @@ export function availableChatOperations(s:State, batch:CandidateSet|null, citati
   operations.set("open-research-lists",{key:"open-research-lists"});
   const rangeAdoption=researchRangeAdoptionKey(s);
   if (rangeAdoption) operations.set("adopt-research-range",{key:rangeAdoption});
+  if(s.researchRange && s.researchRangeActionId)
+    operations.set("clear-research-range",{key:s.researchRangeActionId});
   if(s.view==="earth" && s.overview==="catalog" && !s.caseId && !s.visualization && !s.dataView &&
     !s.fieldLayer && !s.publicLayer && !s.inspector && !s.evidence)
     operations.set("present-catalogue",{key:"catalogue-globe"});

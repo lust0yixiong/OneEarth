@@ -6,7 +6,7 @@ import {initialAccessSection} from "./data-access";
 import {assetById} from "./datasets";
 import {datasetLayers, globeCases} from "./regional-cases";
 import type {State} from "./store";
-import type {Camera, CandidateSet, View} from "./types";
+import type {Camera, CandidateSet, Filters, Selection, View} from "./types";
 import type {WorkspaceViewAction, WorkspaceViewChoice, WorkspaceViewContext, WorkspaceViewPublication} from "./workspace-view-context";
 
 export type WorkspacePanelReading = {
@@ -21,6 +21,7 @@ export type WorkspaceSurfaceReading = {
   observation?: CaseObservationRef;
   layerObservation?: LayerObservationRef;
   catalogueRenderer?: "cesium";
+  selectedCoverage?: {selection:Selection;filters:Filters;batch?:CandidateSet|null;revision:string};
   camera?: Camera;
   rasterPresentations?: PublishedRasterPresentation[];
   activeLayer?: WorkspaceViewContext["activeLayer"];

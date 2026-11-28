@@ -14,6 +14,7 @@ export function estimatedHistoryTokens(value:unknown):number{
  }return total;
 }
 export type HistorySelection={taskId:string;turnId:string|null;blockIds:string[]};
+export type ConversationHistoryRequest={mode:"initial"}|{mode:"read";selections:HistorySelection[]};
 export type HistoryBlock={id:string;role:"user"|"assistant";text:string;start:number;end:number};
 export type HistorySummary={taskId:string;turnId:string|null;blockIds:string[];text:string};
 type StoredTurn=HistoryTurn&{order:number;blocks:HistoryBlock[]};
@@ -47,12 +48,12 @@ export class RuntimeConversationHistory{
  private originalReferences=new Map<string,HistoryTurn["references"]>();
  summaries:HistorySummary[]=[];
  private summarySources=new Map<string,Set<string>>();
- constructor(rows:HistoryTurn[],currentTaskId:string){
+ constructor(rows:HistoryTurn[],currentTaskId:string,private load?:(selections:HistorySelection[])=>Promise<HistoryTurn[]>){
   for(const row of rows)if(row&&!row.observationRestricted&&!row.references?.some(ref=>ref.kind==="asset"&&ref.evidenceLevel==="observation-file")&&row.taskId!==currentTaskId&&taskIdPattern.test(row.taskId))this.originalReferences.set(row.taskId,row.references);
   const seen=new Set<string>();this.turns=rows.filter(row=>row&&taskIdPattern.test(row.taskId)&&row.taskId!==currentTaskId&&!seen.has(row.taskId)&&!!seen.add(row.taskId)&&Number.isFinite(row.submittedAt)&&typeof row.question==="string")
    .map((row,order)=>{
     const safe=modelSafeValue(row.observationRestricted||row.references?.some(ref=>ref.kind==="asset"&&ref.evidenceLevel==="observation-file")?{taskId:row.taskId,turnId:row.turnId,submittedAt:row.submittedAt,taskState:row.taskState,question:"此前观测轮由独立授权路径管理，本历史区未提供正文和出处。",observationRestricted:true}:row);
-    return {...safe,order,blocks:[...blocks(safe.question,"user"),...blocks(safe.assistantText||"","assistant")]};
+    return {...safe,order,blocks:row.indexOnly?[]:[...blocks(safe.question,"user"),...blocks(safe.assistantText||"","assistant")]};
    });
  }
  sourceTargets(question:string){
@@ -60,16 +61,17 @@ export class RuntimeConversationHistory{
   return [...ranked.filter(({item})=>this.selectedTaskIds.has(item.taskId)),...ranked.filter(({item})=>!this.selectedTaskIds.has(item.taskId))].flatMap(({item})=>(this.originalReferences.get(item.taskId)||[]).map(reference=>({reference,taskId:item.taskId,turnId:item.turnId}))).slice(0,32);
  }
  private project(limit:number,selections?:HistorySelection[]):ConversationProjection{
-  const selected=new Map<string,Set<string>>(),requested=selections||[],missing:string[]=selections&&!selections.length?["旧轮查阅请求格式无效"]:[];
+  const selected=new Map<string,Set<string>>(),requested=selections||[],partial=new Set<string>(),windowLimited=this.turns.some(turn=>turn.windowLimited),missing:string[]=selections&&!selections.length?["旧轮查阅请求格式无效"]:[];
   for(const s of requested){const turn=this.turns.find(turn=>turn.taskId===s.taskId);if(!turn||s.turnId!==null&&s.turnId!==turn.turnId||turn.observationRestricted){missing.push("原轮不存在、受限或轮次不符");continue;}
-   if(s.blockIds.some(id=>!turn.blocks.some(block=>block.id===id))){missing.push("原轮没有该段块");continue;}
+   if(turn.bodyOmitted)partial.add(s.taskId);
+   if(!turn.bodyOmitted&&s.blockIds.some(id=>!turn.blocks.some(block=>block.id===id))){missing.push("原轮没有该段块");continue;}
    selected.set(s.taskId,new Set(s.blockIds.length?s.blockIds:turn.blocks.map(b=>b.id)));
   }
   const result:ConversationProjection={source:"same-conversation-server",turns:[],index:[],summaries:[],...(selections?{readback:{state:missing.length?"unavailable":"loaded",requested, ...(missing.length?{reason:[...new Set(missing)].join("；")}: {})}}:{}),
-   budget:{estimatedTokens:0,limit:8000,utf8Bytes:0,method,omittedTurns:0,omittedBlocks:0,indexComplete:true},notice};
+   budget:{estimatedTokens:0,limit:8000,utf8Bytes:0,method,omittedTurns:0,omittedBlocks:0,indexComplete:!windowLimited},notice:windowLimited?notice+" 历史目录只提供最近的有界窗口，更早的轮次未知。":notice};
   const measure=()=>{for(let i=0;i<3;i++){result.budget.estimatedTokens=estimatedHistoryTokens(result);result.budget.utf8Bytes=Buffer.byteLength(JSON.stringify(result));}return estimatedHistoryTokens(result);};
   const fits=()=>measure()<=Math.max(0,limit);
-  const full=this.turns.map(turn=>({order:turn.order,taskId:turn.taskId,turnId:turn.turnId,submittedAt:turn.submittedAt,taskState:turn.taskState,observationRestricted:turn.observationRestricted,references:turn.references||[],blocks:turn.blocks,complete:true}));
+  const full=this.turns.map(turn=>({order:turn.order,taskId:turn.taskId,turnId:turn.turnId,submittedAt:turn.submittedAt,taskState:turn.taskState,observationRestricted:turn.observationRestricted,references:turn.references||[],blocks:turn.blocks,complete:!turn.bodyOmitted}));
   const allFit=estimatedHistoryTokens({...result,turns:full})+40<=limit;
   const recent=this.turns.slice(-3),desired=Math.min(1600,Math.max(500,estimatedHistoryTokens(this.summaries)+Math.min(900,this.turns.length*90)));
   const recentCost=estimatedHistoryTokens({...result,turns:full.slice(-3)});
@@ -82,14 +84,14 @@ export class RuntimeConversationHistory{
    result.turns.push(row);if(!fits()){result.turns.pop();continue;}
    const wanted=selected.get(turn.taskId);
    for(const block of turn.blocks){if(wanted&&!wanted.has(block.id))continue;row.blocks.push(block);if(measure()>limit-(selected.has(turn.taskId)?0:reserve))row.blocks.pop();}
-   row.complete=row.blocks.length===turn.blocks.length;
+   row.complete=!turn.bodyOmitted&&row.blocks.length===turn.blocks.length;
    if(!row.blocks.length){result.turns.pop();included.delete(turn.taskId);}
   }
   result.turns.sort((a,b)=>a.order-b.order);
   // Recent raw turns first, then actual semantic summaries and origin indices.
   for(const summary of this.summaries){result.summaries.push({...summary,kind:"model-summary",complete:false});if(!fits())result.summaries.pop();}
   for(const turn of this.turns){if(result.turns.some(row=>row.taskId===turn.taskId&&row.complete))continue;
-   const entry={order:turn.order,taskId:turn.taskId,turnId:turn.turnId,submittedAt:turn.submittedAt,taskState:turn.taskState,blockIds:turn.blocks.map(block=>block.id),
+   const entry={order:turn.order,taskId:turn.taskId,turnId:turn.turnId,submittedAt:turn.submittedAt,taskState:turn.taskState,blockIds:turn.blocks.map(block=>block.id),...(turn.bodyOmitted?{partial:true as const}:{}),
     blocks:turn.blocks.map(block=>({id:block.id,role:block.role,start:block.start,end:block.end,kind:/^\s*\|[^\n]*\|/m.test(block.text)?"table" as const:"paragraph" as const,estimatedTokens:estimatedHistoryTokens(block.text)})),
     references:turn.references?.slice(0,8)||[],omittedReferences:Math.max(0,(turn.references?.length||0)-8),
     ...(estimatedHistoryTokens(turn.question)<=120?{question:turn.question}:{}),observationRestricted:turn.observationRestricted,referenceCount:turn.references?.length||0};
@@ -105,13 +107,13 @@ export class RuntimeConversationHistory{
     const row={order:turn.order,taskId:turn.taskId,turnId:turn.turnId,submittedAt:turn.submittedAt,taskState:turn.taskState,observationRestricted:turn.observationRestricted,references:turn.references||[],blocks:[] as HistoryBlock[],complete:false};
     result.turns.push(row);if(!fits()){result.turns.pop();continue;}
     for(const block of turn.blocks){row.blocks.push(block);if(!fits())row.blocks.pop();}
-    row.complete=row.blocks.length===turn.blocks.length;if(!row.blocks.length)result.turns.pop();
+    row.complete=!turn.bodyOmitted&&row.blocks.length===turn.blocks.length;if(!row.blocks.length)result.turns.pop();
     if(row.complete){result.index=result.index.filter(old=>old.taskId!==turn.taskId);result.summaries=result.summaries.filter(summary=>summary.taskId!==turn.taskId);}
   }
   result.turns.sort((a,b)=>a.order-b.order);
-  const known=new Map(result.turns.map(turn=>[turn.taskId,turn]));result.budget.omittedTurns=this.turns.filter(turn=>!known.get(turn.taskId)?.complete).length;
+  const known=new Map(result.turns.map(turn=>[turn.taskId,turn]));result.budget.omittedTurns=this.turns.filter(turn=>!known.get(turn.taskId)?.complete).length+Number(windowLimited);
   result.budget.omittedBlocks=this.turns.reduce((n,turn)=>n+turn.blocks.length-(known.get(turn.taskId)?.blocks.length||0),0);
-  if(selections&&!missing.length&&requested.some(s=>{const old=this.turns.find(turn=>turn.taskId===s.taskId)!;return (s.blockIds.length?s.blockIds:old.blocks.map(b=>b.id)).some(id=>!known.get(s.taskId)?.blocks.some(b=>b.id===id));}))result.readback={state:"partial",requested,reason:"请求的整段或整表超过本次历史预算；没有裁断段/表，未装入部分保持未知。"};
+  if(selections&&!missing.length&&(partial.size>0||requested.some(s=>{const old=this.turns.find(turn=>turn.taskId===s.taskId)!;return (s.blockIds.length?s.blockIds:old.blocks.map(b=>b.id)).some(id=>!known.get(s.taskId)?.blocks.some(b=>b.id===id));})))result.readback={state:"partial",requested,reason:"请求的原轮有内容未进入本次历史预算；没有裁断段或表，未装入部分保持未知。"};
   measure();while(!fits()&&result.index.length)result.index.pop();while(!fits()&&result.summaries.length)result.summaries.pop();while(!fits()&&result.turns.length)result.turns.shift();measure();
   if(!fits())throw Error("历史区的必要状态超过本次可用估算预算，未向模型发送超限历史。");return result;
  }
@@ -120,8 +122,26 @@ export class RuntimeConversationHistory{
   this.selectedTaskIds=new Set(selections.filter(s=>this.turns.some(turn=>turn.taskId===s.taskId&&!turn.observationRestricted&&(s.turnId===null||s.turnId===turn.turnId)&&s.blockIds.every(id=>turn.blocks.some(block=>block.id===id)))).map(s=>s.taskId));
   return this.project(limit,selections);
  }
+ async readBounded(selections:HistorySelection[],limit=conversationTokenLimit){
+  const wanted=selections.filter(s=>this.turns.some(turn=>turn.taskId===s.taskId&&!turn.observationRestricted&&
+    (s.turnId===null||s.turnId===turn.turnId)&&turn.bodyOmitted));
+  if(this.load&&wanted.length){
+   const admitted=await this.load(wanted);
+   for(const row of admitted){
+    if(!wanted.some(s=>s.taskId===row.taskId&&(s.turnId===null||s.turnId===row.turnId))||row.observationRestricted||
+      row.references?.some(ref=>ref.kind==="asset"&&ref.evidenceLevel==="observation-file"))continue;
+    const index=this.turns.findIndex(turn=>turn.taskId===row.taskId&&turn.turnId===row.turnId);
+    if(index<0)continue;
+    const old=this.turns[index],safe=modelSafeValue(row);
+    this.turns[index]={...safe,order:old.order,windowLimited:old.windowLimited,
+      blocks:[...blocks(safe.question,"user"),...blocks(safe.assistantText||"","assistant")]};
+    this.originalReferences.set(row.taskId,row.references);
+   }
+  }
+  return this.read(selections,limit);
+ }
  summaryInput(question:string,limit=5000){
-  const recent=new Set(this.turns.slice(-3).map(turn=>turn.taskId)),rows=this.turns.filter(turn=>!recent.has(turn.taskId)&&!turn.observationRestricted);
+  const recent=new Set(this.turns.slice(-3).map(turn=>turn.taskId)),rows=this.turns.filter(turn=>!recent.has(turn.taskId)&&!turn.observationRestricted&&!turn.indexOnly);
   const selected:Array<{taskId:string;turnId:string|null;blocks:HistoryBlock[];references:HistoryTurn["references"]}>=[];this.summarySources.clear();
   const ranked=rankEvidence(rows,[question],row=>row.question,row=>row.assistantText||"");
   for(const {item} of ranked){const row={taskId:item.taskId,turnId:item.turnId??null,blocks:[] as HistoryBlock[],references:item.references||[]};selected.push(row);

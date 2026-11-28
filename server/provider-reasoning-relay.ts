@@ -7,6 +7,7 @@ import {ProviderReasoningObserver,type ProviderReasoningSink} from "./provider-r
 import {assertModelContextSafe} from "./model-context-safety";
 import type {ChatModel} from "../src/domain/chat-model";
 import {projectProviderRequest} from "./provider-cli-request";
+import type {ModelRequestReservation,ReserveModelRequest} from "./runtime-model-budget";
 
 export function publicFlashResponses(config:ChatModel){
  return config.executor==="codex"&&config.model==="deepseek-flash"&&(config.provider==="deepseek"||config.provider==="custom"&&config.endpoint==="https://api.deepseek.com");
@@ -30,19 +31,26 @@ export function validProviderRequest(bytes:Buffer,encoding:string|undefined){
 
 /** One authenticated loopback listener per actual CLI invocation. Production
  * always uses this pinned HTTPS origin; transport injection is server-only. */
-export async function providerReasoningRelay(apiKey:string,sink:ProviderReasoningSink,signal:AbortSignal,expectedPrompt:string,transport:typeof https.request=https.request,options:{maxRequests?:number}={}){
+export async function providerReasoningRelay(apiKey:string,sink:ProviderReasoningSink,signal:AbortSignal,expectedPrompt:string,transport:typeof https.request=https.request,options:{maxRequests?:number;reserveRequest?:ReserveModelRequest}={}){
  signal.throwIfAborted();const token=randomBytes(32).toString("base64url"),attempt=randomUUID();
  const active=new Set<http.ClientRequest>(),observers=new Set<ProviderReasoningObserver>();let requests=0,closed=false;
  const server=http.createServer(async(req,res)=>{
   if(closed||signal.aborted||req.method!=="POST"||req.url!=="/responses"||req.headers.authorization!=="Bearer "+token){res.writeHead(403).end();return;}
-  if(++requests>(options.maxRequests??4)){res.writeHead(429).end();return;}
+  const requestNumber=++requests;
+  if(requestNumber>(options.maxRequests??4)){res.writeHead(429).end();return;}
   let bytes:Buffer=Buffer.alloc(0);
   try{for await(const chunk of req){if(bytes.length+chunk.length>maxBodyBytes)throw Error();bytes=Buffer.concat([bytes,chunk]);}
    bytes=projectProviderRequest(bytes,req.headers["content-encoding"] as string|undefined,expectedPrompt);
    validProviderRequest(bytes,undefined);
   }catch{res.writeHead(400).end('Provider request refused.');return;}
-  if(closed||signal.aborted){res.destroy();return;}
-  const observer=new ProviderReasoningObserver(sink.taskId+":"+attempt+":"+requests,sink.onSnapshot);observers.add(observer);
+  let reservation:ModelRequestReservation|undefined;
+  try{reservation=await options.reserveRequest?.(bytes,"responses-relay");}
+  catch{res.writeHead(429).end("Model request budget unavailable.");return;}
+  if(closed||signal.aborted||res.destroyed){res.destroy();return;}
+  let usageSeen=false;
+  const observer=new ProviderReasoningObserver(sink.taskId+":"+attempt+":"+requestNumber,sink.onSnapshot,usage=>{
+    if(usageSeen)return;usageSeen=true;void reservation?.recordUsage(usage).catch(()=>{});
+  });observers.add(observer);
   let upstream:http.ClientRequest;
   try{upstream=transport({protocol:"https:",hostname:"api.deepseek.com",port:443,path:"/responses",method:"POST",headers:{authorization:"Bearer "+apiKey,"content-type":"application/json",accept:"text/event-stream","accept-encoding":"identity","content-length":bytes.length},signal},response=>{
     if(response.headers["content-encoding"]&&response.headers["content-encoding"]!=="identity"){response.destroy();res.writeHead(502).end("Unsupported provider response encoding.");return;}

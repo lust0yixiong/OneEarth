@@ -181,7 +181,7 @@ function ResearchRows({ message }: { message: Message }) {
   return message.answerNotes ? <details className="chat-role"><summary>查看研究需求与候选资料 <ChevronDown size={12}/></summary>{content}</details> : content;
 }
 const runtimePhaseLabels={
-  queued:"等待执行",executing:"正在执行","waiting-discovery":"等待资料发现",resuming:"接续执行",
+  queued:"等待执行",executing:"正在执行","waiting-discovery":"等待资料发现","waiting-workspace":"等待原页面确认",resuming:"接续执行",
   "cancel-pending":"正在取消本地任务",complete:"本轮已完成",failed:"本轮执行未完成",cancelled:"本地任务已取消",
 } as const;
 const remoteStopLabels={
@@ -220,7 +220,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     answerClarification,
     cancelChat,
     attachScope,
-    adoptCurrentResearchRange,clearResearchRange,adoptArchivedResearchRange,
+    adoptCurrentResearchRange,clearResearchRange,adoptLegacyResearchRange,adoptArchivedResearchRange,
     retry,
     recoverableClarifications,
     verifiedInterrupts,
@@ -714,7 +714,8 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
       </div>
       <div className="chat-compose">
         {s.sessionError && <p className="session-storage-error" role="alert">{s.sessionError} <button onClick={() => void retrySessionSave()}>重试保存会话</button></p>}
-        {(s.researchRange || canAdoptCurrentSelection(s)) && <div className="research-range-row">
+        {(s.researchRange || canAdoptCurrentSelection(s) || (s.researchRangeActionId===null && s.legacyResearchRange)) &&
+          <div className="research-range-row">
           {s.researchRange && <span data-research-range="" role="status"
             data-cell-id={s.researchRange.scope.selection.id}
             data-condition-revision={s.researchRange.scope.conditionRevision}
@@ -722,6 +723,11 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
             title={scopeDetail(s.researchRange.scope)}>当前研究范围 · {scopeLabel(s.researchRange.scope)}</span>}
           {s.researchRange && <button type="button" className="activity-link" disabled={s.attachingMapScope}
             onClick={()=>void clearResearchRange(s.researchRangeRevision)}>清除当前研究范围</button>}
+          {s.researchRangeActionId===null && s.legacyResearchRange && <>
+            <span title={scopeDetail(s.legacyResearchRange.scope)}>旧浏览器范围 · {scopeLabel(s.legacyResearchRange.scope)}</span>
+            <button type="button" className="activity-link" disabled={s.attachingMapScope}
+              onClick={()=>void adoptLegacyResearchRange()}>采用旧浏览器范围</button>
+          </>}
           {canAdoptCurrentSelection(s) && <button type="button" className="activity-link"
             disabled={s.attachingMapScope} onClick={()=>void adoptCurrentResearchRange()}>{adoptCurrentSelectionQuestion}</button>}
         </div>}

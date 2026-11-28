@@ -79,7 +79,7 @@ export async function prepareRuntimeChat(services: RuntimeServices, id: string, 
   const materials = (checkpoint?.materials ?? []) as PinnedObservationMaterial[];
   const modelMaterials = materials.map(({artifactId, version, title, variables}) => ({artifactId, version, title, variables}));
   const preparedBody = observationOrdinaryInput(continuation, unavailable, archivedObservation) as RuntimeTurnInput;
-  // Full server history is loaded only by run(), after this message is admitted.
+  // The server history window is loaded only after this message is admitted.
   const parentId = previousId;
   const workspacePending = previous?.workspacePending;
   const eligible=parentId&&(answered?.prompt.kind==="chat"||await latestCompleted(original.conversationId)===parentId);
@@ -97,8 +97,9 @@ export async function prepareRuntimeChat(services: RuntimeServices, id: string, 
     kind: "foreground",
     async run(taskId, signal, emit) {
       signal.throwIfAborted();
-      const rows=await tasks.conversationHistory?.(original.conversationId,taskId);
-      const conversationHistory=rows?new RuntimeConversationHistory(rows,taskId):undefined;
+      const rows=await tasks.conversationHistory?.(original.conversationId,taskId,{mode:"initial"});
+      const conversationHistory=rows?new RuntimeConversationHistory(rows,taskId,selections=>
+        tasks.conversationHistory!(original.conversationId,taskId,{mode:"read",selections})):undefined;
       const turnContext=await runtimeTurnContext(tasks,taskId,preparedBody);
       if(conversationHistory)turnContext.conversation=conversationHistory.projection();
       const {caseObservationRef:_observationRef,...turnInputContext}=boundTurnContext(preparedBody.context,turnContext);

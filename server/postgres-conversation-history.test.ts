@@ -3,6 +3,7 @@ import {randomUUID} from "node:crypto";
 import test from "node:test";
 import {postgresTaskStore} from "./postgres-task-store";
 import {productDatabase} from "./product-database";
+import {RuntimeConversationHistory} from "./conversation-history";
 
 const fixture=process.env.ONEEARTH_HISTORY_TEST_DATABASE_URL;
 
@@ -46,7 +47,7 @@ test("runtime history includes old and handed-off turns in admission order, with
     started:100,stages:[],calls:[],providerReasoning:[{id:research.id+":fixture",revision:1,kind:"deepseek-thinking",text:displayOnly}]
   }}}));
 
-  const intermediate=[];
+  const intermediate:Array<Awaited<ReturnType<typeof add>>>=[];
   for(let n=0;n<5;n++){
     const entry=await add("中间第 "+n+" 轮","chat");
     intermediate.push(entry);
@@ -69,11 +70,28 @@ test("runtime history includes old and handed-off turns in admission order, with
   await audit.query("UPDATE runtime_chat_messages SET created=9999 WHERE id=$1",[future.id]);
   const history=await tasks.conversationHistory!(conversationId,current.id);
   assert.deepEqual(history.map(turn=>turn.taskId),[oldest,front,research,...intermediate,protectedTurn].map(entry=>entry.id));
-  assert.equal(history[0].question,oldest.body.query);
+  assert.equal(history[0].question,"","oversized locator text stays in the original archive");
   assert.equal(history[0].turnId,oldest.body.turnId);
-  assert.equal(history[0].assistantText,full);
+  assert.equal(history[0].assistantText,undefined,"older answer bodies stay in PostgreSQL until selected");
+  assert.equal(history[0].bodyOmitted,true);
   assert.deepEqual(history[0].references,[{kind:"web",url,title:"原来源",webEvidenceStage:"pdf-excerpt"}]);
-  assert.equal(history[2].assistantText,"真实后台终档");
+  assert.equal(history[2].assistantText,undefined);
+  assert.equal(history.find(turn=>turn.taskId===intermediate.at(-1)!.id)?.assistantText,"中间答复 4");
+  const load=(selections:import("./conversation-history").HistorySelection[])=>
+    tasks.conversationHistory!(conversationId,current.id,{mode:"read",selections});
+  const read=await load([oldest,research,protectedTurn].map(({id,body})=>({taskId:id,turnId:body.turnId,blockIds:[]})));
+  assert.deepEqual(read.map(turn=>turn.taskId),[oldest.id,research.id,protectedTurn.id]);
+  assert.equal(read[0].question,oldest.body.query);
+  assert.equal(read[0].assistantText,full);
+  assert.deepEqual(read[0].references,history[0].references);
+  assert.equal(read[1].assistantText,"真实后台终档");
+  assert.equal(read[2].assistantText,undefined);
+  assert.deepEqual(await load([{taskId:oldest.id,turnId:randomUUID(),blockIds:[]},{taskId:other.id,turnId:other.body.turnId,blockIds:[]},
+    {taskId:future.id,turnId:future.body.turnId,blockIds:[]}]),[]);
+  const projected=new RuntimeConversationHistory(history,current.id,load);
+  const targeted=await projected.readBounded([{taskId:oldest.id,turnId:oldest.body.turnId,blockIds:["a3"]}]);
+  assert.equal(targeted.readback?.state,"loaded");
+  assert.equal(targeted.turns.find(turn=>turn.taskId===oldest.id)?.blocks[0].text,"较老轮后段的独立站点证据。");
   assert.ok(!JSON.stringify(history).includes(displayOnly));
   assert.equal(history.at(-1)?.observationRestricted,true);
   assert.equal(history.at(-1)?.assistantText,undefined);

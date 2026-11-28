@@ -18,20 +18,26 @@ import {nativeAgUiPath} from "../src/domain/native-ag-ui";
 import {bindCaseObservation,type CaseObservationBinding,type ResolveCaseObservation} from "./runtime-case-observation";
 import {bindLayerObservation,type LayerObservationBinding,type ResolveLayerObservation} from "./runtime-layer-observation";
 import {workspaceReply} from "./runtime-chat-channel";
+import {hasExplicitTurnRange} from "../src/domain/research-range";
+import {WorkspaceResearchConflict,type WorkspaceResearchStateStore} from "./workspace-research-state";
+import {retainedWorkspaceEffectResult,workspaceEffectCommand} from "./postgres-workspace-effects";
+import type {RuntimeTurnInput} from "./runtime-turn-handoff";
+import type {DiscoveryResponse} from "../src/domain/types";
 
 /** Native producer: standard frames are persisted directly by the original
  * acceptance/finish transactions, never reconstructed from NDJSON events. */
 export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresChatMessages},prepare:(id:string,input:unknown,observation?:CaseObservationBinding,layerObservation?:LayerObservationBinding)=>Promise<ChatPreparation>,
- resolveObservation?:ResolveCaseObservation,resolveLayerObservation?:ResolveLayerObservation){
+ resolveObservation?:ResolveCaseObservation,resolveLayerObservation?:ResolveLayerObservation,workspaceResearch?:WorkspaceResearchStateStore,
+ requireWorkspacePage=false){
  const {chat}=tasks;await chat.acquire();nativeWorkspaceReceiptRoutes(app,chat);let stopping=false;
  const active=new Map<string,{controller:AbortController;done:Promise<void>}>();
- function start(id:string,prepared:Exclude<ChatPreparation,{error:string}>,allowPublic:boolean){
+ function start(id:string,prepared:Exclude<ChatPreparation,{error:string}>,body:RuntimeTurnInput,pageHash:string|undefined){
   const controller=new AbortController(),signal=AbortSignal.any([controller.signal,AbortSignal.timeout(125000)]),timings:ExecutorTiming[]=[];
   let pending=Promise.resolve(),persistFailed=false,retained:Payload|undefined;
   const enqueue=(write:()=>Promise<unknown>)=>{pending=pending.then(async()=>{if(!persistFailed)await write();}).catch(()=>{persistFailed=true;controller.abort();});};
   const done=(async()=>{
    try{
-    const outcome=await requestPerformance.run(timings,()=>modelExecutionContext.run({role:"foreground",taskId:id,tasks},()=>publicAnswerContext.run(allowPublic?{onText:delta=>enqueue(async()=>{
+    const outcome=await requestPerformance.run(timings,()=>modelExecutionContext.run({role:"foreground",taskId:id,tasks},()=>publicAnswerContext.run(authorizedFlashApi(body.config)?{onText:delta=>enqueue(async()=>{
      if(!await chat.appendAgUiText(id,delta))throw Error("公开正文未被原运行采纳。");
     })}:undefined,()=>{
      if(prepared.kind==="research")return Promise.resolve({kind:"research" as const,checkpoint:prepared.checkpoint});
@@ -39,7 +45,22 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
     })));
     await pending;signal.throwIfAborted();
     if(outcome.kind==="research")await chat.promote(id,"handoff" in outcome?outcome.handoff:undefined,outcome.checkpoint);
-    else {retained=outcome.payload;await chat.finish(id,outcome.payload.error?"failed":"complete",workspaceReply(id,outcome.payload));}
+    else {
+     retained=outcome.payload;
+     const result=retained.result as DiscoveryResponse|undefined;
+     const command=!retained.error&&workspaceEffectCommand(result,{runId:id,conversationId:body.conversationId,turnId:body.turnId});
+     if(command&&result){
+      if(pageHash){await chat.waitForWorkspaceEffect(id,body,pageHash,command,result);return;}
+      if(requireWorkspacePage){
+       const original=retainedWorkspaceEffectResult(result);
+       await chat.finish(id,"complete",{result:{...original,message:command.kind==="flight"?
+        "飞行和目录查询须从具备当前页面凭据的工作台发起。未执行本轮操作。":
+        original.message+"\n\n已保留目录结果。当前页面无法核对原窗口，未执行球面呈现。"}});
+       return;
+      }
+     }
+     await chat.finish(id,outcome.payload.error?"failed":"complete",workspaceReply(id,outcome.payload));
+    }
    }catch{
     await pending;if(controller.signal.reason instanceof TaskCancelled)return;
     await chat.finish(id,"failed",{...retained,error:stopping?"服务中断了本轮运行。":signal.aborted?"本轮运行已超时或中断。":"本轮未形成经过核验的答复。",code:stopping?"chat_interrupted":persistFailed?"public_delivery_failed":"run_failed"});
@@ -78,6 +99,21 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
    }
    const pendingWorkspaceToolCallIds=await chat.checkAgUiWorkspace(decoded.body.conversationId,decoded.body.previousTaskId,decoded.workspaceReplies);
    const body=await bindAgUiResume(tasks,decoded.body,resume);
+   if((decoded.research||decoded.researchAction)&&!workspaceResearch){
+    res.status(503).json({error:"会话研究范围暂时无法读取。",code:"WORKSPACE_STATE_UNAVAILABLE"});return;
+   }
+   const attachments=body.context?.attachedScope;
+   const reference=decoded.research&&body.context&&
+     (attachments===undefined||Array.isArray(attachments)&&attachments.every(item=>item&&typeof item==="object")&&!hasExplicitTurnRange(attachments))
+     ?decoded.research:undefined;
+   if(reference){
+    const state=await workspaceResearch!.bind(body.conversationId,reference);
+    const {scope}=state.range;
+    body.context={...body.context,selection:scope.selection,gridSystem:scope.selection.grid.system,
+      attachedScope:[...(attachments??[]),scope]};
+    body.serverWorkspaceResearch=reference;
+   }
+   if(decoded.researchAction)body.serverWorkspaceResearchAction=decoded.researchAction;
    // Strictly validate the branch with an asynchronous source read before allowing it to start.
    if(body.context?.layerObservationRef!==undefined){
     const issue=await validateTurnStructure(tasks,body);if(issue)throw new AgUiInputError(issue);
@@ -89,15 +125,16 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
 
    if("error" in prepared){res.status(resume?409:400).json({error:prepared.error});return;}
    const admitted=await chat.admit(id,{...body,...(observation?{serverCaseObservation:observation}:{}),
-    ...(layerObservation?{serverLayerObservation:layerObservation}:{})},4,{threadId:body.conversationId,turnId:body.turnId,fingerprint,workspaceTool:decoded.workspaceTool,workspaceReplies:decoded.workspaceReplies,pendingWorkspaceToolCallIds,previousTaskId:decoded.body.previousTaskId,...(resume?{resume}:{})});
+    ...(layerObservation?{serverLayerObservation:layerObservation}:{})},4,{threadId:body.conversationId,turnId:body.turnId,fingerprint,workspaceTool:decoded.workspaceTool,workspaceReplies:decoded.workspaceReplies,pendingWorkspaceToolCallIds,previousTaskId:decoded.body.previousTaskId,...(resume?{resume}:{})},reference);
    if(!admitted){res.status(429).set("Retry-After","2").json({error:"前台正在处理其他运行。"});return;}
    if(!admitted.started){res.status(409).set("Location","/api/tasks/"+id).json({error:"该运行已受理，请只读原状态与归档。",code:"RUN_ALREADY_ACCEPTED"});return;}
    if(resume?.status==="cancelled")await tasks.finish(id,"cancelled",{error:"研究者明确放弃原追问。",code:"cancelled"});
-   else start(id,prepared,authorizedFlashApi(body.config));
+   else start(id,prepared,body,decoded.pageHash);
    await stream(id,res);
   }catch(error){
    if(res.headersSent){res.destroy();return;}
    if(error instanceof AgUiWorkspacePendingError){res.status(409).json({error:error.message,code:"WORKSPACE_TOOL_RESULTS_REQUIRED",pendingToolCallIds:error.pendingToolCallIds});return;}
+   if(error instanceof WorkspaceResearchConflict){res.status(409).json({error:error.message,code:error.code,state:error.state});return;}
    if(error instanceof AgUiInputError){res.status(error.status).json({error:error.message});return;}
    if(error instanceof TaskConflict){res.status(409).json({error:error.message});return;}
    res.status(503).json({error:"运行未能持久受理。"});

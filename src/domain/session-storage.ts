@@ -3,7 +3,7 @@ import {mergeNativeRunProcess} from "./native-summary-client";
 import {workspaceReceiptAdvances} from "./published-raster-observation";
 import type { Message,RunTrace,WebHit } from "./types";
 import type { WorkspaceSnapshot } from "./store";
-import {ResearchRangeChanged,type ResearchRange,type ResearchRangeInput,type ResearchRangeSnapshot} from "./research-range";
+import {readResearchRangeScope,type ResearchRange} from "./research-range";
 import {mergeCataloguePresentation} from "./catalogue-presentation";
 
 const databaseName = "oneearth.sessions.v1";
@@ -18,7 +18,7 @@ export interface SessionSummary {
 export interface SessionRecord {
   workspace: WorkspaceSnapshot;
   messages: Message[];
-  researchRange:ResearchRangeSnapshot;
+  legacyResearchRange:ResearchRange|null;
 }
 
 let connection: Promise<IDBDatabase> | undefined;
@@ -143,42 +143,8 @@ export async function readSession(id: string): Promise<SessionRecord | null> {
   const [workspace, messages, researchRange] = await Promise.all([
     result(workspaces.get(id)), messagesIn(tx, id), result(workspaces.get(["research-range",id])),
   ]);
-  return workspace ? { workspace, messages, researchRange:researchRangeSnapshot(researchRange) } : null;
-}
-
-type StoredResearchRange=ResearchRange | {clearedRevision:number};
-function researchRangeSnapshot(value?:StoredResearchRange):ResearchRangeSnapshot {
-  if (!value) return {revision:0,range:null};
-  if ("clearedRevision" in value) return {revision:value.clearedRevision,range:null};
-  return {revision:value.scope.conditionRevision,range:value};
-}
-
-export async function readResearchRange(id:string):Promise<ResearchRangeSnapshot> {
-  const db=await database();
-  return researchRangeSnapshot(await result(db.transaction("workspaces").objectStore("workspaces").get(["research-range",id])));
-}
-
-/** A viewport save cannot overwrite any tab's explicitly adopted research range. */
-export async function writeResearchRange(id:string,range:ResearchRangeInput|null,expectedRevision:number,
-  authorized:()=>boolean):Promise<ResearchRangeSnapshot> {
-  const db=await database();
-  const tx=db.transaction("workspaces","readwrite");
-  const store=tx.objectStore("workspaces");
-  // Chat delivery recovery scans keys starting with the conversation ID.
-  const key=["research-range",id];
-  const previous=store.get(key);
-  const committed=completed(tx);
-  let saved:StoredResearchRange|undefined;
-  previous.onsuccess=()=>{
-    const {revision}=researchRangeSnapshot(previous.result);
-    if (revision!==expectedRevision || !authorized())return;
-    const next=revision+1;
-    saved=range ? {...range,scope:{...range.scope,conditionRevision:next}} : {clearedRevision:next};
-    store.put(saved,key);
-  };
-  await committed;
-  if(!saved)throw new ResearchRangeChanged("当前条件已变化，请核对后重新操作。");
-  return researchRangeSnapshot(saved);
+  const legacyResearchRange=researchRange && readResearchRangeScope(researchRange.scope) ? researchRange as ResearchRange : null;
+  return workspace ? {workspace,messages,legacyResearchRange} : null;
 }
 
 // Each message has its own primary key. Two tabs can commit to the same

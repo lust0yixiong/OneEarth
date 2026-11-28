@@ -8,8 +8,9 @@ import { cancellationReceipt,TaskConflict,type ResearchExecutionReceipt,type Tas
 import {conversationHistorySchema, postgresConversationHistory} from "./postgres-conversation-history";
 import {chatSchema, claimClarificationAnswer, lockRuntimeSubmission, postgresChatMessages, submissionFingerprint, type PostgresChatMessages} from "./postgres-chat-messages";
 import {cataloguePresentationSchema,postgresCataloguePresentation,type CataloguePresentationStore} from "./postgres-catalogue-presentation";
+import {cancelWorkspaceEffect,postgresWorkspaceEffects,workspaceEffectsSchema,type WorkspaceEffectsStore} from "./postgres-workspace-effects";
 
-export function postgresTaskStore(namespace:"runtime"):Promise<TaskStore & {chat:PostgresChatMessages;cataloguePresentation:CataloguePresentationStore}>;
+export function postgresTaskStore(namespace:"runtime"):Promise<TaskStore & {chat:PostgresChatMessages;cataloguePresentation:CataloguePresentationStore;workspaceEffects:WorkspaceEffectsStore}>;
 export function postgresTaskStore(namespace:"discovery"):Promise<TaskStore>;
 export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise<TaskStore>{
   const pool=productDatabase(namespace==="runtime"?"RUNTIME":"DISCOVERY");
@@ -65,6 +66,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
           );`);
         await db.query(chatSchema);
         await db.query(cataloguePresentationSchema);
+        await db.query(workspaceEffectsSchema);
         await db.query(conversationHistorySchema);
       }else{
         await db.query(`
@@ -102,7 +104,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
     const lease=runtimeTaskLease.getStore();if(namespace!=="runtime"||!lease||lease.id!==id)return true;
     return !!(await db.query("SELECT 1 FROM runtime_tasks WHERE id=$1 AND lease_owner=$2 AND lease_fence=$3 AND lease_until>$4",[id,lease.owner,lease.fence,Date.now()])).rowCount;
   }
-  async function submit(db:PoolClient,id:string,body:unknown,checkpoint?:Payload,options?:{created:number;handoff:true}){
+  async function submit(db:PoolClient,id:string,body:unknown,checkpoint?:Payload,options?:{created:number;handoff:true;workspaceEffectExpires?:number}){
     const raw=JSON.stringify(body), hash=submissionFingerprint(raw), now=Date.now();
     if(namespace==="runtime"&&!options?.handoff){
       await lockRuntimeSubmission(db,id);
@@ -113,8 +115,9 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         return current?row(current):existing;
       }
     }
+    const waiting=options?.workspaceEffectExpires!==undefined;
     const inserted=await db.query<Task>(`INSERT INTO ${tasks}(id,body,fingerprint,status,created,updated)
-      VALUES ($1,$2,$3,'queued',$4,$5) ON CONFLICT(id) DO NOTHING RETURNING *`,[id,raw,hash,options?.created??now,now]);
+      VALUES ($1,$2,$3,$6,$4,$5) ON CONFLICT(id) DO NOTHING RETURNING *`,[id,raw,hash,options?.created??now,now,waiting?"running":"queued"]);
     if(!inserted.rowCount){
       const previous=(await db.query<Task>(`SELECT * FROM ${tasks} WHERE id=$1`,[id])).rows[0];
       if(!previous||previous.fingerprint!==hash)throw new TaskConflict("该任务编号已经用于另一份提交。");
@@ -123,18 +126,22 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
     if(namespace==="runtime"&&!options?.handoff)await claimClarificationAnswer(db,id,body);
     if(checkpoint){
       if(namespace!=="runtime")throw Error("持久研究步骤仅属于运行时。");
-      await db.query("INSERT INTO runtime_steps VALUES($1,$2::jsonb,$3)",[id,JSON.stringify(checkpoint),now]);
+      await db.query("INSERT INTO runtime_steps VALUES($1,$2::jsonb,$3)",[id,JSON.stringify(checkpoint),options?.workspaceEffectExpires??now]);
     }
     const decision=(body as {questionDecision?:{checkMessageId?:string}})?.questionDecision;
     if(namespace==="runtime"&&decision){
       await db.query("INSERT INTO runtime_confirmations(task_id,parent_task_id,decision) VALUES ($1,$2,$3::jsonb)",
         [id,decision.checkMessageId,JSON.stringify(decision)]);
     }
-    await write(db,id,{queued:true,queuedAt:now,runtimePhase:{phase:"queued"},...(options?.handoff?{chatPhase:"research"}:{})},now);
+    if(waiting){
+      await db.query("UPDATE runtime_tasks SET recovered_fence=lease_fence WHERE id=$1",[id]);
+      await write(db,id,{runtimePhase:{phase:"waiting-workspace"},chatPhase:"research"},now);
+    }else await write(db,id,{queued:true,queuedAt:now,runtimePhase:{phase:"queued"},...(options?.handoff?{chatPhase:"research"}:{})},now);
     return row(inserted.rows[0]);
   }
   const chat=namespace==="runtime"?postgresChatMessages(pool,transaction,submit):undefined;
   const cataloguePresentation=namespace==="runtime"?postgresCataloguePresentation(pool,transaction):undefined;
+  const workspaceEffects=namespace==="runtime"?postgresWorkspaceEffects(pool,transaction):undefined;
   const get=async(id:string)=>{
     const result=await pool.query<Task>(`SELECT * FROM ${tasks} WHERE id=$1`,[id]);
     return result.rows[0] ? row(result.rows[0]) : chat?.get(id);
@@ -152,7 +159,10 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         const retained=checkpoint?.[status==="cancelled"?"cancelledResult":"failedResult"];
         if(retained)payload={...payload,result:retained};
       }
-      if(namespace==="runtime")await finishAgUi(db,id,status,payload);
+      if(namespace==="runtime"){
+        if(status==="cancelled")await cancelWorkspaceEffect(db,id);
+        await finishAgUi(db,id,status,payload);
+      }
       await write(db,id,{...payload,...(namespace==="runtime"?{runtimePhase:{phase:status}}:{})},now);
       if(namespace==="runtime"&&status==="cancelled"){
         const {rows}=await db.query<{discoveryId:string;state:string}>(`SELECT binding->>'discoveryId' AS "discoveryId",binding->>'state' AS state FROM (
@@ -194,7 +204,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   let firstRecovery=true;
   const owned=new Map<string,RuntimeTaskLease>();
   const store={
-    ...(chat?{chat,cataloguePresentation,researchHandoff:chat.handoff,workspaceReceipt:chat.workspaceReceipt,conversationHistory:postgresConversationHistory(pool)}:{}),
+    ...(chat?{chat,cataloguePresentation,workspaceEffects,researchHandoff:chat.handoff,workspaceReceipt:chat.workspaceReceipt,conversationHistory:postgresConversationHistory(pool)}:{}),
     get,
     ...(namespace==="runtime"?{async researchExecution(id:string):Promise<ResearchExecutionReceipt|undefined>{
       const {rows: [task]}=await pool.query<{status: TaskStatus}>("SELECT status FROM runtime_tasks WHERE id=$1", [id]);

@@ -10,7 +10,7 @@ export function matchesTaskIdentity(value:unknown, expected:TaskIdentity):boolea
 }
 
 const phases=new Set<RuntimePhase["phase"]>([
-  "queued","executing","waiting-discovery","resuming","cancel-pending","complete","failed","cancelled",
+  "queued","executing","waiting-discovery","waiting-workspace","resuming","cancel-pending","complete","failed","cancelled",
 ]);
 const terminal=new Set<RuntimePhase["phase"]>(["complete","failed","cancelled"]);
 const stopOrder={pending:0,unconfirmed:1,confirmed:2} as const;

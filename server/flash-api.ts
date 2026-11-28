@@ -5,11 +5,12 @@ import {ProviderReasoningObserver,type ProviderReasoningSink} from "./provider-r
 import {providerCliInstructions,projectProviderRequest} from "./provider-cli-request";
 import {modelSafeText,assertModelContextSafe} from "./model-context-safety";
 import {ExecutorFailure,type ExecutorFailureKind} from "./executor-failure";
+import {modelUsage,type ReserveModelRequest,type ModelUsage} from "./runtime-model-budget";
 import type {ChatModel} from "../src/domain/chat-model";
 
 export function authorizedFlashApi(config:ChatModel){return config.model==="deepseek-flash"&&(config.provider==="deepseek"||config.provider==="custom"&&config.endpoint==="https://api.deepseek.com");}
 /** One HTTPS request, no CLI, provider tool, automatic retry, or fallback. */
-export async function runFlashApi(prompt:string,key:string,signal:AbortSignal,options:{transport?:typeof https.request;reasoning?:ProviderReasoningSink;schema?:Record<string,unknown>;onOutputDelta?:(delta:string)=>void}={}){
+export async function runFlashApi(prompt:string,key:string,signal:AbortSignal,options:{transport?:typeof https.request;reasoning?:ProviderReasoningSink;schema?:Record<string,unknown>;onOutputDelta?:(delta:string)=>void;reserveRequest?:ReserveModelRequest}={}){
  signal.throwIfAborted();prompt=modelSafeText(prompt);assertModelContextSafe(prompt);
  if(options.schema)assertModelContextSafe(JSON.stringify(options.schema));
  if(!key)throw Error("The authorized model service is unavailable.");
@@ -18,6 +19,9 @@ export async function runFlashApi(prompt:string,key:string,signal:AbortSignal,op
   {type:"message",role:"user",content:[{type:"input_text",text:prompt}]},
  ]})),undefined,prompt);
  assertModelContextSafe(wire.toString());
+ const reservation=await options.reserveRequest?.(wire,"responses-api");
+ signal.throwIfAborted();
+ let usage:ModelUsage|undefined;
  const started=Date.now(),deadline=AbortSignal.any([signal,AbortSignal.timeout(110000)]);
  const fail=(kind:ExecutorFailureKind)=>new ExecutorFailure({kind,exitCode:null,signal:null,elapsedMs:Date.now()-started,outputChars:0,diagnosticTailChars:0});
  const observer=new ProviderReasoningObserver((options.reasoning?.taskId??"foreground")+":"+randomUUID(),value=>{if(!deadline.aborted)options.reasoning?.onSnapshot(value);});
@@ -35,6 +39,7 @@ export async function runFlashApi(prompt:string,key:string,signal:AbortSignal,op
     const event=JSON.parse(raw);
     if(typeof event.type!=="string")throw fail("schema");
     if(event.sequence_number!==undefined){if(!Number.isSafeInteger(event.sequence_number)||event.sequence_number<=sequence)throw fail("schema");sequence=event.sequence_number;}
+    if(["response.completed","response.failed","response.incomplete"].includes(event.type))usage??=modelUsage(event.response?.usage);
     if(event.type==="response.output_text.delta"||event.type==="response.output_text.done"){
      if(typeof event.item_id!=="string"||!Number.isSafeInteger(event.output_index)||event.output_index<0||!Number.isSafeInteger(event.content_index)||event.content_index<0||typeof (event.type.endsWith(".delta")?event.delta:event.text)!=="string")throw fail("schema");
      const id=event.output_index+":"+event.item_id+":"+event.content_index,old=outputs.get(id)||"",value=event.type.endsWith(".delta")?old+event.delta:event.text;
@@ -72,5 +77,5 @@ export async function runFlashApi(prompt:string,key:string,signal:AbortSignal,op
   });
   request.on("error",()=>reject(fail(deadline.aborted?(signal.aborted?"aborted":"timeout"):"network")));
   request.end(wire);
- });}finally{observer.close();}
+ });}finally{observer.close();if(usage)void reservation?.recordUsage(usage).catch(()=>{});}
 }

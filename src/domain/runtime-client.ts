@@ -6,6 +6,43 @@ import {workspaceToolCallId,workspaceToolReceiptPath} from "./native-workspace-t
 import {samePublishedRaster} from "./published-raster-observation";
 import {archivedNativeSummaries} from "./native-summary-client";
 import {workspaceObservationTarget} from "./workspace-published-layer";
+import {readWorkspaceResearchState,workspaceIdPattern,workspaceResearchPath,
+  type WorkspaceResearchAction,type WorkspaceResearchState} from "./workspace-research-state";
+
+export async function loadWorkspaceResearchState(conversationId:string,signal?:AbortSignal):Promise<WorkspaceResearchState> {
+  if(!workspaceIdPattern.test(conversationId))throw Error("会话编号无效。");
+  const timeout=AbortSignal.timeout(5000);
+  const response=await fetch(workspaceResearchPath(conversationId)+"/research-state",{
+    cache:"no-store",redirect:"error",signal:signal ? AbortSignal.any([signal,timeout]) : timeout,
+  });
+  const state=response.ok && readWorkspaceResearchState(await response.json(),conversationId);
+  if(!state)throw Error("暂时无法读取会话研究范围。");
+  return state;
+}
+
+export class WorkspaceResearchActionError extends Error {
+  constructor(message:string,readonly state?:WorkspaceResearchState){super(message);}
+}
+
+export async function submitWorkspaceResearchAction(conversationId:string,action:WorkspaceResearchAction) {
+  const response=await fetch(workspaceResearchPath(conversationId)+"/actions",{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(action),
+    cache:"no-store",redirect:"error",signal:AbortSignal.timeout(10000),
+  });
+  const data=await response.json().catch(()=>undefined);
+  if(response.ok){
+    const state=readWorkspaceResearchState(data,conversationId);
+    if(state?.actionId===action.actionId && state.revision===action.expectedRevision+1 &&
+      (state.range!==null)===(action.kind==="adopt-research-range"))return state;
+    throw Error("无法确认本次研究范围修改。");
+  }
+  const state=data?.code==="WORKSPACE_REVISION_CONFLICT" && response.status===409
+    ? readWorkspaceResearchState(data.state,conversationId) : undefined;
+  throw new WorkspaceResearchActionError(
+    typeof data?.error==="string" ? data.error : "暂时无法修改研究范围，请重试。",state,
+  );
+}
+
 
 export async function cancelChatRequest(id:string,signal:AbortSignal) {
   const response=await fetch("/api/tasks/"+encodeURIComponent(id),{method:"DELETE",signal,redirect:"error"});
@@ -48,6 +85,7 @@ export interface ResearchRecord {
   result:DiscoveryResponse;
   interrupt?:unknown;
   workspaceTool?:unknown;
+  workspaceEffect?:unknown;
   workspaceReceipt?:WorkspaceReceipt;
   taskLifecycle?:TaskLifecycle;
   researchProgress?:unknown;

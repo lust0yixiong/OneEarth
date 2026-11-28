@@ -6,16 +6,22 @@ import {runtimeObservationResearch,ObservationGeneral} from "./runtime-observati
 import {observationOrdinaryInput,type ObservationAuthority} from "./runtime-observation-authority";
 import {TaskParked,type Payload} from "./task-store";
 import {readChatResearchHandoff} from "./runtime-chat-turn";
+import {runWorkspaceActionEffect} from "./runtime-workspace-effect";
+import type {WorkspaceEffectsStore} from "./postgres-workspace-effects";
 
 /** Both explicit capabilities and ordinary research use this production worker. */
 export function runtimeWorkerRunner(services:RuntimeServices,engine?:RuntimeObservationEngine,options:Omit<Parameters<typeof runtimeObservation>[0],"tasks"|"engine">&{
-  authority?:ObservationAuthority;chatHandoff?:(id:string)=>Promise<Payload|undefined>;
+  authority?:ObservationAuthority;chatHandoff?:(id:string)=>Promise<Payload|undefined>;workspaceEffects?:Pick<WorkspaceEffectsStore,"execution">;
 }={}){
-  const {chatHandoff,...observationOptions}=options;
+  const {chatHandoff,workspaceEffects,...observationOptions}=options;
   const observation=runtimeObservation({tasks:services.tasks,engine,...observationOptions});
   const research=runtimeObservationResearch({tasks:services.tasks,engine,...observationOptions});
   return {maintenance:async()=>{await reconcileRuntimeStops(services.tasks);if(engine||process.env.ONEEARTH_SKILL_SERVICE_TOKEN){await observation.reconcileCancelled();await research.reconcileCancelled();}},
     run:async(task:{id:string;body:any;checkpoint?:Payload},signal:AbortSignal,emit:(payload:Payload)=>void)=>modelExecutionContext.run({role:"background",taskId:task.id,tasks:services.tasks},async()=>{
+      if(task.checkpoint?.kind==="workspace-action-effect.v1"){
+        if(!workspaceEffects)return {error:"原工作台待办不可用。",code:"workspace_effect_unavailable"};
+        return runWorkspaceActionEffect(services,workspaceEffects,{...task,checkpoint:task.checkpoint},signal,emit);
+      }
       if(task.body.observationCheck!==undefined)return observation.run(task,signal);
       if(task.checkpoint?.kind==="observation-research-step.v1"){
         const result=await research.run(task,signal);if(!(result instanceof ObservationGeneral))return result;

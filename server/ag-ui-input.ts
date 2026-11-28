@@ -6,9 +6,14 @@ import {createHash} from "node:crypto";
 import {RunAgentInputSchema} from "@ag-ui/core/schemas";
 import {nativeAgUiProtocolVersion,readOneEarthAgUiSubmission} from "../src/domain/native-ag-ui";
 import {taskIdPattern} from "./task-store";
+import {readWorkspaceResearchObservation,readWorkspaceResearchReference} from "../src/domain/workspace-research-state";
+import {workspacePageTokenPattern} from "../src/domain/workspace-action-effect";
 import type {RuntimeTurnInput} from "./runtime-turn-handoff";
 
 export class AgUiInputError extends Error {constructor(message:string,readonly status=400){super(message);}}
+export function workspacePageHash(token:unknown){
+ if(typeof token==="string"&&workspacePageTokenPattern.test(token))return createHash("sha256").update(token).digest("hex");
+}
 export function readAgUiInput(raw:unknown){
  const parsed=RunAgentInputSchema.safeParse(raw);
  if(!parsed.success)throw new AgUiInputError("AG-UI 请求格式无效。");
@@ -29,14 +34,25 @@ export function readAgUiInput(raw:unknown){
  const latest=run.messages.at(-1),submission=readOneEarthAgUiSubmission(run.forwardedProps);
  if(latest?.role!=="user"||typeof latest.content!=="string"||!taskIdPattern.test(latest.id)||!latest.content.trim()||!submission)
   throw new AgUiInputError("请提交实际用户消息与 OneEarth 工作台输入。");
- const allowed=new Set(["context","config","deepseekTools","previousTaskId","clarificationReply","clarificationAnswer","observationCheck"]);
+ const allowed=new Set(["context","config","deepseekTools","previousTaskId","clarificationReply","clarificationAnswer","observationCheck","workspaceResearch","workspaceResearchAction","workspacePage"]);
  if(Object.keys(submission).some(key=>!allowed.has(key)))throw new AgUiInputError("工作台输入含未登记的字段。");
+ const {workspaceResearch:rawResearch,workspaceResearchAction:rawAction,workspacePage,...turnSubmission}=submission;
+ const pageHash=workspacePage&&typeof workspacePage==="object"&&Object.keys(workspacePage).length===1&&"token" in workspacePage
+   ?workspacePageHash(workspacePage.token):undefined;
+ if(workspacePage!==undefined&&!pageHash)throw new AgUiInputError("原页面的工作台凭据格式无效。");
+ const research=readWorkspaceResearchReference(rawResearch),researchAction=readWorkspaceResearchObservation(rawAction);
+ if((rawResearch!==undefined&&!research)||(rawAction!==undefined&&!researchAction))
+  throw new AgUiInputError("会话研究范围的动作编号、修订或覆盖条件无效。");
+ if((resume||submission.observationCheck!==undefined)&&(research||researchAction))
+  throw new AgUiInputError("原任务续接和观测核对继续使用原授权。");
  if(resume&&["questionDecision","clarificationReply","clarificationAnswer","observationCheck"].some(key=>Object.hasOwn(submission,key)))throw new AgUiInputError("原生续接不接受第二份确认或执行镜像。");
  if([run.runId,run.threadId,latest.id].some(id=>id!==id.toLowerCase()))throw new AgUiInputError("运行、会话和用户消息编号必须使用规范小写UUID。");
  if(new Set(run.messages.map(message=>message.id)).size!==run.messages.length)throw new AgUiInputError("消息编号不能重复。");
  // Client transcript/state/context are untrusted display input. Existing PG
  // conversationHistory supplies model history after this run is admitted.
- const body={...submission,query:latest.content,history:[],conversationId:run.threadId.toLowerCase(),turnId:latest.id.toLowerCase()} as unknown as RuntimeTurnInput;
+ const body={...turnSubmission,query:latest.content,history:[],conversationId:run.threadId.toLowerCase(),turnId:latest.id.toLowerCase()} as unknown as RuntimeTurnInput;
+ if(Array.isArray(body.context?.attachedScope)&&body.context.attachedScope.some(item=>item?.kind==="grid"&&item.conditionRevision!==undefined))
+  throw new AgUiInputError("会话采用范围须引用服务端动作和修订。");
  const canonical=(value:any):any=>Array.isArray(value)?value.map(canonical):value&&typeof value==="object"?Object.fromEntries(Object.keys(value).sort().filter(key=>value[key]!==undefined).map(key=>[key,canonical(value[key])])):value;
  const workspaceReplies:AgUiWorkspaceReply[]=[],calls=run.messages.flatMap(message=>message.role==="assistant"?(message.toolCalls??[]).map(call=>({message,call})):[]),results=run.messages.filter(message=>message.role==="tool");
  if(calls.length>64||results.length!==calls.length||new Set(calls.map(entry=>entry.call.id)).size!==calls.length||new Set(results.map(entry=>entry.toolCallId)).size!==results.length)throw new AgUiInputError("工作台调用及结果必须逐一明确对应。");
@@ -45,7 +61,9 @@ export function readAgUiInput(raw:unknown){
   if(!taskIdPattern.test(message.id)||message.id!==message.id.toLowerCase()||call.function.name!==nativeWorkspaceToolName||call.id!=="workspace:"+message.id||call.function.arguments.length>32768||!result||typeof result.content!=="string"||result.content.length>4096||run.messages.indexOf(result)<=run.messages.indexOf(message)||run.messages.indexOf(result)>=run.messages.length-1)throw new AgUiInputError("工具结果必须引用原助手调用并位于新的实际用户消息之前。");
   workspaceReplies.push({runId:message.id,call,message:result});
  }
- const identity=!workspaceTool&&!workspaceReplies.length?(resume?{body,resume}:body):{body,...(resume?{resume}:{}),...(workspaceTool?{workspaceTool:true}:{}),...(workspaceReplies.length?{workspaceReplies}:{})};
+ const identity=resume||workspaceTool||workspaceReplies.length||research||researchAction||pageHash
+   ?{body,...(resume?{resume}:{}),...(workspaceTool?{workspaceTool:true}:{}),...(workspaceReplies.length?{workspaceReplies}:{}),
+     ...(research?{research}:{}),...(researchAction?{researchAction}:{}),...(pageHash?{pageHash}:{})}:body;
  const fingerprint=createHash("sha256").update(JSON.stringify(canonical(identity))).digest("hex");
- return {id:run.runId.toLowerCase(),body:canonical(body) as RuntimeTurnInput,fingerprint,protocolVersion:version,workspaceTool,workspaceReplies,...(resume?{resume}:{})};
+ return {id:run.runId.toLowerCase(),body:canonical(body) as RuntimeTurnInput,fingerprint,protocolVersion:version,workspaceTool,workspaceReplies,research,researchAction,pageHash,...(resume?{resume}:{})};
 }

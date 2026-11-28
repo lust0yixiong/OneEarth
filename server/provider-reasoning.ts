@@ -1,6 +1,7 @@
 import {StringDecoder} from "node:string_decoder";
 import type {ProviderReasoningSnapshot} from "../src/domain/types";
 import {modelSafeText,assertModelContextSafe} from "./model-context-safety";
+import {modelUsage,type ModelUsage} from "./runtime-model-budget";
 
 export const providerReasoningLimits={textBytes:8192,rawBytes:1048576,revisions:24,snapshots:12,totalBytes:98304,frameBytes:1048576,segments:12} as const;
 export type ProviderReasoningSink={taskId:string;onSnapshot:(snapshot:ProviderReasoningSnapshot)=>void};
@@ -46,7 +47,7 @@ class ToolTypeGuard{
  * output text, tool arguments, metadata and complete bodies are never stored. */
 export class ProviderReasoningObserver{
  private decoder=new StringDecoder("utf8");private pending="";private skipping=false;private sequence=-1;private states=new Map<string,TextState>();private stopped=false;private guard=new ToolTypeGuard();
- constructor(private id:string,private emit:(snapshot:ProviderReasoningSnapshot)=>void){}
+ constructor(private id:string,private emit:(snapshot:ProviderReasoningSnapshot)=>void,private onUsage?:(usage:ModelUsage)=>void){}
  feed(bytes:Buffer){
   if(this.stopped)return false;const text=this.decoder.write(bytes);
   if(!this.guard.feed(text)){this.stopped=true;return false;}
@@ -67,6 +68,7 @@ export class ProviderReasoningObserver{
   const type=event?.type;if(typeof type!=="string"||name&&name!==type)return;
   if(!Number.isSafeInteger(event.sequence_number)||event.sequence_number<0||event.sequence_number<=this.sequence)return;
   this.sequence=event.sequence_number;
+  if(["response.completed","response.failed","response.incomplete"].includes(type)){const usage=modelUsage(event.response?.usage);if(usage)this.onUsage?.(usage);}
   const kind=type==="response.reasoning_text.delta"||type==="response.reasoning_text.done"?"deepseek-thinking":
     ["response.reasoning_summary_text.delta","response.reasoning_summary_text.done","response.reasoning_summary_part.done"].includes(type)?"summary":undefined;
   if(!kind){if(type==="response.completed")for(const state of this.states.values())this.publish(state,true);return;}

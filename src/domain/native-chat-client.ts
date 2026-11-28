@@ -14,6 +14,17 @@ import type {WorkspaceReceipt} from "./turn-context";
 import {matchesTaskIdentity, readTaskLifecycle, type TaskLifecycle} from "./task-lifecycle-client";
 import type {DiscoveryResponse,ProviderReasoningSnapshot} from "./types";
 import {nativeSummaryReader} from "./native-summary-client";
+import {readWorkspaceActionEffect,workspacePageHeader,type WorkspaceActionEffect} from "./workspace-action-effect";
+
+function boundWorkspaceActionEffect(value:unknown,run:ChatRun) {
+  const effect=readWorkspaceActionEffect(value,run.runId);
+  return effect?.conversationId===run.threadId && effect.turnId===run.turnId ? effect : undefined;
+}
+
+function effectFromSnapshot(snapshot:unknown,run:ChatRun) {
+  return boundWorkspaceActionEffect((snapshot as {oneearth?:{workspaceEffect?:unknown}}|undefined)?.oneearth?.workspaceEffect,run);
+}
+
 
 export type ChatRun = {threadId: string; runId: string; turnId: string};
 type CompletedChat = {response: DiscoveryResponse; interrupt?: OneEarthAgUiInterruptRecord; record?: ResearchRecord; workspaceCall?:ToolCall};
@@ -27,12 +38,14 @@ const publicStepProgress:Record<NativeAgUiStep,PublicStepProgress> = {
   "discovery-wait":{phase:"research",runtimePhase:{phase:"waiting-discovery",operation:"discover"}},
   "source-read-wait":{phase:"research",runtimePhase:{phase:"waiting-discovery",operation:"read"}},
   "research-resuming":{phase:"research",runtimePhase:{phase:"resuming"}},
+  "workspace-wait":{phase:"research",runtimePhase:{phase:"waiting-workspace"}},
 };
 type ChatProgress = {
   onAccepted: () => void;
   onDraft: (text: string) => void;
   onSummary: (snapshot: ProviderReasoningSnapshot) => void;
   onResearchProgress: (progress:ResearchProgress) => void;
+  onWorkspaceEffect?: (effect:WorkspaceActionEffect) => void;
   onStep: (step:PublicStepProgress & {stage:string}) => void;
   onLifecycle: (lifecycle: TaskLifecycle) => void;
 };
@@ -42,14 +55,16 @@ const taskStates = new Set(["queued", "running", "complete", "failed", "cancelle
 
 export async function submitNativeChat<T extends object>(
   {threadId, runId, turnId}: ChatRun, question: string, submission: T,
-  abortController: AbortController, progress: ChatProgress, resume?: ResumeEntry, toolMessages:AgUiMessage[]=[],
+  abortController: AbortController, progress: ChatProgress, resume?: ResumeEntry, toolMessages:AgUiMessage[]=[], workspacePageToken?:string,
 ): Promise<CompletedChat | ResumeConflict | WorkspaceConflict | undefined> {
-  const forwardedProps: OneEarthAgUiForwardedProps<T> = {oneearth: {version: oneEarthAgUiVersion, submission}};
+  const forwardedProps: OneEarthAgUiForwardedProps<T> = {oneearth: {version: oneEarthAgUiVersion,
+    submission:workspacePageToken ? {...submission,workspacePage:{token:workspacePageToken}} : submission}};
   const url = new URL(nativeAgUiPath, location.origin).href;
   let posted = false;
   let httpStatus: number | undefined;
   let conflictLocation: string | undefined;
   let workspaceConflict: WorkspaceConflict | undefined;
+  let researchConflict: ChatResponseError | undefined;
   let startSeen = false;
   let started = false;
   let sealed = false;
@@ -69,7 +84,7 @@ export async function submitNativeChat<T extends object>(
       posted = true;
       const response = await fetch(target, {...options, redirect: "error", cache: "no-store"});
       httpStatus = response.status;
-      if(httpStatus===409){
+      if(httpStatus===409 || httpStatus===503){
         const detail=await response.clone().json().catch(()=>undefined);
         if(detail?.code==="WORKSPACE_TOOL_RESULTS_REQUIRED"){
           const pendingRuns=(Array.isArray(detail.pendingToolCallIds) ? detail.pendingToolCallIds.slice(0,64) : [])
@@ -79,7 +94,13 @@ export async function submitNativeChat<T extends object>(
               return researchRecordId.test(run) && id===workspaceToolCallId(run) ? [run] : [];
             });
           workspaceConflict={workspaceConflict:true,pendingRuns};
-        }else if(resume){
+        }else if(detail?.code==="WORKSPACE_REVISION_CONFLICT" || detail?.code==="WORKSPACE_STATE_UNAVAILABLE"){
+          researchConflict=new ChatResponseError(
+            detail.code==="WORKSPACE_REVISION_CONFLICT"
+              ? "会话研究范围已变化，请核对后重新提交。" : "暂时无法核对会话研究范围，请重新提交。",
+            detail.code,
+          );
+        }else if(resume && httpStatus===409){
           const match=/^\/api\/tasks\/([^/?#]+)$/u.exec(response.headers.get("Location")??"");
           if(match && researchRecordId.test(match[1])) conflictLocation=match[1];
         }
@@ -114,6 +135,8 @@ export async function submitNativeChat<T extends object>(
         ("subagentRunId" in event && event.subagentRunId!==undefined))return;
       const activity=readResearchProgressState(event.snapshot,runId);
       if(activity)progress.onResearchProgress(activity);
+      const effect=effectFromSnapshot(event.snapshot,{threadId,runId,turnId});
+      if(effect)progress.onWorkspaceEffect?.(effect);
     },
     onStepStartedEvent: ({event}) => {
       if(!started || sealed || openStep)return;
@@ -218,6 +241,7 @@ export async function submitNativeChat<T extends object>(
   if (failure) throw failure;
   if (result) return result;
   if (workspaceConflict) return workspaceConflict;
+  if (researchConflict) throw researchConflict;
   if (resume && httpStatus===409) return {conflict:true,locationId:conflictLocation};
   if (httpStatus !== undefined && refusedStatuses.has(httpStatus))
     throw new ChatResponseError("运行时未受理本轮请求。", "submission_rejected");
@@ -240,10 +264,10 @@ function waitForTaskRead(delay: number, signal: AbortSignal) {
 
 const identityOf = ({threadId,runId,turnId}:ChatRun)=>({id:runId,conversationId:threadId,turnId});
 
-async function readNativeTask(runId:string,signal:AbortSignal) {
+async function readNativeTask(runId:string,signal:AbortSignal,workspacePageToken?:string) {
   if(!researchRecordId.test(runId))return;
   const response=await fetch("/api/tasks/"+runId,{signal:AbortSignal.any([signal,AbortSignal.timeout(5000)]),
-    cache:"no-store",redirect:"error"}).catch(()=>undefined);
+    cache:"no-store",redirect:"error",...(workspacePageToken?{headers:{[workspacePageHeader]:workspacePageToken}}:{})}).catch(()=>undefined);
   if(!response?.ok)return;
   return response.json().catch(()=>undefined);
 }
@@ -319,7 +343,8 @@ export async function readClaimedNativeTurn(parent:ChatRun,claim:OneEarthAgUiInt
 }
 
 export async function recoverNativeChat(
-  run:ChatRun, signal:AbortSignal, progress:Pick<ChatProgress,"onAccepted"|"onLifecycle"> & Partial<Pick<ChatProgress,"onResearchProgress">>,
+  run:ChatRun, signal:AbortSignal, progress:Pick<ChatProgress,"onAccepted"|"onLifecycle"> &
+    Pick<Partial<ChatProgress>,"onResearchProgress"|"onWorkspaceEffect">, workspacePageToken?:string,
 ):Promise<CompletedChat> {
   const unavailableTimeout=60_000;
   let until=Date.now()+unavailableTimeout;
@@ -327,8 +352,10 @@ export async function recoverNativeChat(
   let delay=350;
   do {
     signal.throwIfAborted();
-    const task=await readNativeTask(run.runId,signal);
+    const task=await readNativeTask(run.runId,signal,workspacePageToken);
     if(matchesTaskIdentity(task,identity) && taskStates.has(task.status)){
+      const effect=boundWorkspaceActionEffect(task.workspaceEffect,run);
+      if(effect)progress.onWorkspaceEffect?.(effect);
       // Only missing or inconsistent results time out. A confirmed active
       // research run can outlast the recovery window after a page reload.
       if(task.status==="queued" || task.status==="running")until=Date.now()+unavailableTimeout;

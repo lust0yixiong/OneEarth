@@ -1,6 +1,6 @@
 import type {GridCoverageEvidence,GridCoverageScope,GridCoverageSnapshot} from "../src/domain/grid-coverage";
-import type {Selection} from "../src/domain/types";
-import {isBoundCoverageSummary} from "../src/domain/coverage-attachment";
+import type {Filters,Selection} from "../src/domain/types";
+import {isBoundCoverageSummary,type CoverageAttachment,type CoverageSelection} from "../src/domain/coverage-attachment";
 
 type CoverageQuery = {
   cell: Pick<Selection,"id"|"grid">;
@@ -15,8 +15,13 @@ type CellResponse = {
   scope?: Partial<GridCoverageSnapshot>;
 };
 
-export function spatialCoverageClient(origin = process.env.ONEEARTH_SPATIAL_URL || "http://127.0.0.1:5276") {
-  return async ({cell,scope}: CoverageQuery,signal: AbortSignal): Promise<GridCoverageEvidence> => {
+type CoverageClient = ((query:CoverageQuery,signal:AbortSignal)=>Promise<GridCoverageEvidence>) & {
+  registerSelection?:(filters:Filters,selection:CoverageSelection,signal:AbortSignal,revision?:string)=>Promise<CoverageAttachment|"expired"|"unavailable">;
+  rebind?:(scope:CoverageAttachment,signal:AbortSignal)=>Promise<CoverageAttachment|"expired"|"unavailable">;
+};
+
+export function spatialCoverageClient(origin = process.env.ONEEARTH_SPATIAL_URL || "http://127.0.0.1:5276"):CoverageClient {
+  const read:CoverageClient=async ({cell,scope},signal) => {
     const cellEvidence = {cellId:cell.id,gridKey:cell.grid.key};
     const deadline = AbortSignal.any([signal,AbortSignal.timeout(2500)]);
     const unknown = (reason: "unavailable" | "pending" | "expired",summary?:GridCoverageSnapshot): GridCoverageEvidence =>
@@ -48,4 +53,29 @@ export function spatialCoverageClient(origin = process.env.ONEEARTH_SPATIAL_URL 
       return unknown("unavailable");
     }
   };
+  read.registerSelection=async(filters,selection,signal,revision)=>{
+    try{
+      const response=await fetch(new URL("/api/coverage/scopes",origin),{
+        method:"POST",headers:{"Content-Type":"application/json"},redirect:"error",
+        body:JSON.stringify({revision,filters,selection,batch:null}),
+        signal:AbortSignal.any([signal,AbortSignal.timeout(2500)]),
+      });
+      if([404,409,410].includes(response.status))return "expired";
+      if(!response.ok)return "unavailable";
+      const value=await response.json();
+      if(revision!==undefined&&value?.revision!==revision)return "expired";
+      if(typeof value.id!=="string"||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(value.id)||
+        typeof value.revision!=="string"||!/^[a-f0-9]{64}$/u.test(value.revision)||
+        !isBoundCoverageSummary(value.scope,selection.id,selection.grid.key))return "unavailable";
+      return {id:value.id,revision:value.revision,summary:value.scope};
+    }catch{
+      signal.throwIfAborted();
+      return "unavailable";
+    }
+  };
+  read.rebind=async({revision,summary},signal)=>{
+    if(summary.candidateCount!==null||summary.candidateIdentity!==null)return "expired";
+    return read.registerSelection!(summary.filters,summary.selection,signal,revision);
+  };
+  return read;
 }

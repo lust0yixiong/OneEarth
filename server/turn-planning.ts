@@ -10,7 +10,7 @@ import {navigationTarget} from "./place-lookup";
 import type {WorkspacePublicationProof} from "./workspace-c40-publication";
 import type {ForestPublicationProof,PublishedDateSelection} from "./workspace-forest-publication";
 import type {ObservationTurnMaterial,RuntimeWorkspacePending} from "./runtime-turn-handoff";
-import {authorizesResearchRangeAdoption,workspaceOperationKinds,validWorkspaceOperationKind,type WorkspaceOperationKind} from "../src/domain/workspace-operations";
+import {authorizesResearchRangeAdoption,authorizesResearchRangeClear,workspaceOperationKinds,validWorkspaceOperationKind,type WorkspaceOperationKind} from "../src/domain/workspace-operations";
 import {foregroundWorkspaceSchemas,foregroundWorkspaceReply} from "./foreground-workspace";
 import {clarificationOptions,type ClarificationOption} from "../src/domain/clarification";
 import {ForegroundReadCardinalityError,foregroundDecisionSchema,normalizeForegroundDecision} from "./foreground-decision";
@@ -113,7 +113,8 @@ export function turnPlanningSchema(input:Pick<TurnInput,"gridCoverage"|"adoptedR
       required:["kind","layerId","controlId","valueId"],properties:{kind:{type:"string",enum:["set-control"]},
         layerId:{type:"string"},controlId:{type:"string"},valueId:{type:"string"}}},
         ...(input.semanticDecision?[{type:"object",additionalProperties:false,required:["kind","place"],properties:{kind:{type:"string",enum:["navigate-map"]},place:{type:"string",minLength:1,maxLength:200}}}]:[]),
-        ...(input.semanticDecision?[{type:"object",additionalProperties:false,required:["kind","operation"],properties:{kind:{type:"string",enum:["workspace-operation"]},operation:{type:"string",enum:workspaceOperationKinds.filter(kind=>kind!=="present-catalogue"&&(kind!=="adopt-research-range"||input.workspaceView?.operations?.includes(kind)))}}}]:[]),
+        ...(input.semanticDecision?[{type:"object",additionalProperties:false,required:["kind","operation"],properties:{kind:{type:"string",enum:["workspace-operation"]},operation:{type:"string",enum:workspaceOperationKinds.filter(kind=>kind!=="present-catalogue"&&
+          (kind!=="adopt-research-range"&&kind!=="clear-research-range"||input.workspaceView?.operations?.includes(kind)))}}}]:[]),
         ...(input.semanticDecision&&permitsCataloguePresentation(input.workspaceView,input.gridCoverage)?[{
           type:"object",additionalProperties:false,required:["kind","operation","authorizationQuote"],properties:{
             kind:{type:"string",enum:["workspace-operation"]},operation:{type:"string",enum:["present-catalogue"]},
@@ -354,8 +355,10 @@ export function parseTurnPlan(raw:string,input:TurnInput,available=turnTargets(i
     if(!input.semanticDecision||value.action!=="workspace"||!validWorkspaceOperationKind(action.operation)||
       !input.context.workspaceView?.operations?.includes(action.operation)||Object.keys(action).some(key=>!fields.includes(key)))
       throw Error("当前工作台没有暴露这一可执行操作。");
-    if(action.operation==="adopt-research-range"&&(input.pending?.answer||!authorizesResearchRangeAdoption(input.question)))
+    if(action.operation==="adopt-research-range"&&(input.pending?.answer||input.confirmedQuestion!==undefined||!authorizesResearchRangeAdoption(input.question)))
       throw Error("当前用户消息没有明确要求采用当前网格作为研究范围。");
+    if(action.operation==="clear-research-range"&&(input.pending?.answer||input.confirmedQuestion!==undefined||!authorizesResearchRangeClear(input.question)))
+      throw Error("当前用户消息没有明确要求清除会话研究范围。");
     if(action.operation==="present-catalogue"&&(!permitsCataloguePresentation(input.context.workspaceView,input.gridCoverage)||
       value.gridIntent!=="catalogue"||input.pending?.answer||input.confirmedQuestion!==undefined||
       value.observationUse!==undefined&&value.observationUse!=="unrelated"||
@@ -524,6 +527,8 @@ export async function prepareTurn(input:TurnInput,signal:AbortSignal,deps:Planni
   const instructions=(input.semanticDecision?foregroundPrompt+
     (input.context.workspaceView?.operations?.includes("adopt-research-range")
       ?"\n用户明确要求把地图当前所选 H3 网格作为接下来研究的范围时，选择 {kind:\"workspace\",action:{kind:\"workspace-operation\",operation:\"adopt-research-range\"}}。只采用发问时已选的一格，不移动地图、不另选网格或启动目录研究。询问、举例、否定或等待确认均不执行。gridIntent 如适用用 none。":"")+
+    (input.context.workspaceView?.operations?.includes("clear-research-range")
+      ?"\n用户明确要求清除已采用的会话研究范围时，选择 {kind:\"workspace\",action:{kind:\"workspace-operation\",operation:\"clear-research-range\"}}。保留画面现场。只查一次或暂时不用原范围均不清除。gridIntent 如适用用 none。":"")+
     (permitsCataloguePresentation(input.context.workspaceView,input.gridCoverage)
       ?"\n仅当本轮用户明确要求把本轮网格目录条目实际呈现在球面时，使用 decide={kind:\"workspace\",action:{kind:\"workspace-operation\",operation:\"present-catalogue\",authorizationQuote:\"当轮明确呈现要求的逐字原话\"}}，并在同级使用 gridIntent=\"catalogue\"。仅查询、清点、解释现状、转述、假设、否定或要求等待确认，一律不选呈现动作。理解用户语义和指代，不要求固定措辞。authorizationQuote 只摘真正发出动作指令的连续原话；不能从旧消息或浏览状态取。不能指定批次、修订、资料ID或渲染状态，由权威目录和原浏览器回执给出。":"")+
     (input.context.workspaceView?.publishedLayerActions===true?"\npublishedLayers是已登记的可加载图层，即使当前activeLayer为空或为别的层也可用。明确要求加载其中资料时，workspace.action可用{kind:\"open-published-layer\",datasetId:该资料ID,selection:确切城市名称/稳定ID或ISO日期}；由运行时查固定发布目录、唯一核验并绑定修订后交网页加载及选择。selection不是URL，不从显示标签造原文/研究权限；城市可规范名称，日期必须完整，未知或缺选择先clarify。只适用于直接工作台操作；若用户要求先确认，不发加载动作，应先clarify询问，不能在追问中同时执行。询问/否定用respond/clarify，原活动图层控件切换仍用既有动作。":"")+
@@ -536,7 +541,7 @@ export async function prepareTurn(input:TurnInput,signal:AbortSignal,deps:Planni
     turnPlanningInstructions+(input.gridCoverage?.status==="ready"&&input.gridCoverage.summary?gridPlanningInstructions:"")+
     (input.observationUnavailable?unavailableObservationInstructions:"")+(input.observationAvailable?availableObservationInstructions:"")+(input.context.workspaceView?workspaceViewInstructions:"")+
     (input.context.workspaceView?.activeLayer?.controls.some(control=>control.publication)?publishedWorkspaceInstructions:"")+(input.semanticDecision?foregroundInstructions:""))+adoptedRangeInstructions;
-  const historyRules=input.conversationHistory?`\nconversation是服务端本会话完整问答的预算投影，8000估算tokens包括索引/摘要/回读。blocks是整段整表，index标出尚未装入的原轮；摘要是模型对指定原块的语义归纳，不是已读证据或执行回执。旧答复不冒充实际检索/读取；旧引用的历史read层不表示其原文在本次历史文本里。historicalSourceOnly仅提供原引用身份，不能当作当前已读片段，实际读取仍要依本轮意图与许可。观测受限轮不可从历史恢复事实或引用。若现有块足够就直接决定；缺少所指旧轮内容可选decide:{kind:"history-read",selections:[{taskId:原任务UUID,turnId:原turnId或null,blockIds:所需q1/a1等，空数组请求整轮}]}，至多一次、最多3轮，不接受URL或跨会话。补充后仍只用原授权范围，不能借历史把批准换对象；未装入/未摘要不是不存在。`: "";
+  const historyRules=input.conversationHistory?`\nconversation是服务端按需读取的同会话目录和问答投影，8000估算tokens包括索引/摘要/回读。blocks是整段整表，index标出尚未装入的原轮；摘要是模型对指定原块的语义归纳，不是已读证据或执行回执。旧答复不冒充实际检索/读取；旧引用的历史read层不表示其原文在本次历史文本里。historicalSourceOnly仅提供原引用身份，不能当作当前已读片段，实际读取仍要依本轮意图与许可。观测受限轮不可从历史恢复事实或引用。若现有块足够就直接决定；缺少所指旧轮内容可选decide:{kind:"history-read",selections:[{taskId:原任务UUID,turnId:原turnId或null,blockIds:所需q1/a1等，空数组请求整轮}]}，至多一次、最多3轮，不接受URL或跨会话。补充后仍只用原授权范围，不能借历史把批准换对象；未装入/未摘要不是不存在。`: "";
   const coverageScope=input.context.attachedScope?.find(item=>item.kind==="grid")?.coverageScope;
   const {numberedRead:_,numberedAssertion:__,workspacePublication:___,conversationHistory:____,...planningInput}=input;
   const grid=input.gridCoverage;
@@ -560,12 +565,12 @@ export async function prepareTurn(input:TurnInput,signal:AbortSignal,deps:Planni
   // The 8k allowance is solely the serialized conversation zone. Existing
   // bounded workspace/receipt/target descriptions are not charged twice.
   const projectionBudget=()=>conversationTokenLimit-32-estimatedHistoryTokens({summaryStatus:summaryState});
-  const attach=(selections?:import("./conversation-history").HistorySelection[])=>{
-    if(input.conversationHistory&&input.turnContext){input.turnContext.conversation=selections?input.conversationHistory.read(selections,projectionBudget()):input.conversationHistory.projection(projectionBudget());input.turnContext.conversation.summaryStatus=summaryState;
+  const attach=async(selections?:import("./conversation-history").HistorySelection[])=>{
+    if(input.conversationHistory&&input.turnContext){input.turnContext.conversation=selections?await input.conversationHistory.readBounded(selections,projectionBudget()):input.conversationHistory.projection(projectionBudget());input.turnContext.conversation.summaryStatus=summaryState;
       for(let i=0;i<3;i++){input.turnContext.conversation.budget.estimatedTokens=estimatedHistoryTokens(input.turnContext.conversation);input.turnContext.conversation.budget.utf8Bytes=Buffer.byteLength(JSON.stringify(input.turnContext.conversation));}
     }
   };
-  attach();
+  await attach();
   if(input.semanticDecision&&input.conversationHistory&&input.turnContext?.conversation?.budget.omittedBlocks){
     const source=input.conversationHistory.summaryInput(input.question);
     if(source.length){summaryState="unavailable";deps.report({id:"history-summary",kind:"tool",name:"归纳超预算的较早原轮",input:JSON.stringify({turns:source.map(turn=>({taskId:turn.taskId,turnId:turn.turnId,blockIds:turn.blocks.map(b=>b.id)})),estimatedTokens:estimatedHistoryTokens(source)}),status:"running"});
@@ -573,7 +578,7 @@ export async function prepareTurn(input:TurnInput,signal:AbortSignal,deps:Planni
         if(estimatedHistoryTokens(prompt)>conversationTokenLimit)throw Error("较早原轮摘要输入超出历史预算。");
         input.conversationHistory.acceptSummary(await runBounded(modelSafeText(prompt),historySummarySchema,8000));summaryState="model-summary";
       }catch{signal.throwIfAborted();}
-      attach();if(input.turnContext?.conversation)input.turnContext.conversation.summaryStatus=summaryState;
+      await attach();if(input.turnContext?.conversation)input.turnContext.conversation.summaryStatus=summaryState;
       deps.report({id:"history-summary",kind:"tool",name:"归纳超预算的较早原轮",input:"只记录原轮与块身份，不记录原始提示",status:summaryState==="model-summary"?"done":"partial",output:JSON.stringify({state:summaryState,notice:summaryState==="model-summary"?"仅对实际给定旧块归纳，未覆盖部分仍未知。":"未取得有效语义摘要；仅保留结构索引，不把摘段称摘要。"})});
     }
   }
@@ -600,9 +605,9 @@ export async function prepareTurn(input:TurnInput,signal:AbortSignal,deps:Planni
     try{selections=historyReadSelections(raw);}catch(error){selections=error instanceof SyntaxError?undefined:[];}
     if(selections){
       planningAttempts=2;input.historyReadUsed=true;
-      attach(selections);available=turnPlanningTargets(input);payload=buildPayload();verifyHistoryBudget();prompt=makePrompt();promptBytes=Buffer.byteLength(prompt);
+      await attach(selections);available=turnPlanningTargets(input);payload=buildPayload();verifyHistoryBudget();prompt=makePrompt();promptBytes=Buffer.byteLength(prompt);
       const readback=input.turnContext?.conversation?.readback;
-      deps.report({id:"history-read",kind:"tool",name:"查阅已加载的同会话原轮",input:JSON.stringify({selections}),status:readback?.state==="loaded"?"done":"partial",output:JSON.stringify({state:readback?.state??"unavailable",reason:readback?.reason,readback,summaryState,budget:input.turnContext?.conversation?.budget})});
+      deps.report({id:"history-read",kind:"tool",name:"查阅同会话原轮",input:JSON.stringify({selections}),status:readback?.state==="loaded"?"done":"partial",output:JSON.stringify({state:readback?.state??"unavailable",reason:readback?.reason,readback,summaryState,budget:input.turnContext?.conversation?.budget})});
       call.input=JSON.stringify({...tracePayload(),planningMode:"foreground",promptBytes});
       raw=await runPlanning();
     }

@@ -11,6 +11,7 @@ import https from "node:https";
 import {providerReasoningRelay,publicFlashResponses} from "./provider-reasoning-relay";
 import {isolateProviderCli} from "./provider-cli-isolation";
 import {runtimeModelCapacity,runtimeLeaseMs} from "./runtime-model-capacity";
+import {assertRuntimeModelRequestSize,type ReserveModelRequest} from "./runtime-model-budget";
 import {modelExecutionContext} from "./model-execution-context";
 import {authorizedFlashApi,runFlashApi} from "./flash-api";
 import type {ProviderReasoningSink} from "./provider-reasoning";
@@ -55,6 +56,13 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
   const timing:ExecutorTiming={kind:'model-executor',model:config.model,executor:config.executor,startedAt:Date.now(),activeAtStart:slots.active,localQueueMs:0,
     elapsedMs:0,promptBytes:Buffer.byteLength(prompt),outputBytes:0};
   slots.active++;
+  const reserveRequest:ReserveModelRequest|undefined=execution?.taskId?async (body,kind)=>{
+    signal.throwIfAborted();
+    assertRuntimeModelRequestSize(body.length);
+    const reservation=await resource?.reserveRequest(body,kind);
+    signal.throwIfAborted();
+    return reservation;
+  }:undefined;
   let dir:string|undefined;
   let relay:Awaited<ReturnType<typeof providerReasoningRelay>>|undefined;
   try {
@@ -64,7 +72,7 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
       const key=env.ONEEARTH_EXECUTOR_KEY||env.ANTHROPIC_API_KEY;
       if(!key)throw Error("The authorized model service is unavailable.");
       timing.transport="api";
-      const value=await runFlashApi(prompt,key,signal,{transport:providerTransport,reasoning:options?.providerReasoning,schema:options?.outputSchema,onOutputDelta:options?.publicText?.onDelta});
+      const value=await runFlashApi(prompt,key,signal,{transport:providerTransport,reasoning:options?.providerReasoning,schema:options?.outputSchema,onOutputDelta:options?.publicText?.onDelta,reserveRequest});
       timing.outputBytes=Buffer.byteLength(value);return value;
     }
     timing.transport="cli";
@@ -89,7 +97,7 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
       // Qualification uses the original server-pinned provider, never a local
       // endpoint claimed by the browser. The temporary token cannot reach it.
       const background=options?.singleRequest===true||modelExecutionContext.getStore()?.role==="background";
-      relay=await providerReasoningRelay(key,options?.providerReasoning??{taskId:execution?.taskId??"single-model-request",onSnapshot:()=>{}},signal,prompt,providerTransport,{maxRequests:background?1:4});
+      relay=await providerReasoningRelay(key,options?.providerReasoning??{taskId:execution?.taskId??"single-model-request",onSnapshot:()=>{}},signal,prompt,providerTransport,{maxRequests:background?1:4,reserveRequest});
       if(background)args.push("-c","model_providers.oneearth_service.request_max_retries=0","-c","model_providers.oneearth_service.stream_max_retries=0");
       const base='model_providers.oneearth_service.base_url="https://api.deepseek.com"';
       if(args.filter(arg=>arg===base).length!==1)throw Error("The authorized provider configuration could not be verified.");
@@ -103,6 +111,8 @@ async function executeModel(config:ChatModel,prompt:string,signal:AbortSignal,op
     if(summaryOutput)args.push("--json","-c",'model_reasoning_summary="auto"');
     if(config.model) args.push("--model",config.model);
     if(config.executor==="codex") args.push("-");
+    if(!relay&&reserveRequest)
+      await reserveRequest(Buffer.from(JSON.stringify({prompt,outputSchema:schema,webSearch:options?.webSearch})),"cli-visible-input");
     return await new Promise<string>((resolve,reject)=>{
       signal.throwIfAborted();
       const child=spawn(config.executor,args,{cwd:dir,stdio:"pipe",env,signal,killSignal:"SIGKILL"});

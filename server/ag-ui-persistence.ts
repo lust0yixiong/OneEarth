@@ -17,6 +17,7 @@ import {nativeAgUiProtocolVersion} from "../src/domain/native-ag-ui";
 import type {DiscoveryResponse} from "../src/domain/types";
 import type {Payload} from "./task-store";
 import {modelSafeValue} from "./model-context-safety";
+import type {WorkspaceActionEffect,WorkspaceEffectCommand} from "../src/domain/workspace-action-effect";
 
 export type AgUiAdmission={threadId:string;turnId:string;fingerprint:string;resume?:AgUiResume;workspaceTool?:boolean;workspaceReplies?:AgUiWorkspaceReply[];pendingWorkspaceToolCallIds?:string[];previousTaskId?:string};
 export const agUiSchema=`
@@ -30,6 +31,7 @@ export const agUiSchema=`
  CREATE INDEX IF NOT EXISTS runtime_agui_events_run ON runtime_agui_events(run_id,seq);
  ALTER TABLE runtime_agui_runs ADD COLUMN IF NOT EXISTS public_step text;
  ALTER TABLE runtime_agui_runs ADD COLUMN IF NOT EXISTS research_progress jsonb;
+ ALTER TABLE runtime_agui_runs ADD COLUMN IF NOT EXISTS workspace_action_effect jsonb;
 ` + agUiInterruptSchema + agUiWorkspaceSchema;
 export async function writeAgUiEvent(db:PoolClient,id:string,value:unknown){
  const event=EventSchema.parse(value);
@@ -45,6 +47,7 @@ export function agUiProgressStep(payload:Payload):NativeAgUiStep|undefined{
   if(name==="queued")return "research-queued";
   if(name==="executing")return "research-executing";
   if(name==="resuming")return "research-resuming";
+  if(name==="waiting-workspace")return "workspace-wait";
   if(name==="waiting-discovery")return operation==="read"?"source-read-wait":operation===undefined||operation==="discover"?"discovery-wait":undefined;
   return;
  }
@@ -75,8 +78,19 @@ export async function projectAgUiResearchProgress(db:PoolClient,id:string,payloa
  await writeResearchProgress(db,id,progress);
 }
 async function writeResearchProgress(db:PoolClient,id:string,progress:ResearchProgress){
- await db.query("UPDATE runtime_agui_runs SET research_progress=$2 WHERE id=$1",[id,progress]);
- await writeAgUiEvent(db,id,{type:"STATE_SNAPSHOT",snapshot:{oneearth:{researchProgress:progress}}});
+ const {rows:[run]}=await db.query<{workspace_action_effect:WorkspaceActionEffect|null}>(
+  "UPDATE runtime_agui_runs SET research_progress=$2 WHERE id=$1 RETURNING workspace_action_effect",[id,progress]);
+ await writeAgUiEvent(db,id,{type:"STATE_SNAPSHOT",snapshot:{oneearth:{researchProgress:progress,
+  ...(run.workspace_action_effect?{workspaceEffect:run.workspace_action_effect}:{})}}});
+}
+
+export async function writeAgUiWorkspaceEffect(db:PoolClient,id:string,effect:WorkspaceActionEffect,command?:WorkspaceEffectCommand){
+ const {rows:[run]}=await db.query<{research_progress:unknown}>(
+  "UPDATE runtime_agui_runs SET workspace_action_effect=$2 WHERE id=$1 AND NOT terminal RETURNING research_progress",[id,effect]);
+ if(!run)return;
+ const progress=readResearchProgress(run.research_progress,id);
+ await writeAgUiEvent(db,id,{type:"STATE_SNAPSHOT",snapshot:{oneearth:{workspaceEffect:command?{...effect,command}:effect,
+  ...(progress?{researchProgress:progress}:{})}}});
 }
 
 /** An explicitly public, completed provider summary is a display object,

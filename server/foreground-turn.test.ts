@@ -108,20 +108,35 @@ test("expired adopted coverage allows ordinary view answers and blocks dependent
 
 test("natural adoption requires an explicit command in the current message and the current workspace operation",async t=>{
   const f=await fixture(t),ctx=context();
-  ctx.workspaceView!.operations!.push("adopt-research-range");
+  const grid=gridSpec("h3",2),point:[number,number]=[105,25],selection={id:cellAt(point,grid),grid,point};
+  const summary={selection,filters:emptyFilters(),caseId:null,layer:"all" as const,metric:"products" as const,candidateCount:null,candidateIdentity:null};
+  const range={scope:{kind:"grid" as const,selection,place:"原选格",coverageScope:{id:randomUUID(),revision:"a".repeat(64),summary}}};
+  const actionId=randomUUID(),serverWorkspaceResearchAction={actionId,expectedRevision:0,range};
+  const applied:string[]=[];
+  f.services.workspaceResearch={apply:async(conversationId,action,origin)=>{
+    assert.equal(origin.source,"chat");
+    assert.equal(action.actionId,actionId);
+    applied.push(action.kind);
+    return {status:200,state:{conversationId,actionId,revision:1,range:action.kind==="adopt-research-range"?{scope:{...range.scope,conditionRevision:1}}:null}};
+  }};
   const output=decision("workspace",{kind:"workspace-operation",operation:"adopt-research-range"});
   const command="请把地图上刚选的这一格作为接下来研究的范围。";
-  const authorized=await f.run(f.body(command,{context:ctx}),output);
-  assert.deepEqual(authorized.result?.workspaceOperation,{kind:"adopt-research-range"});
+  const authorized=await f.run(f.body(command,{context:ctx,serverWorkspaceResearchAction}),output);
+  assert.equal(authorized.result?.workspaceOperation,undefined);
+  assert.equal(authorized.result?.workspaceResearchState?.range?.scope.selection.id,selection.id);
   assert.equal(authorized.calls.length,1);
   for(const text of ["怎么把地图上刚选的这一格作为研究范围","不要把当前网格作为研究范围","等我确认再采用当前网格作为研究范围",
-    "之前的建议是把当前网格作为研究范围"]){
-    const rejected=await f.run(f.body(text,{context:ctx}),output);
-    assert.equal(rejected.result?.workspaceOperation,undefined);
+    "之前的建议是把当前网格作为研究范围","只查这里一次","请把当前网格作为研究范围，仅在本轮使用。"]){
+    const rejected=await f.run(f.body(text,{context:ctx,serverWorkspaceResearchAction}),output);
+    assert.equal(rejected.result?.workspaceResearchState,undefined);
     assert.equal(rejected.outcome.kind,"reply");
     if(rejected.outcome.kind==="reply")assert.equal(rejected.outcome.payload.code,"TURN_PLAN_INVALID");
   }
-  assert.equal((await f.run(f.body(command),output)).result?.workspaceOperation,undefined);
+  assert.equal((await f.run(f.body(command),output)).result?.workspaceResearchState,undefined);
+  const clear=await f.run(f.body("请清除当前会话的研究范围。",{context:ctx,serverWorkspaceResearchAction:{actionId,expectedRevision:1}}),
+    decision("workspace",{kind:"workspace-operation",operation:"clear-research-range"}));
+  assert.equal(clear.result?.workspaceResearchState?.range,null);
+  assert.deepEqual(applied,["adopt-research-range","clear-research-range"]);
   assert.equal(f.requests.length,0);
 });
 

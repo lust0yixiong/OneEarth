@@ -372,6 +372,8 @@ export interface DiscoveryAttempt {
   context: DiscoveryContext;
   workspaceKey: string;
   researchRangeRevision?: number;
+  workspaceResearch?: import("./workspace-research-state").WorkspaceResearchReference;
+  workspaceResearchAction?: import("./workspace-research-state").WorkspaceResearchObservation;
   userMessageId: string;
   workspaceOperationKeys?: Partial<Record<import("./workspace-operations").WorkspaceOperationKind,string>>;
   workspaceCandidateKey?: string;
@@ -421,6 +423,8 @@ export interface DiscoveryResponse {
   workspaceEffect?: import("./turn-context").WorkspaceEffect;
   workspaceAction?: import("./workspace-view-context").WorkspaceViewAction;
   workspaceOperation?: import("./workspace-operations").WorkspaceOperation;
+  workspaceResearchState?: import("./workspace-research-state").WorkspaceResearchState;
+  workspaceResearchError?: import("./workspace-research-state").WorkspaceResearchErrorCode;
   workspaceLayerOpen?: import("./workspace-published-layer").WorkspacePublishedLayerAction;
   workspacePending?: {question:string;originalQuestion?:string;proposedAction?:import("./workspace-view-context").WorkspaceViewAction;
     proposalOrigin?:{layerId:string;controlId:string;valueId:string}};

@@ -62,10 +62,15 @@ import {answerLayerObservation,stripLayerObservationContext} from "./runtime-lay
 import {answerCaseObservation} from "./runtime-case-observation";
 import {runtimeTurnFingerprint,runtimeTurnHandoff,validRuntimeTurnHandoff,type RuntimeTurnInput,type RuntimeTurnHandoff,type RuntimeTurnOptions,type ForegroundTurnOutcome} from "./runtime-turn-handoff";
 import {createClarificationPrompt,clarificationAnswerText,type ClarificationPrompt} from "../src/domain/clarification";
+import {authorizesResearchRangeAdoption,authorizesResearchRangeClear,type WorkspaceOperationKind} from "../src/domain/workspace-operations";
+import {readResearchRangeScope} from "../src/domain/research-range";
+import {readWorkspaceResearchCoverage,type WorkspaceResearchStateStore} from "./workspace-research-state";
+import type {GridCoverageEvidence} from "../src/domain/grid-coverage";
 export {validRuntimeTurnHandoff} from "./runtime-turn-handoff";
 export type {RuntimeTurnInput,RuntimeTurnHandoff,RuntimeTurnOptions,ForegroundTurnOutcome} from "./runtime-turn-handoff";
 
 export interface RuntimeServices {
+  workspaceResearch?: Pick<WorkspaceResearchStateStore,"apply">;
   webTools?:RuntimeWebToolAuthority;
   tasks: TaskStore;
   push: ReturnType<typeof constellationService>;
@@ -117,10 +122,11 @@ export async function resumePlannedTurn(services:RuntimeServices,taskId:string,b
 const discoveryProgressAreas:ReadonlySet<ResearchProgressFact["area"]>=new Set(["literature","haina","web"]);
 
 export async function executeTurn(services:RuntimeServices,taskId:string,body:RuntimeTurnInput,signal:AbortSignal,
-  publish:(payload:Record<string,unknown>)=>void,internal:RuntimeTurnOptions&{foreground?:boolean;semanticDecision?:boolean;handoff?:RuntimeTurnHandoff;approvedConfirmation?:boolean}={}):Promise<Record<string,unknown>>{
+  publish:(payload:Record<string,unknown>)=>void,internal:RuntimeTurnOptions&{foreground?:boolean;semanticDecision?:boolean;handoff?:RuntimeTurnHandoff;approvedConfirmation?:boolean;
+    flightCatalogue?:{evidence:GridCoverageEvidence;trace?:RunTrace;batchId:string}}={}):Promise<Record<string,unknown>>{
   const {tasks, push, coverage, researchRegionService, adminBoundaryDir, canonicalCache} = services;
   const turnContext=internal.turnContext??internal.handoff?.turnContext??await runtimeTurnContext(tasks,taskId,body);
-  const batchOwner={batchId:runtimeStepContext.getStore()?.stableId("result-batch")??randomUUID(),taskId,turnId:body.turnId,conversationId:body.conversationId};
+  const batchOwner={batchId:internal.flightCatalogue?.batchId??runtimeStepContext.getStore()?.stableId("result-batch")??randomUUID(),taskId,turnId:body.turnId,conversationId:body.conversationId};
   const cachedPapers=runtimeTurnPapers();
   const haina=runtimeTurnHaina();
   const savedMaterials=runtimeStepContext.getStore()?.state.cancelledResult as DiscoveryResponse|undefined;
@@ -130,7 +136,8 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
   let context=stripLayerObservationContext(boundTurnContext(body.context,turnContext));
   const controller = {signal};
   let activeExecutor:ReturnType<typeof researchExecutor>|undefined;
-  const runTrace:RunTrace = internal.handoff?structuredClone(internal.handoff.runTrace):{started:runtimeStepContext.getStore()?.state.startedAt??Date.now(),stages:[],calls:[],timings:requestPerformance.getStore()};
+  const savedTrace=internal.handoff?.runTrace??internal.flightCatalogue?.trace;
+  const runTrace:RunTrace = savedTrace?structuredClone(savedTrace):{started:runtimeStepContext.getStore()?.state.startedAt??Date.now(),stages:[],calls:[],timings:requestPerformance.getStore()};
   if(internal.handoff&&requestPerformance.getStore()){
     requestPerformance.getStore()!.unshift(...(runTrace.timings||[]));runTrace.timings=requestPerformance.getStore();
   }
@@ -168,7 +175,13 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     const action={id:"grid-catalogue",area:"catalog"} as const;
     if(hasScope)researchProgress({...action,status:"running"});
     let evidence;
-    try {evidence=await questionGridEvidence(scope,coverage,signal);}
+    try {
+      const frozen=body.serverWorkspaceResearch&&scope.attachedScope?.find(item=>item.kind==="grid"&&
+        item.conditionRevision===body.serverWorkspaceResearch!.revision);
+      const researchRange=readResearchRangeScope(frozen);
+      evidence=researchRange?await readWorkspaceResearchCoverage(researchRange,coverage,signal,true):
+        await questionGridEvidence(scope,coverage,signal);
+    }
     catch(error){
       if(hasScope&&!signal.aborted)researchProgress({...action,status:isResearchTimeout(error)?"timeout":"failed"});
       throw error;
@@ -193,12 +206,22 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
     const flightPlace=internal.foreground&&!clarification&&!decision&&!body.clarificationAnswer&&context.workspaceView?.surface==="earth"
       ?flightCataloguePlace(query):undefined;
     if(clarification)context={...clarification.context,workspaceView:body.context.workspaceView};
+    const rangeObservation=internal.foreground&&!clarification&&!decision&&!body.clarificationAnswer&&services.workspaceResearch
+      ?body.serverWorkspaceResearchAction:undefined;
+    const clearRange=rangeObservation&&authorizesResearchRangeClear(query);
+    const adoptRange=rangeObservation?.range&&authorizesResearchRangeAdoption(query);
+    if (context.workspaceView) {
+      const operations:WorkspaceOperationKind[]=(context.workspaceView.operations??[]).filter(kind=>kind!=="adopt-research-range"&&kind!=="clear-research-range");
+      if(adoptRange)operations.push("adopt-research-range");
+      if(clearRange)operations.push("clear-research-range");
+      context={...context,workspaceView:{...context.workspaceView,operations}};
+    }
     const executor=activeExecutor=researchExecutor(body.config,clarification?clarification.original.deepseekTools:body.deepseekTools,signal,
       services.webTools?{researchTaskId:taskId,authority:services.webTools}:undefined,{taskId,onSnapshot:snapshot=>{if(!signal.aborted)reasoning.accept(snapshot);}});
     event({conversationId:body.conversationId,turnId:body.turnId, ...(decision ? {continuedFrom:decision.checkMessageId} : {})});
     stage("正在理解问题");
     const adoptedRange=context.attachedScope?.find(item=>item.kind==="grid"&&item.conditionRevision!==undefined);
-    const checkedCoverage=flightPlace?undefined:await readCoverage(context,!!adoptedRange);
+    const checkedCoverage=internal.flightCatalogue?.evidence??(flightPlace||clearRange||adoptRange?undefined:await readCoverage(context,!!adoptedRange));
     const unavailableRange=adoptedRange&&checkedCoverage?.status==="unknown"?checkedCoverage:undefined;
     const gridCoverage=unavailableRange?undefined:checkedCoverage;
     const gridLimits=checkedCoverage&&!clarification&&!decision?gridQueryLimits(query):undefined;
@@ -473,7 +496,9 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         output:JSON.stringify({...plan,decisionSource:"stored-confirmation",authorization:{parentTaskId:internal.pending!.taskId,optionId:"approve"},modelPlanning:{attempts:0,workspaceAction:internal.pending?.proposedAction}})});
       return {plan,retrieval:undefined as import("./data-search").DataSearchResult|undefined};
     }
-    const prepared = flightPlace?{plan:{action:"workspace",goal:query,evidenceNeed:"none",targets:[],reason:"按明确的先飞行、后读取顺序执行。",
+    const prepared = internal.flightCatalogue?{plan:{action:"respond",goal:query,evidenceNeed:"none",targets:[],reason:"依据原飞行到达回执读取权威目录。",
+      clarification:null,gridIntent:"catalogue",...turnMetadata(query,{history,conversationContext})} as TurnPlan,retrieval:undefined}:
+      flightPlace?{plan:{action:"workspace",goal:query,evidenceNeed:"none",targets:[],reason:"按明确的先飞行、后读取顺序执行。",
       clarification:null,workspaceNavigation:{kind:"navigate-map",place:flightPlace},
       ...turnMetadata(query,{history,conversationContext})} as TurnPlan,retrieval:undefined}:
       internal.approvedConfirmation?approvedPlan():internal.handoff?{plan:resumedPlan(),retrieval:undefined as import("./data-search").DataSearchResult|undefined}:clarification?{plan:{action:"search",evidenceNeed:"discover",goal:clarification.goal,targets:[],
@@ -754,8 +779,23 @@ export async function executeTurn(services:RuntimeServices,taskId:string,body:Ru
         return complete({message:turn.foregroundReply,...continuity});
       if(turn.workspaceOperation){
         if(turn.workspaceOperation==="present-catalogue")throw new TurnPlanningFailure();
-        const message=turn.workspaceOperation==="adopt-research-range"
-          ?"将采用地图上当前选中的网格作为研究范围，由工作台核对原选格后应用。":"已确定当前工作台操作。";
+        const kind=turn.workspaceOperation;
+        if(kind==="adopt-research-range"||kind==="clear-research-range"){
+          if(!rangeObservation||!services.workspaceResearch)throw new TurnPlanningFailure();
+          const {actionId,expectedRevision,range}=rangeObservation;
+          if(kind==="adopt-research-range"&&(!adoptRange||!range)||kind==="clear-research-range"&&!clearRange)
+            throw new TurnPlanningFailure();
+          const action=kind==="adopt-research-range"&&range?{kind,range,actionId,expectedRevision} as const:
+            {kind:"clear-research-range",actionId,expectedRevision} as const;
+          signal.throwIfAborted();
+          const decision=await services.workspaceResearch.apply(body.conversationId,action,{source:"chat",runId:taskId,turnId:body.turnId},signal);
+          report({id:"workspace-research-action",kind:"tool",name:"保存会话研究范围",status:decision.status===200?"done":"partial",
+            input:action.actionId,output:decision.status===200?"会话范围操作已保存。":decision.error});
+          if(decision.status!==200)return complete({message:decision.error,workspaceResearchError:decision.code,...continuity});
+          const message=kind==="adopt-research-range"?"已采用发问时选中的网格作为会话研究范围。":"已清除会话研究范围。";
+          return complete({message,workspaceResearchState:decision.state,...continuity});
+        }
+        const message="已确定当前工作台操作。";
         const reply={message,workspaceOperation:{kind:turn.workspaceOperation},...continuity};
         report({id:"workspace-action",kind:"tool",name:"确认当前工作台操作",input:JSON.stringify(reply.workspaceOperation),status:"done",output:"交由网页按原工作台状态核验后执行。"});
         return complete(reply);

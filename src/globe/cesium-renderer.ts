@@ -175,9 +175,33 @@ export function createCesiumRenderer(
     }
     schedule();
   }
+  let pendingGroundObservation:{settle:(receipt:FlightMapReceipt)=>void;pose:CameraPose}|undefined;
   function stopFlight() {
-    if (!flying) return;
-    camera.cancelFlight();
+    if(flying)camera.cancelFlight();
+    const pending=pendingGroundObservation;
+    pendingGroundObservation=undefined;
+    pending?.settle({state:"cancelled",observedAt:Date.now()});
+  }
+  function observeFlightGround() {
+    const pending=pendingGroundObservation;
+    if(!pending || flying || !canvas.isConnected || document.visibilityState!=="visible")return;
+    const {settle,pose}=pending;
+    pendingGroundObservation=undefined;
+    if(poseChanged(pose)){
+      settle({state:"ground-unavailable",observedAt:Date.now()});
+      return;
+    }
+    // A real postRender after arrival supplies the ground, never the request or preflight selection.
+    const x=canvas.clientWidth/2,y=canvas.clientHeight/2;
+    const picked=x>=40&&y>=40 ? [[x,y],[x-16,y],[x+16,y],[x,y-16],[x,y+16]]
+      .map(([sx,sy])=>ground(new Cartesian2(sx,sy))) : [];
+    if(picked.length!==5 || !picked.every(Boolean)){
+      settle({state:"ground-unavailable",observedAt:Date.now()});
+      return;
+    }
+    const point=coordinate(picked[0]!);
+    const level=resolution(currentCamera().zoom);
+    settle({state:"arrived",observedAt:Date.now(),ground:{id:cellAt(point,gridSpec("h3",level)),level,point}});
   }
   function flyTo(c: Camera,settled?:(receipt:FlightMapReceipt)=>void) {
     stopFlight();
@@ -191,17 +215,10 @@ export function createCesiumRenderer(
         canvas.dataset.flying = "false";
         commit();
         if(settled){
-          // Sample the actual ground under the settled viewport, never the
-          // requested camera or the pre-flight visible selection.
-          const x=canvas.clientWidth/2,y=canvas.clientHeight/2;
-          const picked=x>=40&&y>=40&&canvas.dataset.painted==="true"?
-            [[x,y],[x-16,y],[x+16,y],[x,y-16],[x,y+16]].map(([sx,sy])=>ground(new Cartesian2(sx,sy))):[];
-          if(picked.length===5&&picked.every(Boolean)){
-            const point=coordinate(picked[0]!);
-            const level=resolution(currentCamera().zoom);
-            const id=cellAt(point,gridSpec("h3",level));
-            settled({state:"arrived",observedAt:Date.now(),ground:{id,level,point}});
-          }else settled({state:"ground-unavailable",observedAt:Date.now()});
+          const pose={position:new Cartesian3(),direction:new Cartesian3(),up:new Cartesian3()};
+          savePose(pose);
+          pendingGroundObservation={settle:settled,pose};
+          schedule();
         }
       },
       cancel() {
@@ -411,6 +428,7 @@ export function createCesiumRenderer(
     }
     if (globe.tilesLoaded) {
       canvas.dataset.painted = "true";
+      observeFlightGround();
       if (!moving && !flying && canvas.isConnected && canvas.clientWidth && canvas.clientHeight &&
           document.visibilityState === "visible") observeCatalogueFrame();
     }
@@ -460,6 +478,7 @@ export function createCesiumRenderer(
       commit();
     },
     dispose() {
+      stopFlight();
       disposed = true;
       cancelAnimationFrame(requestedFrame);
       resize.disconnect();

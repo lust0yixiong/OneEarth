@@ -5,6 +5,7 @@ export const nativeAgUiStepLabels = {
   "research-executing": "正在执行研究",
   "discovery-wait": "正在等待发现服务",
   "source-read-wait": "正在等待读取来源",
+  "workspace-wait": "正在等待原页面确认",
   "research-resuming": "正在继续原研究任务",
 } as const;
 

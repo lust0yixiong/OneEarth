@@ -41,6 +41,31 @@ test("auth, exact original stdin and known CLI envelopes are required before any
  assert.equal(upstreamCalls,0);assert.equal(values.length,0);
 });
 
+test("each CLI relay attempt reserves the exact forwarded request, and rejection makes no provider request",async t=>{
+ const prompt="Only my original task.",upstreamBodies:Buffer[]=[],reserved:Buffer[]=[],usage:unknown[]=[];
+ const upstream=await listener(t,async(req,res)=>{
+  const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(chunk);upstreamBodies.push(Buffer.concat(chunks));
+  res.writeHead(200,{"content-type":"text/event-stream"}).end(frame("response.completed",0,{
+    response:{usage:{input_tokens:23,output_tokens:3,total_tokens:26}},
+  }));
+ });
+ const relay=await providerReasoningRelay("CONTROLLED_PROVIDER_KEY",{taskId:randomUUID(),onSnapshot:()=>{}},new AbortController().signal,prompt,
+  localTransport(upstream.port),{reserveRequest:async(bytes,kind)=>{
+   assert.equal(kind,"responses-relay");
+   if(reserved.length===2)throw Error("Test cumulative budget exhausted.");
+   reserved.push(bytes);
+   return {recordUsage:async counts=>{usage.push(counts);}};
+  }});
+ t.after(()=>relay.close());
+ for(const status of [200,200,429]){
+  const result=await fetch(relay.baseUrl+"/responses",{method:"POST",headers:{authorization:"Bearer "+relay.token,"content-type":"application/json"},
+   body:JSON.stringify(wire(prompt))});
+  assert.equal(result.status,status);await result.text();
+ }
+ assert.deepEqual(upstreamBodies,reserved);assert.equal(upstreamBodies.length,2);
+ assert.deepEqual(usage,[{inputTokens:23,outputTokens:3},{inputTokens:23,outputTokens:3}]);
+});
+
 test("unexpected compressed responses are rejected before encoded bytes can be mistaken for CLI SSE",async t=>{
  const values:ProviderReasoningSnapshot[]=[],upstream=await listener(t,(_req,res)=>{res.writeHead(200,{"content-type":"text/event-stream","content-encoding":"gzip"});res.end(Buffer.from([31,139,8,0,0]));}),prompt="Only the original task.";
  const relay=await providerReasoningRelay("CONTROLLED_PROVIDER_KEY",{taskId:randomUUID(),onSnapshot:value=>values.push(value)},new AbortController().signal,prompt,localTransport(upstream.port));t.after(()=>relay.close());
