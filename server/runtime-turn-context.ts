@@ -7,6 +7,7 @@ import type {WorkspaceViewContext} from "../src/domain/workspace-view-context";
 import type {ResultBatch,WorkspaceReceipt} from "../src/domain/turn-context";
 import {validBrowserTurnFrame} from "../src/domain/turn-context";
 import {modelSafeValue} from "./model-context-safety";
+import {isWorkspaceDiscoveryArchiveResult} from "./workspace-discovery-archive";
 import {runtimeWorkspaceState,type RuntimeWorkspaceState} from "./runtime-workspace-state";
 
 import type {ConversationProjection} from "./conversation-history";
@@ -91,12 +92,18 @@ export async function runtimeTurnContext(tasks:ContextStore,taskId:string,body:R
     if(reads>=4){unavailable.push({taskId:id,reason:"limit"});continue;}
     if(!taskIdPattern.test(id)){unavailable.push({taskId:id,reason:"unavailable"});continue;}
     reads++;const task=await tasks.get(id),previous=task?parse(task.body) as RuntimeTurnInput:undefined;
-    if(!task||!previous?.context||!Array.isArray(previous.history)){unavailable.push({taskId:id,reason:"unavailable"});continue;}
+    if(!task||!previous?.context||!Array.isArray(previous.history)||await tasks.workspaceDiscoveryArchive?.(id)){
+      unavailable.push({taskId:id,reason:"unavailable"});continue;
+    }
     if(previous.conversationId!==body.conversationId){unavailable.push({taskId:id,reason:"foreign-conversation"});continue;}
     if(relations.some(ref=>ref.taskId===id&&ref.turnId!==undefined&&ref.turnId!==previous.turnId)){
       unavailable.push({taskId:id,reason:"turn-mismatch"});continue;
     }
-    const terminal=await tasks.terminal(id),result=terminal?.result as DiscoveryResponse|undefined;
+    const terminal=await tasks.terminal(id);
+    if(isWorkspaceDiscoveryArchiveResult(terminal?.result)){
+      unavailable.push({taskId:id,reason:"unavailable"});continue;
+    }
+    const result=terminal?.result as DiscoveryResponse|undefined;
     const receipt=result?.workspaceEffect?await tasks.workspaceReceipt?.(id):undefined;
     const execution=await tasks.researchExecution?.(id);
     const record=contextRecord(task,previous,result,receipt,execution,frame,terminal);loaded.set(id,{task,body:previous,result,record});

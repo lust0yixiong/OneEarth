@@ -48,6 +48,8 @@ export function postgresConversationHistory(pool:Pool) {
         SELECT m.id,m.created,first_event.seq AS admitted,false AS legacy
         FROM current_admission c
         JOIN runtime_chat_messages m ON ${conversationKey("m.body")}=$1 AND ($4::uuid[] IS NULL OR m.id=ANY($4))
+          AND (m.handoff->>'kind'='workspace-discovery') IS NOT TRUE
+          AND (m.terminal->'result' ? 'workspaceDiscovery') IS NOT TRUE
         JOIN LATERAL (
           SELECT seq FROM runtime_chat_events e WHERE e.id=m.id ORDER BY seq LIMIT 1
         ) first_event ON first_event.seq<c.admitted
@@ -93,6 +95,7 @@ export function postgresConversationHistory(pool:Pool) {
           CASE WHEN NOT restricted AND NOT thin THEN result->>'message' END AS answer
         FROM guarded
         WHERE jsonb_typeof(body->'query')='string'
+          AND (result ? 'workspaceDiscovery') IS NOT TRUE
           AND ($4::uuid[] IS NULL OR EXISTS (
             SELECT 1 FROM unnest($4::uuid[],$6::text[]) AS expected(id,turn)
             WHERE expected.id=guarded.id AND (expected.turn IS NULL OR expected.turn=body->>'turnId')

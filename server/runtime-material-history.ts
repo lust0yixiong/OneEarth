@@ -1,5 +1,6 @@
 import type {TaskStore} from "./task-store";
 import {taskIdPattern} from "./task-store";
+import {isWorkspaceDiscoveryArchiveResult} from "./workspace-discovery-archive";
 import {paperId,validPaperRecord,type PaperRecord} from "../src/domain/paper-record";
 import type {SearchRun,ReadEvidence} from "../src/domain/types";
 import {validReadEvidence,compactManifestIndex} from "../src/domain/read-evidence";
@@ -14,6 +15,7 @@ export async function runtimeMaterialHistory(tasks:TaskStore,conversationId:stri
   const papers=new Map<string,PaperRecord>(),searches:SearchRun[]=[],paperEvidence:RuntimeMaterials["paperEvidence"]=[];
   const hainaRecords=new Map<number,HainaRecord>();let hainaCatalog:RuntimeHainaMaterials["hainaCatalog"];
   function consume(row:Record<string,any>,at:number){
+    if(isWorkspaceDiscoveryArchiveResult(row.result))return;
     const result=row.result as ({paperRecords?:PaperRecord[];runTrace?:{searches?:SearchRun[]}}&RuntimeHainaMaterials)|undefined;
     const material=row.researchMaterials as Partial<RuntimeMaterialReceipt>|undefined;
     for(const record of [...(material?.papers||[]),...(result?.paperRecords||[])]){
@@ -34,7 +36,9 @@ export async function runtimeMaterialHistory(tasks:TaskStore,conversationId:stri
     if(!id||!taskIdPattern.test(id))continue;
     const parent=await tasks.get(id);
     if(!parent||JSON.parse(parent.body).conversationId!==conversationId)continue;
+    if(await tasks.workspaceDiscoveryArchive?.(id))continue;
     const terminal=await tasks.terminal(id);
+    if(isWorkspaceDiscoveryArchiveResult(terminal?.result))continue;
     if(terminal)consume(terminal,parent.updated);
     const missing=options.paperIds?.some(id=>!papers.has(id));
     if(options.includeSources===false&&options.paperIds!==undefined&&!missing)continue;

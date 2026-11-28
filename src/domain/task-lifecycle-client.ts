@@ -1,4 +1,5 @@
 import type {RemoteStop,RuntimePhase} from "./runtime-status";
+import {workspaceDiscoveryAccessHeader} from "./workspace-discovery";
 
 export type TaskLifecycle={runtimePhase?:RuntimePhase;remoteStops?:RemoteStop[]};
 type TaskIdentity={id:string;conversationId:string;turnId:string};
@@ -56,8 +57,9 @@ export function mergeTaskLifecycle(current:TaskLifecycle|undefined,incoming:Task
   return {...(runtimePhase?{runtimePhase}:{}),...(stops.size?{remoteStops:[...stops.values()]}:{})};
 }
 
-export async function readCancelledTaskLifecycle(task:TaskIdentity,signal:AbortSignal):Promise<TaskLifecycle|undefined> {
-  const response=await fetch("/api/tasks/"+encodeURIComponent(task.id),{signal,cache:"no-store"});
+export async function readCancelledTaskLifecycle(task:TaskIdentity,signal:AbortSignal,accessKey?:string):Promise<TaskLifecycle|undefined> {
+  const response=await fetch("/api/tasks/"+encodeURIComponent(task.id),{signal,cache:"no-store",redirect:"error",
+    ...(accessKey?{headers:{[workspaceDiscoveryAccessHeader]:accessKey}}:{})});
   if(!response.ok)throw Error("原任务状态暂不可读。");
   const data=await response.json();
   if(!matchesTaskIdentity(data,task) || data.status!=="cancelled")return;

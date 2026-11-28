@@ -32,7 +32,7 @@ import type {runtimeMapOperations} from "./runtime-map-operation";
 export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresChatMessages},prepare:(id:string,input:unknown,observation?:CaseObservationBinding,layerObservation?:LayerObservationBinding)=>Promise<ChatPreparation>,
  resolveObservation?:ResolveCaseObservation,resolveLayerObservation?:ResolveLayerObservation,workspaceResearch?:WorkspaceResearchStateStore,
  requireWorkspacePage=false,mapOperations?:Pick<ReturnType<typeof runtimeMapOperations>,"start">,
- workspaceDiscovery?:Pick<WorkspaceDiscovery,"admitInTransaction"|"readReference">){
+ workspaceDiscovery?:Pick<WorkspaceDiscovery,"admitInTransaction"|"readReference"|"authorizeArchive">){
  const {chat}=tasks;await chat.acquire();nativeWorkspaceReceiptRoutes(app,chat);let stopping=false;
  const active=new Map<string,{controller:AbortController;done:Promise<void>}>();
  function start(id:string,prepared:Exclude<ChatPreparation,{error:string}>,body:RuntimeTurnInput,pageHash:string|undefined){
@@ -93,15 +93,27 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
    if(!events.length&&!closed)await delay(40,undefined,{signal:controller.signal});
   }}catch{if(!closed)res.destroy();}finally{res.off("close",close);}
  }
+ async function allowPreviousRun(input:ReturnType<typeof readAgUiInput>,res:Response){
+  const archive=await chat.workspaceDiscoveryArchive(input.id);
+  if(!archive)return true;
+  res.set("Cache-Control","no-store");
+  const discovery=input.discovery;
+  const key=discovery?.kind==="action"?discovery.accessKey:discovery?.reference.accessKey;
+  if(await workspaceDiscovery?.authorizeArchive(archive,input.body.conversationId,key))return true;
+  res.status(404).json({error:"找不到这项资料发现操作。",code:"DISCOVERY_OPERATION_NOT_FOUND"});
+  return false;
+ }
  app.post(nativeAgUiPath,async(req,res)=>{
   if(!req.is("application/json")){res.status(415).json({error:"AG-UI 需要 application/json。"});return;}
   if(!req.accepts("text/event-stream")){res.status(406).json({error:"AG-UI 需要 text/event-stream。"});return;}
   if(stopping){res.status(503).json({error:"正在停止接收运行。"});return;}
+  let decoded:ReturnType<typeof readAgUiInput>|undefined;
   try{
-   const decoded=readAgUiInput(req.body);
+   decoded=readAgUiInput(req.body);
    const {id,fingerprint,resume}=decoded;
    const previous=await tasks.get(id);
    if(previous){
+    if(!await allowPreviousRun(decoded,res))return;
     const same=await chat.agUiFingerprint(id)===fingerprint;
     res.status(409).set("Location","/api/tasks/"+id).json({error:same?"该运行已受理，请只读原状态与归档。":"该运行编号已用于另一份提交。",code:same?"RUN_ALREADY_ACCEPTED":"RUN_ID_CONFLICT"});return;
    }
@@ -173,7 +185,10 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
    if(error instanceof WorkspaceResearchConflict){res.status(409).json({error:error.message,code:error.code,state:error.state});return;}
    if(error instanceof WorkspaceDiscoveryConflict){res.status(error.status).json({error:error.message,code:error.code});return;}
    if(error instanceof AgUiInputError){res.status(error.status).json({error:error.message});return;}
-   if(error instanceof TaskConflict){res.status(409).json({error:error.message});return;}
+   if(error instanceof TaskConflict){
+    if(decoded&&!await allowPreviousRun(decoded,res))return;
+    res.status(409).json({error:error.message});return;
+   }
    res.status(503).json({error:"运行未能持久受理。"});
   }
  });

@@ -5,6 +5,7 @@ import type { Message,RunTrace,WebHit } from "./types";
 import type { WorkspaceSnapshot } from "./store";
 import {readResearchRangeScope,type ResearchRange} from "./research-range";
 import {mergeCataloguePresentation} from "./catalogue-presentation";
+import {validWorkspaceDiscoveryKey} from "./workspace-discovery";
 
 const databaseName = "oneearth.sessions.v1";
 export const legacySession = "legacy-workspace-v1";
@@ -236,12 +237,26 @@ export interface ChatDelivery {
   attempt: import("./types").DiscoveryAttempt;
   discoveryAccessKey?: string;
 }
-export async function saveChatDelivery(session: string, delivery: ChatDelivery) {
-  const db = await database();
-  const tx = db.transaction("workspaces", "readwrite");
-  tx.objectStore("workspaces").put(delivery, [session, delivery.id]);
+
+const operationArchiveKey=(runId:string)=>["discovery-archive-access",runId];
+
+export async function saveChatDelivery(session:string,delivery:ChatDelivery,accessKey=delivery.discoveryAccessKey) {
+  if(accessKey!==undefined && !validWorkspaceDiscoveryKey(accessKey))throw Error("资料查找凭据无效。");
+  const db=await database(),tx=db.transaction("workspaces","readwrite"),store=tx.objectStore("workspaces");
+  // Keep archive access when the delivery is cleared, outside the saved transcript.
+  if(accessKey)store.put(accessKey,operationArchiveKey(delivery.id));
+  store.put({id:delivery.id,attempt:delivery.attempt},[session,delivery.id]);
   await completed(tx);
 }
+
+export async function readChatArchiveAccessKey(runId:string):Promise<string|undefined> {
+  try {
+    const db=await database();
+    const accessKey=await result(db.transaction("workspaces").objectStore("workspaces").get(operationArchiveKey(runId)));
+    if(validWorkspaceDiscoveryKey(accessKey))return accessKey;
+  }catch{/* Public and older records can still be read without a local key. */}
+}
+
 export async function unfinishedChatDeliveries(session: string): Promise<ChatDelivery[]> {
   const db = await database();
   const keys = IDBKeyRange.bound([session], [session, []]);

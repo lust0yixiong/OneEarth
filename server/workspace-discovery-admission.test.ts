@@ -14,6 +14,10 @@ import {cellAt,emptyFilters,gridSpec} from "../src/domain/spatial";
 import {readWorkspaceDiscoveryAccepted,readWorkspaceDiscoveryView,workspaceDiscoveryAccessHeader} from "../src/domain/workspace-discovery";
 import {createRuntimeApi} from "./runtime-api-service";
 import {discoveryDelegationLookupPath,discoveryRequestFingerprint} from "./discovery-request-fingerprint";
+import {postgresTaskStore} from "./postgres-task-store";
+import {priorResult} from "./runtime-input";
+import {runtimeTurnContext} from "./runtime-turn-context";
+import type {RuntimeTurnInput} from "./runtime-turn-handoff";
 
 const fixture=process.env.ONEEARTH_WORKSPACE_DISCOVERY_TEST_DATABASE_URL;
 test("independent workspace and native Chat discovery share admission, durable execution and archived sources",
@@ -156,8 +160,8 @@ test("independent workspace and native Chat discovery share admission, durable e
     assert.equal((await execute(opPath(direct.operationId,otherThread),"DELETE",undefined,watch)).status,404);
     assert.equal((await execute("/api/tasks/"+direct.operationId)).status,404);
 
-    const context={filters:emptyFilters(),caseId:null,selection:null,citation:null,gridSystem:"h3",layer:"all",camera:{center:[0,0],zoom:1,reason:"controlled"}};
-    const config={executor:"codex",model:"gpt-6-luna"};
+    const context:RuntimeTurnInput["context"]={filters:emptyFilters(),caseId:null,selection:null,citation:null,gridSystem:"h3",layer:"all",camera:{center:[0,0],zoom:1,reason:"controlled"}};
+    const config:RuntimeTurnInput["config"]={executor:"codex",model:"gpt-6-luna"};
     const postChat=(asked:string,submission:Record<string,unknown>,conversationId=thread,runId=randomUUID())=>({
       runId,response:fetch(base+"/api/ag-ui",{method:"POST",headers:{"Content-Type":"application/json",Accept:"text/event-stream"},
         signal:AbortSignal.timeout(45_000),body:JSON.stringify({protocolVersion:"1.0",runId,threadId:conversationId,
@@ -181,7 +185,7 @@ test("independent workspace and native Chat discovery share admission, durable e
       phase:row.admission_checkpoint.phase}));
     assert.deepEqual(frozen,[{query,revision:1,scope:frozenScope,phase:"discover"},{query,revision:1,scope:frozenScope,phase:"discover"}]);
     assert.equal((await pg.query("SELECT count(*)::int n FROM runtime_operation_runs WHERE operation_id=$1",[direct.operationId])).rows[0].n,0);
-    assert.equal((await pg.query("SELECT count(*)::int n FROM runtime_chat_messages WHERE body::jsonb->>'conversationId'=$1",[thread])).rows[0].n,1);
+    assert.equal((await pg.query("SELECT count(*)::int n FROM runtime_chat_messages WHERE runtime_history_json(body)->>'conversationId'=$1",[thread])).rows[0].n,1);
     assert.equal((await advance(1)).status,200);
     assert.deepEqual(await (await execute(actions(),"POST",action,watch)).json(),direct);
     assert.equal((await execute(actions(),"POST",{...action,actionId:randomUUID()},watch)).status,409);
@@ -227,6 +231,43 @@ test("independent workspace and native Chat discovery share admission, durable e
     const persisted=await pg.query("SELECT body FROM runtime_chat_messages WHERE id=ANY($1::uuid[])",[[native.runId,reference.runId]]);
     assert.ok(persisted.rows.every(row=>!String(row.body).includes(watch)&&!String(row.body).includes(chatKey)));
     assert.equal((await pg.query("SELECT count(*)::int n FROM runtime_operation_runs WHERE operation_id=$1",[direct.operationId])).rows[0].n,0);
+    for(const [runId,key,otherKey,operationId] of [[native.runId,chatKey,watch,linked.operationId],[reference.runId,watch,chatKey,direct.operationId]]){
+      const statusPath="/api/tasks/"+runId,archivePath=statusPath+"/record";
+      for(const path of [statusPath,archivePath]){
+        for(const credential of [undefined,otherKey]){
+          const denied=await execute(path,"GET",undefined,credential);
+          assert.equal(denied.status,404,path);
+          assert.doesNotMatch(await denied.text(),new RegExp(operationId+"|glacier-proof"));
+        }
+        assert.equal((await execute(path+"?accessKey="+key)).status,404);
+        assert.equal((await execute(path,"GET",undefined,key)).status,200);
+      }
+      const original=await (await execute(archivePath,"GET",undefined,key)).json();
+      const operationRecord=opPath(operationId)+"/record";
+      for(const credential of [undefined,otherKey]){
+        assert.equal((await execute(operationRecord,"GET",undefined,credential)).status,404);
+      }
+      const operationResponse=await execute(operationRecord,"GET",undefined,key);
+      assert.equal(operationResponse.status,200);
+      const operation=await operationResponse.json();
+      assert.equal(original.result.workspaceDiscovery.operationId,operationId);
+      assert.equal(original.result.workspaceDiscovery.items[0].url,exactUrl);
+      assert.deepEqual(original.result.workspaceDiscovery,{operationId,...operation.result});
+    }
+    const historyStore=await postgresTaskStore("runtime");
+    try{
+      const ordinaryRun=randomUUID();
+      const ordinary:RuntimeTurnInput={context,config,conversationId:thread,turnId:randomUUID(),history:[],query:"普通对照的原始问题",previousTaskId:reference.runId};
+      assert.ok(await historyStore.chat.admit(ordinaryRun,ordinary,4));
+      assert.equal(await priorResult(historyStore,thread,reference.runId),undefined);
+      assert.equal(await priorResult(historyStore,thread,native.runId),undefined);
+      const history=await historyStore.conversationHistory?.(thread,ordinaryRun);
+      const runtimeContext=await runtimeTurnContext(historyStore,ordinaryRun,ordinary);
+      for(const value of [history,runtimeContext])assert.doesNotMatch(JSON.stringify(value),/glacier-proof|冰川前缘合成资料/);
+      assert.equal(await historyStore.chat.finish(ordinaryRun,"complete",{result:{message:"普通记录仍可读取。"}}),true);
+      assert.equal((await execute("/api/tasks/"+ordinaryRun)).status,200);
+      assert.equal((await execute("/api/tasks/"+ordinaryRun+"/record")).status,200);
+    }finally{await historyStore.close();}
 
     const cancelled=readWorkspaceDiscoveryAccepted(await (await execute(actions(),"POST",
       {kind:"discover-materials",actionId:randomUUID(),expectedRevision:2,query:cancelQuery},watch)).json());
@@ -301,18 +342,45 @@ test("independent workspace and native Chat discovery share admission, durable e
         await composer.fill("给出这项资料保存的出处");
         const sent=page.waitForRequest(req=>req.method()==="POST"&&new URL(req.url()).pathname==="/api/ag-ui");
         await composer.press("Enter");
-        const native=(await sent).postDataJSON();
-        assert.equal(native.forwardedProps.oneearth.submission.discoveryReference.operationId,operation.operationId);
+        const browserReference=(await sent).postDataJSON();
+        assert.equal(browserReference.forwardedProps.oneearth.submission.discoveryReference.operationId,operation.operationId);
         await page.getByText("以下为你选定的原批次资料。",{exact:true}).waitFor({timeout:15000});
         assert.equal(nativeWrites,1);
         assert.equal(posts.length,count+1);
+        await composer.fill("发现资料：浏览器原生发现归档复验");
+        const discoverySent=page.waitForRequest(req=>req.method()==="POST"&&new URL(req.url()).pathname==="/api/ag-ui");
+        await composer.press("Enter");
+        const browserDiscovery=(await discoverySent).postDataJSON();
+        await page.getByText("本轮已保存发现资料。",{exact:true}).waitFor({timeout:15000});
+        assert.equal(nativeWrites,2);
+        assert.equal(posts.length,count+2);
+        for(const entry of [browserDiscovery,browserReference]){
+          const recordPath="/api/tasks/"+entry.runId+"/record";
+          const read=page.waitForResponse(r=>r.request().method()==="GET"&&new URL(r.url()).pathname===recordPath);
+          await page.goto(base+"/?research="+entry.runId,{waitUntil:"domcontentloaded"});
+          const archived=await read;
+          assert.equal(archived.status(),200);
+          assert.equal((await archived.json()).result.workspaceDiscovery.items[0].url,exactUrl);
+          assert.equal(nativeWrites,2);
+        }
+        const visitor=await browser.newPage({viewport:{width:1440,height:960}});
+        await visitor.route("**/*",route=>new URL(route.request().url()).origin===base?route.continue():route.abort());
+        for(const entry of [browserDiscovery,browserReference]){
+          const recordPath="/api/tasks/"+entry.runId+"/record";
+          const denied=visitor.waitForResponse(r=>r.request().method()==="GET"&&new URL(r.url()).pathname===recordPath);
+          await visitor.goto(base+"/?research="+entry.runId,{waitUntil:"domcontentloaded"});
+          assert.equal((await denied).status(),404);
+        }
+        await visitor.close();
         assert.deepEqual(offsite,[]);
         const screenshot=process.env.ONEEARTH_WORKSPACE_DISCOVERY_SCREENSHOT;
         if(screenshot)await page.screenshot({path:screenshot});
-        console.log(JSON.stringify({combinedChrome:true,workspaceWrites,nativeWrites,refreshReusedOperation:true,exactSource:exactUrl,referenceNewDelegations:0}));
+        console.log(JSON.stringify({combinedChrome:true,workspaceWrites,nativeWrites,refreshReusedOperation:true,exactSource:exactUrl,
+          referenceNewDelegations:0,originAndReferenceArchiveOwnerReads:true,knownIdsDeniedToFreshBrowser:true}));
       }finally{await browser.close();}
     }
 
     console.log(JSON.stringify({sameFrozenInput:true,oneAcceptedOperationPerAction:true,standaloneHasNoChatRun:true,archivedSourcesReused:true,
-      workerPidChanged:true,recoveredA2ARequestWithoutResubmit:true,remoteCancellation:true,crossConversationDenied:true,stalePublicationZeroDelegation:true}));
+      workerPidChanged:true,recoveredA2ARequestWithoutResubmit:true,remoteCancellation:true,crossConversationDenied:true,stalePublicationZeroDelegation:true,
+      originAndReferenceArchiveAuthorization:true,ordinaryArchivePreserved:true,ordinaryModelContextExcludesProtectedResults:true}));
   });

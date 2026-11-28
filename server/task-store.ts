@@ -1,7 +1,8 @@
 import {runtimeTaskLease,runtimeTaskLeaseMs,type RuntimeTaskLease} from "./runtime-task-lease";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
-import type { Router } from "express";
+import type { Request, Router } from "express";
+import type {WorkspaceDiscoveryArchiveBinding} from "./workspace-discovery-archive";
 import { TaskCancelled } from "./task-cancellation";
 import type { OneEarthAgUiInterruptRecord } from "../src/domain/native-ag-ui";
 import type {ResearchProgress} from "../src/domain/native-agui-research-progress";
@@ -187,6 +188,7 @@ export type TaskStore = {
   recordRemoteStop?:(id:string,receipt:import("../src/domain/runtime-status").RemoteStop)=>Promise<boolean>;
   pendingRemoteStops?:()=>Promise<{id:string;discoveryTaskId:string}[]>;
   renewLease?:(lease:RuntimeTaskLease)=>Promise<boolean>;releaseLease?:(lease:RuntimeTaskLease)=>Promise<void>;materialEvents?:(id:string)=>Payload[]|Promise<Payload[]>;researchHandoff?:(id:string)=>Promise<Payload|undefined>;
+  workspaceDiscoveryArchive?:(id:string)=>Promise<WorkspaceDiscoveryArchiveBinding|undefined>;
   workspaceReceipt?:(id:string)=>Promise<import("../src/domain/turn-context").WorkspaceReceipt|undefined>;
   researchExecution?:(id:string)=>Promise<ResearchExecutionReceipt|undefined>;
   conversationHistory?:(conversationId:string,currentTaskId:string,request?:import("./conversation-history").ConversationHistoryRequest)=>Promise<ConversationHistoryTurn[]>}&{
@@ -197,6 +199,7 @@ export type TaskPreparation={checkpoint?:Payload;error?:string};
 type TaskStatusRouteOptions = {
   researchRecords?: boolean;
   chatIdentity?: boolean;
+  authorizeTask?:(task:Task,req:Request)=>Promise<boolean>;
   recoverRecord?:(task:Task)=>Promise<unknown>;
   readInterrupt?:(id:string)=>Promise<OneEarthAgUiInterruptRecord | undefined>;
   readWorkspaceTool?:(id:string)=>Promise<NativeWorkspaceToolRecord | undefined>;
@@ -235,8 +238,13 @@ export function taskStatusRoutes(router: Router, base: string, store: TaskStore,
     if (!taskIdPattern.test(id)) { res.status(400).json({error:"无效的任务编号。"}); return; }
     next();
   });
+  async function readableTask(req:Request) {
+    const task=await store.get(String(req.params.taskId));
+    return task&&(!options.authorizeTask||await options.authorizeTask(task,req))?task:undefined;
+  }
   router.get(base + "/:taskId", async (req, res) => {
-    const task = await store.get(String(req.params.taskId));
+    res.set("Cache-Control","no-store");
+    const task = await readableTask(req);
     if (!task) { res.status(404).json({error:"任务不存在。"}); return; }
     const identity: {conversationId?: string;turnId?: string} = {};
     if (options.chatIdentity) {
@@ -246,13 +254,16 @@ export function taskStatusRoutes(router: Router, base: string, store: TaskStore,
     }
     const [runtimeStatus,researchProgress,workspaceEffect]=await Promise.all([store.runtimeStatus?.(task.id),store.researchProgress?.(task.id),
       options.readWorkspaceEffect?.(task.id,task.status==="queued"||task.status==="running"?req.get(workspacePageHeader):undefined)]);
-    res.set("Cache-Control", "no-store").json({id:task.id, status:task.status, created:task.created, updated:task.updated,...identity,...runtimeStatus,researchProgress,workspaceEffect});
+    res.json({id:task.id, status:task.status, created:task.created, updated:task.updated,...identity,...runtimeStatus,researchProgress,workspaceEffect});
   });
   if(options.researchRecords)router.get(base+"/:taskId/record",async(req,res)=>{
     const id=String(req.params.taskId);
-    const task=await store.get(id);
-    const result=(await store.terminal(id))?.result??(task?await options.recoverRecord?.(task):undefined);
-    if(!task||!result){res.status(404).json({error:"没有找到已完成的研究记录。"});return;}
+    res.set("Cache-Control","no-store");
+    const notFound=()=>res.status(404).json({error:"没有找到已完成的研究记录。"});
+    const task=await readableTask(req);
+    if(!task){notFound();return;}
+    const result=(await store.terminal(id))?.result??await options.recoverRecord?.(task);
+    if(!result){notFound();return;}
     const {query,turnId,conversationId,context,serverWorkspaceResearch}=JSON.parse(task.body);
     const workspaceResearch=readWorkspaceResearchReference(serverWorkspaceResearch);
     const researchRange=archivedResearchRange(context,result as DiscoveryResponse,workspaceResearch);
@@ -262,12 +273,12 @@ export function taskStatusRoutes(router: Router, base: string, store: TaskStore,
     ]);
     const receipt=workspaceEffect?.receipt;
     const cataloguePresentation=receipt?.kind==="catalogue-presentation"?{runId:id,...receipt.presentation}:legacyPresentation;
-    res.set("Cache-Control","no-store").json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,
+    res.json({id,question:query,turnId,conversationId,created:task.created,updated:task.updated,
       result,workspaceReceipt,interrupt,workspaceTool,researchProgress,researchRange,workspaceResearch,cataloguePresentation,workspaceEffect,workspaceEffects});
   });
   router.delete(base + "/:taskId", async (req, res) => {
     const id=String(req.params.taskId);
-    if (!await store.get(id)) { res.status(404).json({error:"任务不存在。"}); return; }
+    if (!await readableTask(req)) { res.set("Cache-Control","no-store").status(404).json({error:"任务不存在。"}); return; }
     const cancelled = await store.finish(id, "cancelled", {error:"任务已取消。", code:"cancelled"});
     if(cancelled)options.onCancelled?.(id);
     res.sendStatus(cancelled ? 204 : 409);

@@ -6,6 +6,8 @@ import {workspaceToolCallId,workspaceToolReceiptPath} from "./native-workspace-t
 import {samePublishedRaster} from "./published-raster-observation";
 import {archivedNativeSummaries} from "./native-summary-client";
 import {workspaceObservationTarget} from "./workspace-published-layer";
+import {readChatArchiveAccessKey} from "./session-storage";
+import {workspaceDiscoveryAccessHeader} from "./workspace-discovery";
 import {readWorkspaceResearchState,workspaceIdPattern,workspaceResearchPath,
   type WorkspaceResearchAction,type WorkspaceResearchState} from "./workspace-research-state";
 
@@ -44,9 +46,10 @@ export async function submitWorkspaceResearchAction(conversationId:string,action
 }
 
 
-export async function cancelChatRequest(id:string,signal:AbortSignal,accessKey?:string) {
+export async function cancelChatRequest(id:string,signal:AbortSignal) {
+  const accessKey=await readChatArchiveAccessKey(id);
   const response=await fetch("/api/tasks/"+encodeURIComponent(id),{method:"DELETE",signal,redirect:"error",
-    ...(accessKey?{headers:{"X-OneEarth-Operation-Key":accessKey}}:{})});
+    ...(accessKey?{headers:{[workspaceDiscoveryAccessHeader]:accessKey}}:{})});
   if (response.status!==204 && response.status!==409) throw Error("暂时无法取消本轮，请重试。");
   return response.status===204;
 }
@@ -96,8 +99,9 @@ export interface ResearchRecord {
 
 export async function loadResearchRecord(id:string,signal?:AbortSignal):Promise<ResearchRecord>{
   if(!researchRecordId.test(id))throw Error("研究记录编号无效。");
-  const timeout=AbortSignal.timeout(10000);
+  const accessKey=await readChatArchiveAccessKey(id),timeout=AbortSignal.timeout(10000);
   const response=await fetch("/api/tasks/"+id+"/record",{cache:"no-store",redirect:"error",
+    ...(accessKey?{headers:{[workspaceDiscoveryAccessHeader]:accessKey}}:{}),
     signal:signal ? AbortSignal.any([signal,timeout]) : timeout});
   if(!response.ok)throw Error("没有找到已完成的研究记录。");
   const record:ResearchRecord=await response.json();

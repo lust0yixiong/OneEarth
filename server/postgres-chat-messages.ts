@@ -15,6 +15,7 @@ import {validClarificationAnswer} from "../src/domain/clarification";
 import type {BrowserWorkspaceReceipt, WorkspaceReceipt, WorkspaceRecoveryInput, WorkspaceRecoveryAdvice} from "../src/domain/turn-context";
 import type {DiscoveryResponse} from "../src/domain/types";
 import {workspaceObservationTarget} from "../src/domain/workspace-published-layer";
+import type {WorkspaceDiscoveryArchiveBinding} from "./workspace-discovery-archive";
 import {runtimeTurnFingerprint,type RuntimeTurnInput} from "./runtime-turn-handoff";
 
 const sameReceiptIdentity = (id:string,body:RuntimeTurnInput,result:DiscoveryResponse|undefined,input:Pick<BrowserWorkspaceReceipt,"effectId"|"conversationId"|"turnId">) =>
@@ -143,6 +144,23 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
     async get(id: string) { const row = await find(pool, id); return row && view(row); },
     async terminal(id: string) {
       return (await pool.query<{terminal: Payload | null}>("SELECT terminal FROM runtime_chat_messages WHERE id=$1", [id])).rows[0]?.terminal ?? undefined;
+    },
+    // Reference-only Chat turns have no execution link. Their immutable
+    // terminal projection retains the selected original operation ID.
+    async workspaceDiscoveryArchive(id:string):Promise<WorkspaceDiscoveryArchiveBinding|undefined> {
+      const {rows:[row]}=await pool.query<{origin:boolean|null;linkedId:string|null;hasResult:boolean;resultId:string|null}>(`
+        SELECT m.handoff->>'kind'='workspace-discovery' AS origin,
+          original.operation_id AS "linkedId",
+          (m.terminal->'result' ? 'workspaceDiscovery') IS TRUE AS "hasResult",
+          m.terminal#>>'{result,workspaceDiscovery,operationId}' AS "resultId"
+        FROM runtime_chat_messages m
+        LEFT JOIN runtime_operation_runs binding ON binding.run_id=m.id
+        LEFT JOIN runtime_operations original ON original.operation_id=binding.operation_id AND original.body->>'kind'='discover-materials'
+        WHERE m.id=$1`,[id]);
+      if(!row||!(row.origin||row.linkedId||row.hasResult))return;
+      if(row.origin&&!row.linkedId||row.linkedId&&row.hasResult&&row.resultId!==row.linkedId)return {};
+      const operationId=row.linkedId??row.resultId;
+      return operationId?{operationId}:{};
     },
     async workspaceReceipt(id:string) {
       return workspaceReceiptView(await getReceipt(pool,id));

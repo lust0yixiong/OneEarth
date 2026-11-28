@@ -97,9 +97,11 @@ export async function createRuntimeApi(state: string) {
     agUiWorkspaceInventory(business, tasks, tasks.chat.agUiPendingWorkspaceCalls,
       async id => typeof await tasks.chat.agUiFingerprint(id) === "string");
     business.delete("/api/tasks/:taskId",async(req,res,next)=>{
-      const cancelled=await workspaceDiscovery.cancelForRun(req.params.taskId,req.get(workspaceDiscoveryAccessHeader));
+      const cancelled=await workspaceDiscovery.cancelForRun(req.params.taskId.toLowerCase(),req.get(workspaceDiscoveryAccessHeader));
       if(cancelled===undefined){next();return;}
-      res.set("Cache-Control","no-store").sendStatus(cancelled==="missing"?404:cancelled?204:409);
+      res.set("Cache-Control","no-store");
+      if(cancelled==="missing"){res.status(404).json({error:"任务不存在。"});return;}
+      res.sendStatus(cancelled?204:409);
     });
     taskStatusRoutes(business, "/api/tasks", {...tasks,
       get:async id=>{
@@ -114,6 +116,10 @@ export async function createRuntimeApi(state: string) {
         return tasks.finish(id,status,result);
       }},
       {researchRecords:true,chatIdentity:true,
+        authorizeTask:async(task,req)=>{
+          const archive=await tasks.chat.workspaceDiscoveryArchive(task.id);
+          return !archive||workspaceDiscovery.authorizeArchive(archive,JSON.parse(task.body).conversationId,req.get(workspaceDiscoveryAccessHeader));
+        },
         readInterrupt:id=>tasks.chat.agUiInterrupt(id),
         readWorkspaceTool:id=>tasks.chat.agUiWorkspaceRecord(id),
         readCataloguePresentation:tasks.cataloguePresentation.read,

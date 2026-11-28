@@ -215,7 +215,7 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
   let firstRecovery=true;
   const owned=new Map<string,RuntimeTaskLease>();
   const store={
-    ...(chat?{chat,cataloguePresentation,workspaceEffects,operations,researchHandoff:chat.handoff,workspaceReceipt:chat.workspaceReceipt,conversationHistory:postgresConversationHistory(pool)}:{}),
+    ...(chat?{chat,cataloguePresentation,workspaceEffects,operations,researchHandoff:chat.handoff,workspaceReceipt:chat.workspaceReceipt,conversationHistory:postgresConversationHistory(pool),workspaceDiscoveryArchive:chat.workspaceDiscoveryArchive}:{}),
     get,
     ...(namespace==="runtime"?{async researchExecution(id:string):Promise<ResearchExecutionReceipt|undefined>{
       const {rows: [task]}=await pool.query<{status: TaskStatus}>("SELECT status FROM runtime_tasks WHERE id=$1", [id]);

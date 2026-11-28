@@ -15,6 +15,8 @@ import {matchesTaskIdentity, readTaskLifecycle, type TaskLifecycle} from "./task
 import type {DiscoveryResponse,ProviderReasoningSnapshot} from "./types";
 import {nativeSummaryReader} from "./native-summary-client";
 import {readWorkspaceActionEffect,workspacePageHeader,type WorkspaceActionEffect} from "./workspace-action-effect";
+import {readChatArchiveAccessKey} from "./session-storage";
+import {workspaceDiscoveryAccessHeader} from "./workspace-discovery";
 
 function boundWorkspaceActionEffect(value:unknown,run:ChatRun) {
   const effect=readWorkspaceActionEffect(value,run.runId);
@@ -279,8 +281,12 @@ const identityOf = ({threadId,runId,turnId}:ChatRun)=>({id:runId,conversationId:
 
 async function readNativeTask(runId:string,signal:AbortSignal,workspacePageToken?:string) {
   if(!researchRecordId.test(runId))return;
+  const accessKey=await readChatArchiveAccessKey(runId);
   const response=await fetch("/api/tasks/"+runId,{signal:AbortSignal.any([signal,AbortSignal.timeout(5000)]),
-    cache:"no-store",redirect:"error",...(workspacePageToken?{headers:{[workspacePageHeader]:workspacePageToken}}:{})}).catch(()=>undefined);
+    cache:"no-store",redirect:"error",headers:{
+      ...(workspacePageToken?{[workspacePageHeader]:workspacePageToken}:{}),
+      ...(accessKey?{[workspaceDiscoveryAccessHeader]:accessKey}:{}),
+    }}).catch(()=>undefined);
   if(!response?.ok)return;
   return response.json().catch(()=>undefined);
 }

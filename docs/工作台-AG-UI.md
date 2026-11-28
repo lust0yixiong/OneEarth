@@ -214,6 +214,6 @@ X-OneEarth-Operation-Key: <本操作独立的64位小写十六进制随机值>
 
 这些请求使用提交时的同一 `X-OneEarth-Operation-Key`。错会话、错凭据或未知编号返回 404。会话修订冲突和同动作编号改输入返回 409。已登记的同包重传返回原操作地址。读回和历史重开保持原批次。
 
-原生 Chat 发起时，末条用户消息为「发现资料：<题目>」，`forwardedProps.oneearth.submission.discoveryAction` 带 `{actionId,expectedRevision,accessKey}`。从工作台选择原批次后发送普通 Chat，使用 `discoveryReference:{operationId,batchId,accessKey}`。两字段互斥。服务端使用原档的标题、出处和实际记录；引用路径直接整理原批次。凭据从提交解析后移出 Chat 正文、历史与归档。Chat 发起的资料发现通过原 `/api/tasks/:runId` 取消时，同样携带该操作的凭据。
+原生 Chat 发起时，末条用户消息为「发现资料：<题目>」，`forwardedProps.oneearth.submission.discoveryAction` 带 `{actionId,expectedRevision,accessKey}`。从工作台选择原批次后发送普通 Chat，使用 `discoveryReference:{operationId,batchId,accessKey}`。两字段互斥。服务端使用原档的标题、出处和实际记录；引用路径直接整理原批次。凭据从提交解析后移出 Chat 正文、历史与归档。两类轮次的 `GET /api/tasks/:runId`、`GET /api/tasks/:runId/record` 均携带同一 `X-OneEarth-Operation-Key`。缺失或错误时返回 404。通过原任务路径取消发现时也使用该凭据。
 
 [运行时受理](../server/ag-ui-workbench.ts) · [受保护操作路由](../server/workspace-discovery-operations.ts) · [输入和结果结构](../src/domain/workspace-discovery.ts)

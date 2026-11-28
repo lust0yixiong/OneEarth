@@ -6,6 +6,7 @@ import {readWorkspaceDiscoveryAccepted,readWorkspaceDiscoveryAction,readWorkspac
   validWorkspaceDiscoveryKey,workspaceDiscoveryAccessHeader,type WorkspaceDiscoveryAccepted,type WorkspaceDiscoveryAction,
   type WorkspaceDiscoveryReference,type WorkspaceDiscoveryView} from "../src/domain/workspace-discovery";
 import type {RuntimeOperation,RuntimeOperationsStore} from "./runtime-operations";
+import type {WorkspaceDiscoveryArchiveBinding} from "./workspace-discovery-archive";
 import {lockWorkspaceResearchState,WorkspaceResearchConflict} from "./workspace-research-state";
 import {modelSafeText} from "./model-context-safety";
 import {assertPublicAnswerSafe} from "./public-answer-stream";
@@ -97,6 +98,10 @@ export function workspaceDiscoveryOperations(operations:RuntimeOperationsStore,p
     admit:(conversationId:string,action:WorkspaceDiscoveryAction,key:string)=>
       operations.transaction(db=>admitInTransaction(db,conversationId,action,key)),
     read,
+    async authorizeArchive(binding:WorkspaceDiscoveryArchiveBinding,conversationId:unknown,key:unknown) {
+      if(!id(binding.operationId)||!id(conversationId)||!validWorkspaceDiscoveryKey(key))return false;
+      return authorized(await operations.read(binding.operationId),conversationId,key);
+    },
     async readAction(conversationId:unknown,actionId:unknown,key:unknown){
       if(!id(conversationId)||!id(actionId)||!validWorkspaceDiscoveryKey(key))return;
       return operations.transaction(async db=>{

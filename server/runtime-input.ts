@@ -12,6 +12,7 @@ import {validClarificationAnswer,validClarificationPrompt,clarificationAnswerTex
 import {validBrowserTurnFrame} from "../src/domain/turn-context";
 import {readCaseObservationRef} from "../src/domain/case-observations";
 import {readLayerObservationRequest} from "./runtime-layer-observation";
+import {isWorkspaceDiscoveryArchiveResult} from "./workspace-discovery-archive";
 import {caseObservationKind} from "./runtime-case-observation";
 import {flightCatalogueFollowUp,matchesFlightGround} from "../src/domain/flight-catalogue";
 
@@ -35,7 +36,9 @@ export async function priorResult(tasks: TaskStore, conversationId: string | und
   if (!conversationId || !parentId || !taskIdPattern.test(parentId)) return;
   const parent = await tasks.get(parentId);
   if (!parent || JSON.parse(parent.body).conversationId !== conversationId) return;
-  return (await tasks.terminal(parentId))?.result as DiscoveryResponse | undefined;
+  if(await tasks.workspaceDiscoveryArchive?.(parentId))return;
+  const result=(await tasks.terminal(parentId))?.result;
+  if(!isWorkspaceDiscoveryArchiveResult(result))return result as DiscoveryResponse|undefined;
 }
 export async function validateTurnStructure(tasks: TaskStore, value: unknown): Promise<string | undefined> {
   const body = value as Record<string, unknown> | null;

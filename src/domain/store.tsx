@@ -57,7 +57,7 @@ import type {ClarificationReply, ProviderReasoningSnapshot, QuestionDecision} fr
 import {validAccessSection,initialAccessSection} from "./data-access";
 import { registerHaina, registerObservations, registerPapers, loadRemoteAssetIds } from "./datasets";
 import {loadHainaCatalog,type HainaCatalogStatus} from "./haina-catalog-client";
-import { type ChatDelivery, attachArchivedRunTrace, claimWorkspaceEffect, saveChatDelivery, unfinishedChatDeliveries, removeChatDelivery, legacySession, mergeMessages, readFavorites, readSession, readSessionMessage, sessionMessages, sessionSummaries, writeFavorite, writeSession } from "./session-storage";
+import { type ChatDelivery, attachArchivedRunTrace, claimWorkspaceEffect, readChatArchiveAccessKey, saveChatDelivery, unfinishedChatDeliveries, removeChatDelivery, legacySession, mergeMessages, readFavorites, readSession, readSessionMessage, sessionMessages, sessionSummaries, writeFavorite, writeSession } from "./session-storage";
 import { sampleCamera } from "./earth-search";
 import { catalogResults, type SearchState } from "./results";
 import { catalogBatch } from "./batch-context";
@@ -836,7 +836,7 @@ function useWorkspaceValue(initialState: State) {
     return {...projectWorkspaceView(s,reading),operations:[...operations.keys()],
       ...(items.length ? {candidateItems:items} : {})};
   },[]);
-  const requests = useRef(new Map<string,{controller:AbortController;transport:AbortController;progress:ActiveChat;finishCancellation:()=>Promise<void>;discoveryAccessKey?:string}>());
+  const requests = useRef(new Map<string,{controller:AbortController;transport:AbortController;progress:ActiveChat;finishCancellation:()=>Promise<void>}>());
   const localBatchIds=useRef(new Map<string,string>());
   const chatRequestSnapshot=useCallback((s:State,batch:CandidateSet|null,parentId?:string)=>{
     const reading=readWorkspaceSurface();
@@ -1685,7 +1685,7 @@ function useWorkspaceValue(initialState: State) {
     update({cancelling:true,cancelError:undefined,stage:"正在取消本地任务",
       taskLifecycle:mergeTaskLifecycle(entry.progress.taskLifecycle,{runtimePhase:{phase:"cancel-pending"}})});
     try {
-      const cancelled=await cancelChatRequest(id,AbortSignal.any([entry.controller.signal,AbortSignal.timeout(8000)]),entry.discoveryAccessKey);
+      const cancelled=await cancelChatRequest(id,AbortSignal.any([entry.controller.signal,AbortSignal.timeout(8000)]));
       if (cancelled) {
         await entry.finishCancellation();
         return;
@@ -1712,7 +1712,7 @@ function useWorkspaceValue(initialState: State) {
       let shouldCheckAgain=attempt<2;
       try{
         const facts=await readCancelledTaskLifecycle({id,conversationId:session,turnId},
-          AbortSignal.any([controller.signal,AbortSignal.timeout(5_000)]));
+          AbortSignal.any([controller.signal,AbortSignal.timeout(5_000)]),await readChatArchiveAccessKey(id));
         if(controller.signal.aborted || latest.current.sessionId!==session)return;
         const message=latest.current.messages.find(item=>item.id===id);
         if(!message || message.taskLifecycle?.runtimePhase?.phase!=="cancelled")return;
@@ -2093,8 +2093,9 @@ function useWorkspaceValue(initialState: State) {
       const controller = new AbortController();
       const transport = new AbortController();
       controller.signal.addEventListener("abort",()=>transport.abort(),{once:true});
-      const discoveryAccessKey=discoveryInput && "discoveryAction" in discoveryInput ? discoveryInput.discoveryAction.accessKey : undefined;
-      const delivery: ChatDelivery = saved ?? {id: randomId(),attempt,...(discoveryAccessKey?{discoveryAccessKey}:{})};
+      const discoveryAccessKey=discoveryInput && ("discoveryAction" in discoveryInput
+        ? discoveryInput.discoveryAction.accessKey : discoveryInput.discoveryReference.accessKey);
+      const delivery:ChatDelivery=saved ?? {id:randomId(),attempt};
       const session = current.sessionId;
       const run = {threadId:session,runId:delivery.id,turnId:attempt.userMessageId};
       if(mapEffectSubmission && !saved && !restoring && !resume && mapEffectSubmission.sessionId===session){
@@ -2107,7 +2108,7 @@ function useWorkspaceValue(initialState: State) {
       const priorReasoning=saved ? savedNativeSummaries(run.runId,current.messages.find(message=>
         message.id===run.runId && message.replyTo===run.turnId)?.runTrace) : [];
       const clarificationAttempt=isClarificationAttempt(attempt);
-      const entry = {controller,transport,finishCancellation,discoveryAccessKey:delivery.discoveryAccessKey,progress:{id:delivery.id,userMessageId:attempt.userMessageId,
+      const entry = {controller,transport,finishCancellation,progress:{id:delivery.id,userMessageId:attempt.userMessageId,
         scope:{filters:attempt.context.filters,selection:attempt.context.selection},accepted:false,
         stage:saved ? "正在读取原任务状态" : "正在提交问题",phase:"foreground" as const,
         trace:{started:Date.now(),stages:[],calls:[],...(priorReasoning.length?{providerReasoning:priorReasoning}:{})},
@@ -2284,7 +2285,7 @@ function useWorkspaceValue(initialState: State) {
             throw new ChatResponseError("暂时无法核对原工作台回执，请重新提交。","workspace_receipt_read_failed");
           });
           const deepseekTools=await loadDeepSeekTools(controller.signal);
-          await saveChatDelivery(session,delivery).catch(()=>{
+          await saveChatDelivery(session,delivery,discoveryAccessKey).catch(()=>{
             patch({sessionError:sessionFailure});
             throw new ChatResponseError("浏览器无法保存本轮编号。","local_storage_unavailable");
           });
@@ -3108,6 +3109,7 @@ function useWorkspaceValue(initialState: State) {
       }
       for (const delivery of deliveries) {
         if (!active || latest.current.sessionId !== session) return;
+        if(delivery.discoveryAccessKey)await saveChatDelivery(session,delivery);
         const answer = latest.current.messages.find(m => m.id === delivery.id);
         if (answer && !answer.failed) {
           await removeChatDelivery(session, delivery.id);
