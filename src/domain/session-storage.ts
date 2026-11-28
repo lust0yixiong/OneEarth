@@ -234,6 +234,7 @@ export async function writeFavorite(id: string, selected: boolean) {
 export interface ChatDelivery {
   id: string;
   attempt: import("./types").DiscoveryAttempt;
+  discoveryAccessKey?: string;
 }
 export async function saveChatDelivery(session: string, delivery: ChatDelivery) {
   const db = await database();

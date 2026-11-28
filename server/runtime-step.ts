@@ -9,7 +9,12 @@ import {ModelCapacityUnavailable} from "./runtime-model-capacity";
 import type {DiscoveryBinding,DiscoveryA2AOptions,MaterialEvent} from "./discovery-a2a-client";
 
 const hash=(value:unknown)=>createHash("sha256").update(JSON.stringify(value,(_k,v)=>v&&typeof v==="object"&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v)).digest("hex");
-export type DurableDelegation={operation:"discover"|"read";messageId:string;inputHash:string;grant?:string;reserved?:boolean;submitted?:boolean;submissionAttempts?:number;binding?:DiscoveryBinding;lastSeq?:number;result?:unknown;events:MaterialEvent[];seen?:Record<string,{id:string;fingerprint:string}>;request?:{kind:string;input:Record<string,unknown>;taskId?:string};polls?:number;envelope?:string};
+export const workspaceDiscoveryStepKind="workspace-discovery-step.v1";
+export type DurableDelegation={operation:"discover"|"read";messageId:string;inputHash:string;grant?:string;reserved?:boolean;submitted?:boolean;submittedAt?:number;submissionAttempts?:number;binding?:DiscoveryBinding;lastSeq?:number;result?:unknown;events:MaterialEvent[];seen?:Record<string,{id:string;fingerprint:string}>;request?:{kind:string;input:Record<string,unknown>;taskId?:string};polls?:number;envelope?:string};
+export type WorkspaceDiscoveryStepState=Payload&{kind:typeof workspaceDiscoveryStepKind;delegation:DurableDelegation;cancellation?:{reconciled?:boolean}};
+function isWorkspaceDiscoveryStep(value:Payload|undefined):value is WorkspaceDiscoveryStepState {
+ return value?.kind===workspaceDiscoveryStepKind;
+}
 type SavedModel={schema:string;inputHash:string;semanticHash:string;clock?:number;started?:boolean;value?:string};
 /** Only two server-owned countdown fields may decrease between folds. No
  * material, scope, target, receipt, historical state or timestamp is omitted. */
@@ -92,20 +97,25 @@ async function withStopLock(id:string,run:()=>Promise<void>){
 /** Cancellation is a new durable fact; it never resumes a cancelled fold. */
 export async function reconcileRuntimeStops(tasks:TaskStore){
  const known=await tasks.pendingRemoteStops?.()??[],cancelled=await tasks.cancelledSteps?.()??[];
- for(const id of new Set([...known.map(stop=>stop.id),...cancelled.filter(saved=>isRuntimeStep(saved.checkpoint)).map(saved=>saved.id)]))await withStopLock(id,async()=>{
+ const delegations=(checkpoint:Payload|undefined):DurableDelegation[]|undefined=>{
+  if(isRuntimeStep(checkpoint))return checkpoint.delegations;
+  if(isWorkspaceDiscoveryStep(checkpoint)&&checkpoint.delegation?.operation==="discover")return [checkpoint.delegation];
+ };
+ for(const id of new Set([...known.map(stop=>stop.id),...cancelled.filter(saved=>delegations(saved.checkpoint)).map(saved=>saved.id)]))await withStopLock(id,async()=>{
   if((await tasks.get(id))?.status!=="cancelled")return;
   const status=await tasks.runtimeStatus?.(id);
   for(const stop of status?.remoteStops?.filter(stop=>stop.state==="pending")??[]){
    const remoteState=await stopAcceptedDiscovery(stop.discoveryTaskId);await tasks.recordRemoteStop?.(id,{discoveryTaskId:stop.discoveryTaskId,state:remoteState?"confirmed":"unconfirmed",...(remoteState?{remoteState}:{})});
   }
-  const checkpoint=await tasks.step?.(id);if(!isRuntimeStep(checkpoint)||checkpoint.cancellation?.reconciled===true)return;
+  const checkpoint=await tasks.step?.(id),entries=delegations(checkpoint);
+  if(!entries||(isRuntimeStep(checkpoint)||isWorkspaceDiscoveryStep(checkpoint))&&checkpoint.cancellation?.reconciled===true)return;
   let reconciled=true;
-  for(const entry of checkpoint.delegations){
+  for(const entry of entries){
    let binding=entry.binding;
    if(!binding&&entry.submitted&&entry.request){
     const found=await lookupDiscoveryDelegation(process.env.ONEEARTH_DISCOVERY_URL||"http://127.0.0.1:5275",{messageId:entry.messageId,...entry.request},AbortSignal.timeout(3000));
     if(found.state==="accepted")binding={transport:"a2a",messageId:entry.messageId,discoveryId:found.taskId,state:"TASK_STATE_WORKING"};
-    else if(found.state==="unknown"){reconciled=false;continue;}
+    else if(found.state==="unknown"||entry.submittedAt!==undefined&&Date.now()-entry.submittedAt<3500){reconciled=false;continue;}
    }
    if(binding){
     const latest=await tasks.runtimeStatus?.(id);if(latest?.remoteStops?.some(stop=>stop.discoveryTaskId===binding!.discoveryId))continue;

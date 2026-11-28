@@ -7,6 +7,7 @@ import {RunAgentInputSchema} from "@ag-ui/core/schemas";
 import {nativeAgUiProtocolVersion,readOneEarthAgUiSubmission,readOneEarthOperationReply} from "../src/domain/native-ag-ui";
 import {taskIdPattern} from "./task-store";
 import {readWorkspaceResearchObservation,readWorkspaceResearchReference} from "../src/domain/workspace-research-state";
+import {hasWorkspaceDiscoveryIntent,readWorkspaceDiscoveryAction,readWorkspaceDiscoveryReference,validWorkspaceDiscoveryKey,workspaceDiscoveryIntent} from "../src/domain/workspace-discovery";
 import {workspacePageTokenPattern} from "../src/domain/workspace-action-effect";
 import type {RuntimeTurnInput} from "./runtime-turn-handoff";
 
@@ -14,6 +15,14 @@ export class AgUiInputError extends Error {constructor(message:string,readonly s
 export function workspacePageHash(token:unknown){
  if(typeof token==="string"&&workspacePageTokenPattern.test(token))return createHash("sha256").update(token).digest("hex");
 }
+function readDiscoveryAction(value:unknown,query:string|undefined){
+ if(!query||!value||typeof value!=="object"||Array.isArray(value)||Object.keys(value).length!==3)return;
+ const {actionId,expectedRevision,accessKey}=value as Record<string,unknown>;
+ if(!validWorkspaceDiscoveryKey(accessKey))return;
+ const action=readWorkspaceDiscoveryAction({actionId,expectedRevision,kind:"discover-materials",query});
+ if(action)return {action,accessKey};
+}
+
 export function readAgUiInput(raw:unknown){
  const parsed=RunAgentInputSchema.safeParse(raw);
  if(!parsed.success)throw new AgUiInputError("AG-UI 请求格式无效。");
@@ -34,9 +43,20 @@ export function readAgUiInput(raw:unknown){
  const latest=run.messages.at(-1),submission=readOneEarthAgUiSubmission(run.forwardedProps);
  if(latest?.role!=="user"||typeof latest.content!=="string"||!taskIdPattern.test(latest.id)||!latest.content.trim()||!submission)
   throw new AgUiInputError("请提交实际用户消息与 OneEarth 工作台输入。");
- const allowed=new Set(["context","config","deepseekTools","previousTaskId","clarificationReply","clarificationAnswer","observationCheck","workspaceResearch","workspaceResearchAction","workspacePage","operationReply"]);
+ const allowed=new Set(["context","config","deepseekTools","previousTaskId","clarificationReply","clarificationAnswer","observationCheck","workspaceResearch","workspaceResearchAction","workspacePage","operationReply","discoveryAction","discoveryReference"]);
  if(Object.keys(submission).some(key=>!allowed.has(key)))throw new AgUiInputError("工作台输入含未登记的字段。");
- const {workspaceResearch:rawResearch,workspaceResearchAction:rawAction,workspacePage,operationReply:rawOperationReply,...turnSubmission}=submission;
+ const {workspaceResearch:rawResearch,workspaceResearchAction:rawAction,workspacePage,operationReply:rawOperationReply,
+  discoveryAction:rawDiscoveryAction,discoveryReference:rawDiscoveryReference,...turnSubmission}=submission;
+ const discoveryQuery=workspaceDiscoveryIntent(latest.content);
+ const discoveryAction=readDiscoveryAction(rawDiscoveryAction,discoveryQuery),discoveryReference=readWorkspaceDiscoveryReference(rawDiscoveryReference);
+ if((rawDiscoveryAction!==undefined&&!discoveryAction)||(rawDiscoveryReference!==undefined&&!discoveryReference)||
+   (hasWorkspaceDiscoveryIntent(latest.content)&&!discoveryAction)||(discoveryAction&&discoveryReference))
+  throw new AgUiInputError("发现命令需要原动作凭据，引用已保存资料需要同会话的原批次。");
+ if((discoveryAction||discoveryReference)&&(resume||rawResearch!==undefined||rawAction!==undefined||
+    ["operationReply","clarificationReply","clarificationAnswer","observationCheck"].some(key=>Object.hasOwn(submission,key))))
+  throw new AgUiInputError("发现动作、资料引用与原任务续接或其他研究动作应分别提交。");
+ const discovery=discoveryAction?{kind:"action" as const,...discoveryAction}:
+   discoveryReference?{kind:"reference" as const,reference:discoveryReference}:undefined;
  const operation=readOneEarthOperationReply(rawOperationReply);
  if(rawOperationReply!==undefined&&(!operation||!resume))
   throw new AgUiInputError("操作答复必须明确指定原操作、步骤和标准续接。");
@@ -65,9 +85,10 @@ export function readAgUiInput(raw:unknown){
   if(!taskIdPattern.test(message.id)||message.id!==message.id.toLowerCase()||call.function.name!==nativeWorkspaceToolName||call.id!=="workspace:"+message.id||call.function.arguments.length>32768||!result||typeof result.content!=="string"||result.content.length>4096||run.messages.indexOf(result)<=run.messages.indexOf(message)||run.messages.indexOf(result)>=run.messages.length-1)throw new AgUiInputError("工具结果必须引用原助手调用并位于新的实际用户消息之前。");
   workspaceReplies.push({runId:message.id,call,message:result});
  }
- const identity=resume||workspaceTool||workspaceReplies.length||research||researchAction||pageHash
+ const identity=resume||workspaceTool||workspaceReplies.length||research||researchAction||pageHash||discovery
    ?{body,...(resume?{resume}:{}),...(workspaceTool?{workspaceTool:true}:{}),...(workspaceReplies.length?{workspaceReplies}:{}),
-     ...(research?{research}:{}),...(researchAction?{researchAction}:{}),...(pageHash?{pageHash}:{})}:body;
+     ...(research?{research}:{}),...(researchAction?{researchAction}:{}),...(pageHash?{pageHash}:{}),
+     ...(discovery?{discovery}:{})}:body;
  const fingerprint=createHash("sha256").update(JSON.stringify(canonical(identity))).digest("hex");
- return {id:run.runId.toLowerCase(),body:canonical(body) as RuntimeTurnInput,fingerprint,protocolVersion:version,workspaceTool,workspaceReplies,research,researchAction,pageHash,...(resume?{resume}:{})};
+ return {id:run.runId.toLowerCase(),body:canonical(body) as RuntimeTurnInput,fingerprint,protocolVersion:version,workspaceTool,workspaceReplies,research,researchAction,pageHash,discovery,...(resume?{resume}:{})};
 }

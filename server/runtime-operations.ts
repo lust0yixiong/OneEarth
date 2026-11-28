@@ -56,7 +56,7 @@ export type RuntimeOperationBody = {
   kind:string;
   input:Payload;
 };
-export type OperationCreate = Omit<RuntimeOperationBody,"type"> & {checkpoint?:Payload; wait?:OperationWait};
+export type OperationCreate = Omit<RuntimeOperationBody,"type"> & {checkpoint?:Payload; wait?:OperationWait; wakeAt?:number};
 export type RuntimeOperation = RuntimeOperationBody & {
   status:TaskStatus;
   currentStepId?:string;
@@ -252,7 +252,7 @@ async function createInTransaction(db:PoolClient,input:OperationCreate) {
   await bindRuntimeModelBudgetOwner(db,operationId,runId??operationId);
   await setCheckpoint(db,operationId,checkpoint,now);
   if(runId&&turnId)await linkRun(db,(await find(db,operationId,true))!,{runId,conversationId,turnId});
-  if(wait)await waitInTransaction(db,operationId,wait,checkpoint);
+  if(wait)await waitInTransaction(db,operationId,wait,checkpoint,{wakeAt:input.wakeAt});
   return (await readOperation(db,operationId))!;
 }
 

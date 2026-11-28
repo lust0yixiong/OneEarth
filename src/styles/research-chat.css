@@ -653,3 +653,13 @@
 }
 .oe-retained-limitations summary {cursor:pointer;}
 .oe-retained-limitations p {white-space:pre-wrap; overflow-wrap:anywhere;}
+
+.workspace-discovery {padding:0 0 5px;font-size:.82rem;color:#35564d;}
+.workspace-discovery-controls {display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;}
+.workspace-discovery p {margin:4px 0;}
+.workspace-discovery-record {max-height:min(228px,31dvh);overflow:auto;overscroll-behavior:contain;padding:6px 9px;border-radius:7px;background:#f4f8f5;}
+.workspace-discovery-query {font-weight:600;overflow-wrap:anywhere;}
+.workspace-discovery-record ul {list-style:none;margin:6px 0;padding:0;}
+.workspace-discovery-record li {padding:5px 0;border-top:1px solid #dde8e0;overflow-wrap:anywhere;}
+.workspace-discovery-record li small {display:block;}
+.workspace-discovery-record a {text-decoration:underline;}

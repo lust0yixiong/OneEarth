@@ -47,3 +47,41 @@ test("native operation resume accepts only the explicit original operation and s
  for(const operationReply of [{...operation,runId:interruption},{operationId:operation.operationId},{...operation,stepId:operation.stepId.toUpperCase()}])
   assert.throws(()=>readAgUiInput({...wire,forwardedProps:{oneearth:{version:1,submission:{...submission,operationReply}}}}),AgUiInputError);
 });
+
+test("native discovery accepts only the exact command and does not persist private admission metadata",()=>{
+ const source=input(),actionId=randomUUID(),accessKey="a".repeat(64);
+ source.messages[0].content=" 发现资料： January  snow  ";
+ const raw=source.forwardedProps.oneearth.submission as Record<string,unknown>;
+ raw.discoveryAction={actionId,expectedRevision:2,accessKey};
+ const decoded=readAgUiInput(source);
+ assert.deepEqual(decoded.discovery,{kind:"action",action:{kind:"discover-materials",actionId,expectedRevision:2,query:"January snow"},accessKey});
+ assert.doesNotMatch(JSON.stringify(decoded.body),/discoveryAction|a{64}/u);
+ raw.discoveryAction={actionId,expectedRevision:2,accessKey:"b".repeat(64)};
+ assert.notEqual(readAgUiInput(source).fingerprint,decoded.fingerprint);
+ raw.discoveryAction={actionId,expectedRevision:2,accessKey,query:"FORGED_QUERY"};
+ assert.throws(()=>readAgUiInput(source),AgUiInputError);
+ delete raw.discoveryAction;
+ assert.throws(()=>readAgUiInput(source),AgUiInputError);
+ source.messages[0].content="发现资料:";
+ assert.throws(()=>readAgUiInput(source),AgUiInputError);
+ source.messages[0].content="请解释怎么发现资料。";
+ assert.equal(readAgUiInput(source).discovery,undefined);
+});
+
+test("native discovery reference keeps exact batch identity outside the persisted user body",()=>{
+ const source=input(),reference={operationId:randomUUID(),batchId:randomUUID(),accessKey:"a".repeat(64)};
+ source.messages[0].content="解释我选的已保存资料。";
+ const raw=source.forwardedProps.oneearth.submission as Record<string,unknown>;
+ raw.discoveryReference=reference;
+ const decoded=readAgUiInput(source);
+ assert.deepEqual(decoded.discovery,{kind:"reference",reference});
+ assert.doesNotMatch(JSON.stringify(decoded.body),/discoveryReference|a{64}/u);
+ raw.discoveryReference={...reference,batchId:randomUUID()};
+ assert.notEqual(readAgUiInput(source).fingerprint,decoded.fingerprint);
+ raw.discoveryReference=reference;
+ raw.workspaceResearch={revision:1,actionId:randomUUID()};
+ assert.throws(()=>readAgUiInput(source),AgUiInputError);
+ delete raw.workspaceResearch;
+ raw.discoveryReference={...reference,title:"FORGED_TITLE"};
+ assert.throws(()=>readAgUiInput(source),AgUiInputError);
+});

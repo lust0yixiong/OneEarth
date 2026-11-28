@@ -10,20 +10,30 @@ import {runWorkspaceActionEffect} from "./runtime-workspace-effect";
 import type {WorkspaceEffectsStore} from "./postgres-workspace-effects";
 import type {RuntimeOperationsStore} from "./runtime-operations";
 import {failWorkspaceMapOperation,runWorkspaceMapOperation} from "./runtime-map-operation";
+import {runWorkspaceDiscoveryOperation,type WorkspaceDiscoveryProjection} from "./workspace-discovery-worker";
+
 
 /** Both explicit capabilities and ordinary research use this production worker. */
 export function runtimeWorkerRunner(services:RuntimeServices,engine?:RuntimeObservationEngine,options:Omit<Parameters<typeof runtimeObservation>[0],"tasks"|"engine">&{
   authority?:ObservationAuthority;chatHandoff?:(id:string)=>Promise<Payload|undefined>;workspaceEffects?:Pick<WorkspaceEffectsStore,"execution">;
   operations?:RuntimeOperationsStore;
+  workspaceDiscoveryProjection?:WorkspaceDiscoveryProjection;
 }={}){
-  const {chatHandoff,workspaceEffects,operations,...observationOptions}=options;
+  const {chatHandoff,workspaceEffects,operations,workspaceDiscoveryProjection,...observationOptions}=options;
   const observation=runtimeObservation({tasks:services.tasks,engine,...observationOptions});
   const research=runtimeObservationResearch({tasks:services.tasks,engine,...observationOptions});
   return {maintenance:async()=>{await reconcileRuntimeStops(services.tasks);if(engine||process.env.ONEEARTH_SKILL_SERVICE_TOKEN){await observation.reconcileCancelled();await research.reconcileCancelled();}},
     run:async(task:{id:string;body:any;checkpoint?:Payload},signal:AbortSignal,emit:(payload:Payload)=>void)=>modelExecutionContext.run({role:"background",taskId:task.id,tasks:services.tasks},async()=>{
       if(task.body.type==="workspace-operation"){
-        const operation=await operations?.read(task.id);
+        let operation:Awaited<ReturnType<RuntimeOperationsStore["read"]>>;
+        try{operation=await operations?.read(task.id);}
+        catch(error){
+          if(task.body.kind==="discover-materials")return new TaskParked();
+          throw error;
+        }
         if(!operations||!operation)return {error:"原业务操作不可用。",code:"operation_unavailable"};
+        if(operation.kind==="discover-materials")
+          return runWorkspaceDiscoveryOperation(services,operations,operation,signal,workspaceDiscoveryProjection);
         if(operation.kind==="workspace-map"){
           try{return await runWorkspaceMapOperation(services,operations,operation,task.checkpoint,signal,emit);}
           catch(error){

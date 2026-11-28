@@ -11,6 +11,8 @@ import {cataloguePresentationSchema,postgresCataloguePresentation,type Catalogue
 import {cancelWorkspaceEffect,postgresWorkspaceEffects,workspaceEffectsSchema,type WorkspaceEffectsStore} from "./postgres-workspace-effects";
 import {postgresRuntimeOperations,runtimeOperationsSchema,runtimeOperationTransactions,type RuntimeOperationsStore,type RuntimeOperationBody} from "./runtime-operations";
 
+import {workspaceDiscoveryStepKind} from "./runtime-step";
+
 type StoreTask=Task&{task_type?:"run"|"operation"};
 
 export function postgresTaskStore(namespace:"runtime"):Promise<TaskStore & {chat:PostgresChatMessages;cataloguePresentation:CataloguePresentationStore;workspaceEffects:WorkspaceEffectsStore;operations:RuntimeOperationsStore}>;
@@ -290,12 +292,16 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         return {runtimePhase:typeof phase==="string"?{phase:phase==="running"?"executing":phase}:phase,...(receipts.length?{remoteStop:receipts[0],remoteStops:receipts}:{})};
       },
       async recordRemoteStop(id:string,receipt:RemoteStop){return transaction(async db=>{
-        if(!(await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='cancelled' FOR UPDATE",[id])).rowCount)return false;
+        const {rows:[task]}=await db.query<Pick<StoreTask,"task_type">>("SELECT task_type FROM runtime_tasks WHERE id=$1 AND status='cancelled' FOR UPDATE",[id]);
+        if(!task)return false;
         const changed=await db.query(`INSERT INTO runtime_remote_stops VALUES($1,$2,$3,$4,$5) ON CONFLICT(task_id,discovery_id) DO UPDATE SET state=EXCLUDED.state,remote_state=EXCLUDED.remote_state,updated=EXCLUDED.updated
           WHERE runtime_remote_stops.state<>'confirmed' AND (runtime_remote_stops.state,runtime_remote_stops.remote_state) IS DISTINCT FROM (EXCLUDED.state,EXCLUDED.remote_state)`,[id,receipt.discoveryTaskId,receipt.state,receipt.remoteState??null,Date.now()]);
         if(!changed.rowCount)return false;
-        const pending=(await db.query("SELECT 1 FROM runtime_remote_stops WHERE task_id=$1 AND state='pending' LIMIT 1",[id])).rowCount;
-        await write(db,id,{remoteStop:receipt,runtimePhase:{phase:pending?"cancel-pending":"cancelled"}});return true;
+        if(task.task_type!=="operation"){
+          const pending=(await db.query("SELECT 1 FROM runtime_remote_stops WHERE task_id=$1 AND state='pending' LIMIT 1",[id])).rowCount;
+          await write(db,id,{remoteStop:receipt,runtimePhase:{phase:pending?"cancel-pending":"cancelled"}});
+        }
+        return true;
       });},
       async pendingRemoteStops(){return (await pool.query<{id:string;discoveryTaskId:string}>(`SELECT task_id AS id,discovery_id AS "discoveryTaskId" FROM runtime_remote_stops WHERE state='pending' ORDER BY updated LIMIT 16`)).rows;},
       async renewLease(lease:RuntimeTaskLease){return !!(await pool.query("UPDATE runtime_tasks SET lease_until=$4 WHERE id=$1 AND lease_owner=$2 AND lease_fence=$3 AND status='running' AND lease_until>$5",[lease.id,lease.owner,lease.fence,Date.now()+runtimeTaskLeaseMs,Date.now()])).rowCount;},
@@ -312,11 +318,13 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         if(event)await write(db,id,event);return true;
       });},
       async cancelStep(id:string,cancellation:Payload,event?:Payload){return transaction(async db=>{
-        if(!(await db.query("SELECT id FROM runtime_tasks WHERE id=$1 AND status='cancelled' AND task_type='run' FOR UPDATE",[id])).rowCount)return false;
+        const {rows:[task]}=await db.query<Pick<StoreTask,"task_type">>(`SELECT t.task_type FROM runtime_tasks t JOIN runtime_steps s ON t.id=s.id
+          WHERE t.id=$1 AND t.status='cancelled' AND (t.task_type='run' OR s.checkpoint->>'kind'=$2) FOR UPDATE OF t`,[id,workspaceDiscoveryStepKind]);
+        if(!task)return false;
         const saved=(await db.query<{checkpoint:Payload}>(`UPDATE runtime_steps SET checkpoint=jsonb_set(checkpoint,'{cancellation}',COALESCE(checkpoint->'cancellation','{}'::jsonb)||$2::jsonb)
           WHERE id=$1 RETURNING checkpoint`,[id,JSON.stringify(cancellation)])).rows[0];
         if(!saved)return false;
-        if(event)await write(db,id,cancellationReceipt(event));return true;
+        if(event&&task.task_type!=="operation")await write(db,id,cancellationReceipt(event));return true;
       });},
       async park(id:string,checkpoint:Payload,wakeAt:number,event?:Payload){return transaction(async db=>{
         const {rows:[active]}=await db.query<Pick<StoreTask,"task_type">>("SELECT task_type FROM runtime_tasks WHERE id=$1 AND status='running' FOR UPDATE",[id]);
@@ -325,7 +333,8 @@ export async function postgresTaskStore(namespace:"runtime"|"discovery"):Promise
         const now=Date.now();await db.query("UPDATE runtime_tasks SET updated=$2,lease_owner=NULL,lease_until=NULL WHERE id=$1",[id,now]);if(event)await write(db,id,event,now);return true;
       });},
       async cancelledSteps(){const {rows}=await pool.query<{id:string;body:string;checkpoint:Payload}>(`SELECT t.id,t.body,s.checkpoint FROM runtime_steps s JOIN runtime_tasks t ON t.id=s.id
-        WHERE t.status='cancelled' AND t.task_type='run' AND (s.checkpoint->'cancellation'->>'reconciled') IS DISTINCT FROM 'true' ORDER BY t.updated LIMIT 20`);
+        WHERE t.status='cancelled' AND (t.task_type='run' OR s.checkpoint->>'kind'=$1)
+          AND (s.checkpoint->'cancellation'->>'reconciled') IS DISTINCT FROM 'true' ORDER BY t.updated LIMIT 20`,[workspaceDiscoveryStepKind]);
         return rows.map(row=>({id:row.id,body:JSON.parse(row.body),checkpoint:row.checkpoint}));},
     }:{}),
     async recoverInterrupted(){

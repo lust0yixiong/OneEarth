@@ -2,6 +2,8 @@ import {answerDeliveryLabel} from "../domain/research-delivery";
 import type {TaskLifecycle} from "../domain/task-lifecycle-client";
 import { loadRemoteAssetIds } from "../domain/datasets";
 import {QuestionScope} from "./QuestionScope";
+import {WorkspaceDiscoveryPanel} from "./WorkspaceDiscoveryPanel";
+import type {WorkspaceDiscoveryReference} from "../domain/workspace-discovery";
 import {ObservationCatalogueContext,usePublishedObservationCatalogue} from "./observation-catalogue";
 import {GridCoverageRecord} from "./GridCoverageRecord";
 import type {CataloguePresentationState} from "../domain/catalogue-presentation";
@@ -227,6 +229,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     claimedReplyTerminals,
     switchSession,
     retrySessionSave,
+    refreshWorkspaceResearchRevision,
     sessionSummaries,
     inspectAsset,
   } = useWorkspace();
@@ -261,6 +264,8 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
     return byAnswer;
   },[s.messages]);
   const [text, setText] = useState("");
+  const [selectedDiscovery,setSelectedDiscovery]=useState<{sessionId:string;reference:WorkspaceDiscoveryReference;query:string}>();
+  const discoveryReference=selectedDiscovery?.sessionId===s.sessionId ? selectedDiscovery : undefined;
   const scrollViewport = useRef<HTMLDivElement>(null);
   const scrollContent = useRef<HTMLDivElement>(null);
   const conversation = useRef<HTMLDivElement>(null);
@@ -325,6 +330,7 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
   async function chooseSession(id?: string) {
     if (!await switchSession(id)) return;
     setText("");
+    setSelectedDiscovery(undefined);
     setHistoryOpen(false);
     input.current?.focus({preventScroll:true});
   }
@@ -749,8 +755,21 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
             closeClarification(true);
             return true;
           }} close={()=>closeClarification()}/>}
-        <div className={"chat-composer-input"+(s.citation || s.draftScope?.length ? " composer-with-reference" : "")}>
-        {(s.citation || !!s.draftScope?.length) && <div className="composer-references">
+        <WorkspaceDiscoveryPanel key={s.sessionId} conversationId={s.sessionId} draft={text}
+          expectedRevision={s.researchRangeActionId===undefined ? undefined : s.researchRangeRevision}
+          refreshRevision={()=>refreshWorkspaceResearchRevision(s.sessionId)} onReference={(reference,query)=>{
+            setSelectedDiscovery({sessionId:s.sessionId,reference,query});
+            input.current?.focus({preventScroll:true});
+          }}/>
+        <div className={"chat-composer-input"+(s.citation || s.draftScope?.length || discoveryReference ? " composer-with-reference" : "")}>
+        {(s.citation || !!s.draftScope?.length || discoveryReference) && <div className="composer-references">
+        {discoveryReference && <div className="citation-attachment">
+          <Quote size={13} aria-hidden="true"/><span title={discoveryReference.query}>资料查找 · {discoveryReference.query}</span>
+          <button type="button" aria-label="移除资料引用" onClick={()=>{
+            setSelectedDiscovery(undefined);
+            input.current?.focus({preventScroll:true});
+          }}><X size={13}/></button>
+        </div>}
         <QuestionScope items={s.draftScope || []} remove={key=>patch({draftScope:(s.draftScope || []).filter(i=>scopeKey(i)!==key)})}/>
         {s.citation && (
           <div className="citation-attachment" role="group" aria-label="本次提问引用的材料">
@@ -770,7 +789,10 @@ export function ChatPanel({ layout }: { layout: ChatLayout }) {
             e.preventDefault();
             if (!text.trim() || s.attachingMapScope) return;
             const submitted=text;
-            void send(submitted,()=>setText(current=>current===submitted ? "" : current));
+            void send(submitted,()=>{
+              setText(current=>current===submitted ? "" : current);
+              setSelectedDiscovery(current=>current===discoveryReference ? undefined : current);
+            },discoveryReference?.reference);
           }}
         >
           <textarea

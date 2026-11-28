@@ -25,6 +25,8 @@ import {flightCatalogueFollowUp,type FlightMapReceipt} from "./flight-catalogue"
 import {canAdoptCurrentSelection,hasExplicitTurnRange,prepareResearchRange,readResearchRangeScope,
   type ResearchRange,type ResearchRangeInput} from "./research-range";
 import {readWorkspaceResearchState,type WorkspaceResearchObservation,type WorkspaceResearchState} from "./workspace-research-state";
+import {newWorkspaceDiscoveryHandle,type WorkspaceDiscoveryAdmission} from "./workspace-discovery-client";
+import {workspaceDiscoveryIntent,type WorkspaceDiscoveryReference} from "./workspace-discovery";
 import {previewableTab} from "./web-preview";
 import {archivedAnswerDelivery,retainedWebReadings} from "./research-delivery";
 import {researchRegionCamera,validResearchRegion,sameResearchRegion,type ResearchRegion,type ResearchRegionLayer} from "./research-region";
@@ -179,6 +181,7 @@ export interface State {
   previewKind: string | null;
   dataView: DataView | null;
 }
+type ChatDiscoveryInput = {discoveryAction:WorkspaceDiscoveryAdmission} | {discoveryReference:WorkspaceDiscoveryReference};
 type ActiveChat = {
   id:string;
   userMessageId:string;
@@ -808,6 +811,11 @@ function useWorkspaceValue(initialState: State) {
     latest.current=withWorkspaceResearchState(latest.current,snapshot);
     dispatch({type:"research-range",sessionId,snapshot});
   },[invalidateMapEffect]);
+  const refreshWorkspaceResearchRevision=useCallback(async (sessionId:string)=>{
+    const snapshot=await loadWorkspaceResearchState(sessionId);
+    publishResearchRange(sessionId,snapshot);
+    return snapshot.revision;
+  },[publishResearchRange]);
   const surfaceReading = useRef<(() => WorkspaceSurfaceReading) | null>(null);
   const registerWorkspaceSurface = useCallback((read: () => WorkspaceSurfaceReading) => {
     surfaceReading.current = read;
@@ -828,7 +836,7 @@ function useWorkspaceValue(initialState: State) {
     return {...projectWorkspaceView(s,reading),operations:[...operations.keys()],
       ...(items.length ? {candidateItems:items} : {})};
   },[]);
-  const requests = useRef(new Map<string,{controller:AbortController;transport:AbortController;progress:ActiveChat;finishCancellation:()=>Promise<void>}>());
+  const requests = useRef(new Map<string,{controller:AbortController;transport:AbortController;progress:ActiveChat;finishCancellation:()=>Promise<void>;discoveryAccessKey?:string}>());
   const localBatchIds=useRef(new Map<string,string>());
   const chatRequestSnapshot=useCallback((s:State,batch:CandidateSet|null,parentId?:string)=>{
     const reading=readWorkspaceSurface();
@@ -1677,7 +1685,7 @@ function useWorkspaceValue(initialState: State) {
     update({cancelling:true,cancelError:undefined,stage:"正在取消本地任务",
       taskLifecycle:mergeTaskLifecycle(entry.progress.taskLifecycle,{runtimePhase:{phase:"cancel-pending"}})});
     try {
-      const cancelled=await cancelChatRequest(id,AbortSignal.any([entry.controller.signal,AbortSignal.timeout(8000)]));
+      const cancelled=await cancelChatRequest(id,AbortSignal.any([entry.controller.signal,AbortSignal.timeout(8000)]),entry.discoveryAccessKey);
       if (cancelled) {
         await entry.finishCancellation();
         return;
@@ -2035,7 +2043,7 @@ function useWorkspaceValue(initialState: State) {
   const executeDiscovery = useCallback(
     async function runDiscovery(attempt: DiscoveryAttempt, retrying: boolean, saved?: ChatDelivery,
       restoring=false, onResumeAccepted?:()=>void, mapEffectSubmission?:MapEffectSubmission,
-      parentClaim?:OneEarthAgUiInterruptRecord):Promise<void> {
+      parentClaim?:OneEarthAgUiInterruptRecord,discoveryInput?:ChatDiscoveryInput):Promise<void> {
       if ([...requests.current.values()].some(({progress})=>progress.userMessageId===attempt.userMessageId)) return;
       const q = attempt.query;
       const current = latest.current;
@@ -2085,7 +2093,8 @@ function useWorkspaceValue(initialState: State) {
       const controller = new AbortController();
       const transport = new AbortController();
       controller.signal.addEventListener("abort",()=>transport.abort(),{once:true});
-      const delivery: ChatDelivery = saved ?? {id: randomId(), attempt};
+      const discoveryAccessKey=discoveryInput && "discoveryAction" in discoveryInput ? discoveryInput.discoveryAction.accessKey : undefined;
+      const delivery: ChatDelivery = saved ?? {id: randomId(),attempt,...(discoveryAccessKey?{discoveryAccessKey}:{})};
       const session = current.sessionId;
       const run = {threadId:session,runId:delivery.id,turnId:attempt.userMessageId};
       if(mapEffectSubmission && !saved && !restoring && !resume && mapEffectSubmission.sessionId===session){
@@ -2098,7 +2107,7 @@ function useWorkspaceValue(initialState: State) {
       const priorReasoning=saved ? savedNativeSummaries(run.runId,current.messages.find(message=>
         message.id===run.runId && message.replyTo===run.turnId)?.runTrace) : [];
       const clarificationAttempt=isClarificationAttempt(attempt);
-      const entry = {controller,transport,finishCancellation,progress:{id:delivery.id,userMessageId:attempt.userMessageId,
+      const entry = {controller,transport,finishCancellation,discoveryAccessKey:delivery.discoveryAccessKey,progress:{id:delivery.id,userMessageId:attempt.userMessageId,
         scope:{filters:attempt.context.filters,selection:attempt.context.selection},accepted:false,
         stage:saved ? "正在读取原任务状态" : "正在提交问题",phase:"foreground" as const,
         trace:{started:Date.now(),stages:[],calls:[],...(priorReasoning.length?{providerReasoning:priorReasoning}:{})},
@@ -2281,7 +2290,7 @@ function useWorkspaceValue(initialState: State) {
           });
           if(!isCurrent())return;
           try {
-            liveResult=await submitNativeChat(run,q,{...submission,deepseekTools},transport,progress,resume,toolMessages,pageToken);
+            liveResult=await submitNativeChat(run,q,{...submission,deepseekTools,...discoveryInput},transport,progress,resume,toolMessages,pageToken);
           } catch(error) {
             if(!transport.signal.aborted || !isCurrent())throw error;
           }
@@ -3008,8 +3017,11 @@ function useWorkspaceValue(initialState: State) {
         if(!keepDelivery && entry.progress.taskLifecycle)entry.progress.taskLifecycle=mergeTaskLifecycle(
           entry.progress.taskLifecycle,{runtimePhase:{phase:"failed"}});
         if(clarificationAttempt && keepDelivery)rememberClarificationDelivery(delivery.id,delivery);
-        const mayRetry=!rangeSubmissionError && (!clarificationAttempt || keepDelivery);
-        const message=workspaceSubmissionError ? error.message : clarificationAttempt
+        const mayRetry=!rangeSubmissionError && (!clarificationAttempt || keepDelivery) && (!discoveryInput || keepDelivery);
+        const message=workspaceSubmissionError ? error.message : discoveryInput && !keepDelivery
+          ? error instanceof ChatResponseError && (error.code?.startsWith("DISCOVERY_") || error.code==="RUN_ID_CONFLICT")
+            ? error.message : "这次资料请求没有完成。可以核对资料和研究状态后再提交。"
+          : clarificationAttempt
           ? (keepDelivery ? "与原追问的回复暂时断开，可以重新连接。" : "这次追问的回复未能完成。")
           : error instanceof ChatResponseError && error.code==="invalid_answer_references"
             ? "这次回答的资料引用未通过核对，可按原条件重试。"
@@ -3224,11 +3236,14 @@ function useWorkspaceValue(initialState: State) {
   },[chatRequestSnapshot,executeDiscovery,publishInterrupt,recoverClaimed,verifiedInterrupts]);
 
   const preparingResearchTurn=useRef(new Set<string>());
-  const send = useCallback(async (query:string,onPrepared?:()=>void) => {
+  const send = useCallback(async (query:string,onPrepared?:()=>void,discoveryReference?:WorkspaceDiscoveryReference) => {
     const q = query.trim(), s = latest.current;
     if (!q || s.attachingMapScope || preparingResearchTurn.current.has(s.sessionId)) return;
+    const discoveryIntent=workspaceDiscoveryIntent(q);
+    if(discoveryIntent && discoveryReference){patch({error:"发起新查找前，请移除已选资料引用。"});return;}
+    const discoveryTurn=!!(discoveryIntent || discoveryReference);
     const switchId=switchVersion.current;
-    const mapEffectSubmission=s.view==="earth" ? {sessionId:s.sessionId,...mapEffectRevisions.current} : undefined;
+    const mapEffectSubmission=s.view==="earth" && !discoveryTurn ? {sessionId:s.sessionId,...mapEffectRevisions.current} : undefined;
     const batch=chatCandidateBatch(s);
     const {workspaceView,browserTurnFrame,...snapshot}=chatRequestSnapshot(s,batch);
     const visibleCase=workspaceView.surface==="cases" && workspaceView.case &&
@@ -3241,15 +3256,15 @@ function useWorkspaceValue(initialState: State) {
       ? readLayerObservationRef(observationReading.layerObservation) : undefined;
     const layerObservationRef=pickedLayer && layerObservationMatchesView(pickedLayer,workspaceView)
       ? pickedLayer : undefined;
-    const draft=s.draftScope ?? [];
+    const draft=discoveryTurn ? [] : s.draftScope ?? [];
     const focus=s.mapFocus;
     const pinnedCatalogue=focus?.locked && draft.some(item=>item.kind==="reference" &&
       item.messageId===focus.answerId && item.reference.kind==="asset" &&
       item.reference.id===focus.assetId && item.reference.evidenceLevel==="catalogue-record");
-    const adopt=authorizesResearchRangeAdoption(q),clear=authorizesResearchRangeClear(q);
+    const adopt=!discoveryTurn && authorizesResearchRangeAdoption(q),clear=!discoveryTurn && authorizesResearchRangeClear(q);
     let authority=s;
     let workspaceResearchAction:WorkspaceResearchObservation|undefined;
-    if(adopt || clear || s.researchRangeActionId===undefined){
+    if(adopt || clear || (!discoveryReference && s.researchRangeActionId===undefined)){
       preparingResearchTurn.current.add(s.sessionId);
       try {
         const [confirmed,range]=await Promise.all([
@@ -3266,6 +3281,8 @@ function useWorkspaceValue(initialState: State) {
           if(clear && !authority.researchRange)throw Error("当前会话没有已采用的研究范围。");
           workspaceResearchAction={actionId:randomId(),expectedRevision:authority.researchRangeRevision,...(range?{range}:{})};
         }
+        if(discoveryIntent && authority.researchRangeActionId===undefined)
+          throw Error("暂时无法核对会话研究状态，请重试。");
       } catch(error) {
         if(latest.current.sessionId===s.sessionId && switchVersion.current===switchId)
           patch({error:error instanceof Error && !["TimeoutError","TypeError"].includes(error.name)
@@ -3275,12 +3292,12 @@ function useWorkspaceValue(initialState: State) {
         preparingResearchTurn.current.delete(s.sessionId);
       }
     }
-    const boundRange=!workspaceResearchAction && !hasExplicitTurnRange(draft) && !pinnedCatalogue &&
+    const boundRange=!discoveryTurn && !workspaceResearchAction && !hasExplicitTurnRange(draft) && !pinnedCatalogue &&
       authority.researchRangeActionId ? authority.researchRange : null;
     const items=boundRange ? mergeScope(draft,[boundRange.scope]) : draft;
     if(items.length>10){patch({error:"一次最多引用 10 个对象，请先移除一项。"});return;}
     const turnId = randomId();
-    const citation = s.citation ? (({excerpt,...reference})=>reference)(s.citation) : null;
+    const citation = !discoveryTurn && s.citation ? (({excerpt,...reference})=>reference)(s.citation) : null;
     const activeObservations = s.view==="discover" ? initialAccessSection(s.search)==="timely"
       : s.view==="earth" && (s.filters.source==="constellation" || batch?.filters.source==="constellation");
     const observationBatch = activeObservations && batch && (batch.filters.source==="constellation" || s.view==="discover")
@@ -3310,12 +3327,15 @@ function useWorkspaceValue(initialState: State) {
     void add("user",q,{id:turnId,attachedScope:items,browserTurnFrame,
       context:(visibleCase ? [visibleCase.title,caseObservationRef?.id] : range ? [range.place,range.selection.grid.label] :
         [caseById(s.caseId)?.title,s.filters.place,s.selection?.grid.label]).filter(Boolean).join(" · ") || "全球视图",
-      ...(s.citation?{citation:s.citation}:{})});
+      ...(!discoveryTurn && s.citation?{citation:s.citation}:{})});
     const now=latest.current;
-    patch({...(now.draftScope===s.draftScope ? {draftScope:null} : {}),
-      ...(now.citation===s.citation ? {citation:null} : {}),unansweredQuestionId:null,error:null});
+    patch({...(!discoveryTurn && now.draftScope===s.draftScope ? {draftScope:null} : {}),
+      ...(!discoveryTurn && now.citation===s.citation ? {citation:null} : {}),unansweredQuestionId:null,error:null});
+    const discoveryInput:ChatDiscoveryInput|undefined=discoveryIntent
+      ? {discoveryAction:{...newWorkspaceDiscoveryHandle(),expectedRevision:authority.researchRangeRevision}}
+      : discoveryReference ? {discoveryReference} : undefined;
     onPrepared?.();
-    await executeDiscovery(attempt,false,undefined,false,undefined,mapEffectSubmission);
+    await executeDiscovery(attempt,false,undefined,false,undefined,mapEffectSubmission,undefined,discoveryInput);
   },[add,chatRequestSnapshot,executeDiscovery,patch,publishResearchRange,readWorkspaceSurface]);
   const retry = useCallback(async (attempt:DiscoveryAttempt, id:string) => {
     const initial=latest.current,session=initial.sessionId;
@@ -3356,6 +3376,7 @@ function useWorkspaceValue(initialState: State) {
     historyIds,
     switchSession,
     retrySessionSave,
+    refreshWorkspaceResearchRevision,
     sessionSummaries,
     resultLink,
     patch,

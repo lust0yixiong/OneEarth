@@ -8,6 +8,7 @@ import {runtimeWebToolStore} from "./runtime-web-tool-store";
 import { requestPerformance, type ExecutorTiming } from "./request-performance";
 import {runtimeServices} from "./runtime-services";
 import {closeRuntimeModelCapacity} from "./runtime-model-capacity";
+import {projectWorkspaceDiscoveryRun} from "./ag-ui-persistence";
 
 const state = process.env.ONEEARTH_STATE_DIR || path.resolve(".local/state");
 mkdirSync(state, {recursive:true, mode:0o700});
@@ -16,7 +17,8 @@ const webTools=await runtimeWebToolStore();
 const services=runtimeServices(state,tasks,webTools);
 const engine=process.env.ONEEARTH_SKILL_REGISTRY&&(process.env.ONEEARTH_SKILL_SERVICE_TOKEN?.length??0)>=32?
   await observationExecution({follower:process.env.ONEEARTH_OBSERVATION_COORDINATOR==="false"}):undefined;
-const runner=runtimeWorkerRunner(services,engine,{chatHandoff:id=>tasks.chat.handoff(id),workspaceEffects:tasks.workspaceEffects,operations:tasks.operations});
+const runner=runtimeWorkerRunner(services,engine,{chatHandoff:id=>tasks.chat.handoff(id),workspaceEffects:tasks.workspaceEffects,operations:tasks.operations,
+  workspaceDiscoveryProjection:projectWorkspaceDiscoveryRun});
 const stop=await workTasks(services.tasks, (task, signal, emit) => {
   const timings:ExecutorTiming[]=[];
   return requestPerformance.run(timings, () => runner.run(task,signal,emit));

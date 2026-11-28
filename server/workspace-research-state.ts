@@ -72,6 +72,11 @@ async function lock(db:PoolClient,conversationId:string){
   await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,7142581))",[conversationId]);
 }
 
+export async function lockWorkspaceResearchState(db:PoolClient,conversationId:string){
+  await lock(db,conversationId);
+  return read(db,conversationId);
+}
+
 export class WorkspaceResearchConflict extends Error {
   readonly code="WORKSPACE_REVISION_CONFLICT";
   constructor(readonly state:WorkspaceResearchState){super(messages.WORKSPACE_REVISION_CONFLICT);}

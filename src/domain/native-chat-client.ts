@@ -52,6 +52,13 @@ type ChatProgress = {
 
 const refusedStatuses = new Set([400, 401, 403, 404, 413, 415, 422, 429]);
 const taskStates = new Set(["queued", "running", "complete", "failed", "cancelled"]);
+const discoveryRefusals:Readonly<Record<string,string>>={
+  DISCOVERY_OPERATION_NOT_FOUND:"无法核对所选资料批次，请从原查找记录重新引用。",
+  DISCOVERY_USE_ORIGINAL_OPERATION:"资料查找已受理，请查看原操作。",
+  WORKSPACE_ACTION_ID_CONFLICT:"查找编号已对应另一份输入，请核对后重新提交。",
+  WORKSPACE_DISCOVERY_UNAVAILABLE:"资料查找暂时不可用。",
+  RUN_ID_CONFLICT:"本轮编号已对应另一份请求，请重新提交。",
+};
 
 export async function submitNativeChat<T extends object>(
   {threadId, runId, turnId}: ChatRun, question: string, submission: T,
@@ -65,6 +72,8 @@ export async function submitNativeChat<T extends object>(
   let conflictLocation: string | undefined;
   let workspaceConflict: WorkspaceConflict | undefined;
   let researchConflict: ChatResponseError | undefined;
+  let discoveryRefusal: ChatResponseError | undefined;
+  const discovery=Object.hasOwn(submission,"discoveryAction") || Object.hasOwn(submission,"discoveryReference");
   let startSeen = false;
   let started = false;
   let sealed = false;
@@ -84,9 +93,11 @@ export async function submitNativeChat<T extends object>(
       posted = true;
       const response = await fetch(target, {...options, redirect: "error", cache: "no-store"});
       httpStatus = response.status;
-      if(httpStatus===409 || httpStatus===503){
+      if(httpStatus===409 || httpStatus===503 || (discovery && httpStatus===404)){
         const detail=await response.clone().json().catch(()=>undefined);
-        if(detail?.code==="WORKSPACE_TOOL_RESULTS_REQUIRED"){
+        if(discovery && typeof detail?.code==="string" && Object.hasOwn(discoveryRefusals,detail.code)){
+          discoveryRefusal=new ChatResponseError(discoveryRefusals[detail.code],detail.code);
+        }else if(detail?.code==="WORKSPACE_TOOL_RESULTS_REQUIRED"){
           const pendingRuns=(Array.isArray(detail.pendingToolCallIds) ? detail.pendingToolCallIds.slice(0,64) : [])
             .flatMap((id:unknown)=>{
               if(typeof id!=="string")return [];
@@ -243,6 +254,7 @@ export async function submitNativeChat<T extends object>(
   if (result) return result;
   if (workspaceConflict) return workspaceConflict;
   if (researchConflict) throw researchConflict;
+  if (discoveryRefusal) throw discoveryRefusal;
   if (resume && httpStatus===409) return {conflict:true,locationId:conflictLocation};
   if (httpStatus !== undefined && refusedStatuses.has(httpStatus))
     throw new ChatResponseError("运行时未受理本轮请求。", "submission_rejected");

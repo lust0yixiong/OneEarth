@@ -45,6 +45,9 @@ function workspaceReceiptView(receipt:WorkspaceReceipt|undefined) {
 
 type ChatStatus = "planning" | "handed_off" | "complete" | "failed" | "cancelled";
 type ChatRow = Omit<Task, "status"> & {status: ChatStatus};
+export type DiscoveryChatAdmission =
+  | {kind:"operation";admit:(db:PoolClient)=>Promise<{operationId:string}>}
+  | {kind:"reference";result:DiscoveryResponse};
 type Transaction = <T>(work: (client: PoolClient) => Promise<T>) => Promise<T>;
 type Queue = (db: PoolClient, id: string, body: unknown, checkpoint?: Payload, options?: {
   created: number; handoff: true;workspaceEffectExpires?:number;
@@ -230,7 +233,7 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
         owner = client;
       } catch (error) { client.release(true); throw error; }
     },
-    async admit(id: string, body: unknown, limit: number, agUi?:AgUiAdmission, research?:WorkspaceResearchReference) {
+    async admit(id: string, body: unknown, limit: number, agUi?:AgUiAdmission, research?:WorkspaceResearchReference, discovery?:DiscoveryChatAdmission) {
       return transaction(async db => {
         await db.query("SELECT pg_advisory_xact_lock(7142532)");
         await lockRuntimeSubmission(db, id);
@@ -238,12 +241,18 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
         const task = (await db.query<Task>(`SELECT ${columns} FROM runtime_tasks WHERE id=$1`, [id])).rows[0];
         const existing = task ?? (await find(db, id));
         if (existing) {
-          if (existing.fingerprint !== fingerprint) throw new TaskConflict("该消息编号已经用于另一份提交。");
+          const same=agUi? (await db.query<{fingerprint:string}>("SELECT fingerprint FROM runtime_agui_runs WHERE id=$1",[id])).rows[0]?.fingerprint===agUi.fingerprint
+            : existing.fingerprint===fingerprint;
+          if(!same)throw new TaskConflict("该消息编号已经用于另一份提交。");
           const current = task ? {...task, created: Number(task.created), updated: Number(task.updated)} : view(existing as ChatRow);
           return {task: current, started: false};
         }
-        const {rows} = await db.query<{active: number}>("SELECT count(*)::int AS active FROM runtime_chat_messages WHERE status='planning'");
-        if (rows[0].active >= limit) return;
+        if(discovery){
+          if(!agUi)throw Error("发现操作必须绑定原生会话运行。");
+        }else{
+          const {rows} = await db.query<{active: number}>("SELECT count(*)::int AS active FROM runtime_chat_messages WHERE status='planning'");
+          if(rows[0].active>=limit)return;
+        }
         if(research && agUi)await assertWorkspaceResearchBinding(db,agUi.threadId,research);
         if(!agUi?.resume)await claimClarificationAnswer(db,id,body);
         const now = Date.now();
@@ -251,6 +260,17 @@ export function postgresChatMessages(pool: Pool, transaction: Transaction, queue
           INSERT INTO runtime_chat_messages(id,body,fingerprint,status,created,updated)
           VALUES ($1,$2,$3,'planning',$4,$4) RETURNING ${columns}`, [id, raw, fingerprint, now]);
         if(agUi)await admitAgUi(db,id,agUi,body as RuntimeTurnInput);
+        if(discovery?.kind==="operation"){
+          const {operationId}=await discovery.admit(db);
+          const handoff={kind:"workspace-discovery",operationId};
+          await db.query("UPDATE runtime_chat_messages SET status='handed_off',handoff=$2 WHERE id=$1",[id,handoff]);
+          await write(db,id,{chatPhase:"research",runtimePhase:{phase:"queued"}},now);
+          return {task:view({...saved,status:"handed_off"}),started:true};
+        }
+        if(discovery?.kind==="reference"){
+          await finish(db,id,"complete",{result:discovery.result});
+          return {task:view({...saved,status:"complete"}),started:true};
+        }
         if(agUi?.resume?.operation){
           if(agUi.resume.status==="cancelled"){
             await finish(db,id,"cancelled",{error:"研究者明确放弃原追问。",code:"cancelled"});

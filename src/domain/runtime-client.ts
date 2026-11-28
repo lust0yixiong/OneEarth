@@ -44,8 +44,9 @@ export async function submitWorkspaceResearchAction(conversationId:string,action
 }
 
 
-export async function cancelChatRequest(id:string,signal:AbortSignal) {
-  const response=await fetch("/api/tasks/"+encodeURIComponent(id),{method:"DELETE",signal,redirect:"error"});
+export async function cancelChatRequest(id:string,signal:AbortSignal,accessKey?:string) {
+  const response=await fetch("/api/tasks/"+encodeURIComponent(id),{method:"DELETE",signal,redirect:"error",
+    ...(accessKey?{headers:{"X-OneEarth-Operation-Key":accessKey}}:{})});
   if (response.status!==204 && response.status!==409) throw Error("暂时无法取消本轮，请重试。");
   return response.status===204;
 }

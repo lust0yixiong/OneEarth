@@ -186,3 +186,34 @@ X-OneEarth-Workspace-Page: <原页面凭据>
 飞行回执使用 `{kind:"flight",flight:{state,observedAt,...}}`，确认实际到达时带实际 H3 地面点。目录绘制使用 `{kind:"catalogue-presentation",presentation:{conversationId,turnId,batchId,coverageRevision,items}}`，每项绑定原数据集 ID 和版本。200 返回保存的事实；能力凭据或归属失配返回 404，事实与原待办冲突返回 409。归档的 `workspaceEffects` 可读本轮各浏览器步骤。等待状态表明尚未验证回执，整页刷新只恢复已存结果及原任务状态。用户可显式取消。
 
 [工作台运行时](../server/runtime-map-operation.ts) · [回执路由](../server/workspace-effect-routes.ts) · [原追问事务](../server/ag-ui-operation-discovery.ts)
+
+### 从工作台独立发现资料（隔离候选）
+
+工作台使用当前输入和会话修订，在原会话提交长操作。此路径直接保存资料批次。用户选择「引用到 Chat」后，下次实际发送的消息才读取相应原批次。
+
+```http
+POST /api/workspaces/<conversationId>/actions
+Content-Type: application/json
+X-OneEarth-Operation-Key: <本操作独立的64位小写十六进制随机值>
+
+{"kind":"discover-materials","actionId":"a6de3ccc-5532-43ca-a794-d62f99749cf5","expectedRevision":0,"query":"查找祁连山冰川前缘资料"}
+```
+
+受理返回 HTTP 202 和 `Location: /api/workspaces/<conversationId>/operations/<operationId>`。响应结构如下。
+
+```json
+{"operationId":"5f901d09-e501-4307-b450-cf62efefbe21","actionId":"a6de3ccc-5532-43ca-a794-d62f99749cf5","conversationId":"4a5a2f00-e513-4154-8792-b59fe643bd17","status":"queued"}
+```
+
+| 请求 | 行为 |
+| --- | --- |
+| `GET /api/workspaces/:conversationId/actions/:actionId` | 在 202 响应丢失时用原动作和原凭据找回受理结果。 |
+| `GET /api/workspaces/:conversationId/operations/:operationId` | 读取当前状态、受理时的会话修订和已归档资料。 |
+| `GET /api/workspaces/:conversationId/operations/:operationId/record` | 读取原资料批次及出处。尚无归档时返回 404。 |
+| `DELETE /api/workspaces/:conversationId/operations/:operationId` | 持久化取消。成功返回 204，已终结返回 409。 |
+
+这些请求使用提交时的同一 `X-OneEarth-Operation-Key`。错会话、错凭据或未知编号返回 404。会话修订冲突和同动作编号改输入返回 409。已登记的同包重传返回原操作地址。读回和历史重开保持原批次。
+
+原生 Chat 发起时，末条用户消息为「发现资料：<题目>」，`forwardedProps.oneearth.submission.discoveryAction` 带 `{actionId,expectedRevision,accessKey}`。从工作台选择原批次后发送普通 Chat，使用 `discoveryReference:{operationId,batchId,accessKey}`。两字段互斥。服务端使用原档的标题、出处和实际记录；引用路径直接整理原批次。凭据从提交解析后移出 Chat 正文、历史与归档。Chat 发起的资料发现通过原 `/api/tasks/:runId` 取消时，同样携带该操作的凭据。
+
+[运行时受理](../server/ag-ui-workbench.ts) · [受保护操作路由](../server/workspace-discovery-operations.ts) · [输入和结果结构](../src/domain/workspace-discovery.ts)

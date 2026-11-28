@@ -7,12 +7,14 @@ import type {Router,Response} from "express";
 import {setTimeout as delay} from "node:timers/promises";
 import type {TaskStore,Payload} from "./task-store";
 import {TaskConflict} from "./task-store";
-import type {PostgresChatMessages} from "./postgres-chat-messages";
+import type {PostgresChatMessages,DiscoveryChatAdmission} from "./postgres-chat-messages";
 import type {ChatPreparation} from "./runtime-chat-channel";
 import {TaskCancelled} from "./task-cancellation";
 import {modelExecutionContext} from "./model-execution-context";
 import {requestPerformance,type ExecutorTiming} from "./request-performance";
 import {publicAnswerContext} from "./public-answer-stream";
+import {workspaceDiscoveryReply} from "./ag-ui-persistence";
+import {WorkspaceDiscoveryConflict,type WorkspaceDiscovery} from "./workspace-discovery-operations";
 import {AgUiInputError,readAgUiInput} from "./ag-ui-input";
 import {nativeAgUiPath} from "../src/domain/native-ag-ui";
 import {bindCaseObservation,type CaseObservationBinding,type ResolveCaseObservation} from "./runtime-case-observation";
@@ -29,7 +31,8 @@ import type {runtimeMapOperations} from "./runtime-map-operation";
  * acceptance/finish transactions, never reconstructed from NDJSON events. */
 export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresChatMessages},prepare:(id:string,input:unknown,observation?:CaseObservationBinding,layerObservation?:LayerObservationBinding)=>Promise<ChatPreparation>,
  resolveObservation?:ResolveCaseObservation,resolveLayerObservation?:ResolveLayerObservation,workspaceResearch?:WorkspaceResearchStateStore,
- requireWorkspacePage=false,mapOperations?:Pick<ReturnType<typeof runtimeMapOperations>,"start">){
+ requireWorkspacePage=false,mapOperations?:Pick<ReturnType<typeof runtimeMapOperations>,"start">,
+ workspaceDiscovery?:Pick<WorkspaceDiscovery,"admitInTransaction"|"readReference">){
  const {chat}=tasks;await chat.acquire();nativeWorkspaceReceiptRoutes(app,chat);let stopping=false;
  const active=new Map<string,{controller:AbortController;done:Promise<void>}>();
  function start(id:string,prepared:Exclude<ChatPreparation,{error:string}>,body:RuntimeTurnInput,pageHash:string|undefined){
@@ -104,6 +107,29 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
    }
    const pendingWorkspaceToolCallIds=await chat.checkAgUiWorkspace(decoded.body.conversationId,decoded.body.previousTaskId,decoded.workspaceReplies);
    const body=await bindAgUiResume(tasks,decoded.body,resume);
+   const agUiAdmission={threadId:body.conversationId,turnId:body.turnId,fingerprint,workspaceTool:decoded.workspaceTool,
+    workspaceReplies:decoded.workspaceReplies,pendingWorkspaceToolCallIds,previousTaskId:decoded.body.previousTaskId,...(resume?{resume}:{})};
+   const discovery=decoded.discovery;
+   if(discovery){
+    res.set("Cache-Control","no-store");
+    if(!workspaceDiscovery){res.status(503).json({error:"会话发现暂时不可用。",code:"WORKSPACE_DISCOVERY_UNAVAILABLE"});return;}
+    const issue=await validateTurnStructure(tasks,body);if(issue)throw new AgUiInputError(issue);
+    let txAdmission:DiscoveryChatAdmission;
+    if(discovery.kind==="action"){
+     txAdmission={kind:"operation",admit:db=>workspaceDiscovery.admitInTransaction(
+      db,body.conversationId,discovery.action,discovery.accessKey,{runId:id,turnId:body.turnId})};
+    }else{
+     const selected=await workspaceDiscovery.readReference(body.conversationId,discovery.reference);
+     if(!selected){
+      res.status(404).json({error:"找不到当前会话中选定的已保存资料批次。",code:"DISCOVERY_OPERATION_NOT_FOUND"});return;
+     }
+     txAdmission={kind:"reference",result:workspaceDiscoveryReply(discovery.reference.operationId,selected,true)};
+    }
+    const admitted=await chat.admit(id,body,4,{...agUiAdmission,workspaceTool:false},undefined,txAdmission);
+    if(!admitted){res.status(429).set("Retry-After","2").json({error:"前台正在处理其他运行。"});return;}
+    if(!admitted.started){res.status(409).set("Location","/api/tasks/"+id).json({error:"该运行已受理，请只读原状态与归档。",code:"RUN_ALREADY_ACCEPTED"});return;}
+    await stream(id,res);return;
+   }
    if((decoded.research||decoded.researchAction)&&!workspaceResearch){
     res.status(503).json({error:"会话研究范围暂时无法读取。",code:"WORKSPACE_STATE_UNAVAILABLE"});return;
    }
@@ -133,7 +159,7 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
     res.status(409).json({error:"原发现操作无法按保存的条件续行。",code:"OPERATION_RESUME_UNAVAILABLE"});return;
    }
    const admitted=await chat.admit(id,{...body,...(observation?{serverCaseObservation:observation}:{}),
-    ...(layerObservation?{serverLayerObservation:layerObservation}:{})},4,{threadId:body.conversationId,turnId:body.turnId,fingerprint,workspaceTool:decoded.workspaceTool,workspaceReplies:decoded.workspaceReplies,pendingWorkspaceToolCallIds,previousTaskId:decoded.body.previousTaskId,...(resume?{resume}:{})},reference);
+    ...(layerObservation?{serverLayerObservation:layerObservation}:{})},4,agUiAdmission,reference);
    if(!admitted){res.status(429).set("Retry-After","2").json({error:"前台正在处理其他运行。"});return;}
    if(!admitted.started){res.status(409).set("Location","/api/tasks/"+id).json({error:"该运行已受理，请只读原状态与归档。",code:"RUN_ALREADY_ACCEPTED"});return;}
    if(!resume?.operation){
@@ -145,6 +171,7 @@ export async function agUiWorkbench(app:Router,tasks:TaskStore&{chat:PostgresCha
    if(res.headersSent){res.destroy();return;}
    if(error instanceof AgUiWorkspacePendingError){res.status(409).json({error:error.message,code:"WORKSPACE_TOOL_RESULTS_REQUIRED",pendingToolCallIds:error.pendingToolCallIds});return;}
    if(error instanceof WorkspaceResearchConflict){res.status(409).json({error:error.message,code:error.code,state:error.state});return;}
+   if(error instanceof WorkspaceDiscoveryConflict){res.status(error.status).json({error:error.message,code:error.code});return;}
    if(error instanceof AgUiInputError){res.status(error.status).json({error:error.message});return;}
    if(error instanceof TaskConflict){res.status(409).json({error:error.message});return;}
    res.status(503).json({error:"运行未能持久受理。"});

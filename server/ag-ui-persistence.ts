@@ -1,4 +1,5 @@
 import {createHash} from "node:crypto";
+import {isDeepStrictEqual} from "node:util";
 import {projectDiscoveryOperationEnding,receiveDiscoveryOperationReply} from "./ag-ui-operation-discovery";
 import type {RuntimeTurnInput} from "./runtime-turn-handoff";
 import {nativeAgUiSummaryPrefix} from "../src/domain/native-agui-summary";
@@ -16,9 +17,10 @@ import {readResearchProgress,type ResearchProgress} from "../src/domain/native-a
 import {mergeResearchProgress,readResearchProgressFact,settleResearchProgress} from "./research-progress";
 import {EventSchema} from "@ag-ui/core/schemas";
 import {nativeAgUiProtocolVersion} from "../src/domain/native-ag-ui";
-import type {DiscoveryResponse} from "../src/domain/types";
+import type {AnswerReference,DiscoveryResponse,WebHit} from "../src/domain/types";
 import type {Payload} from "./task-store";
 import {modelSafeValue} from "./model-context-safety";
+import {readWorkspaceDiscoveryResult,type WorkspaceDiscoveryResult} from "../src/domain/workspace-discovery";
 import type {WorkspaceActionEffect,WorkspaceEffectCommand} from "../src/domain/workspace-action-effect";
 
 export type AgUiAdmission={threadId:string;turnId:string;fingerprint:string;resume?:AgUiResume;workspaceTool?:boolean;workspaceReplies?:AgUiWorkspaceReply[];pendingWorkspaceToolCallIds?:string[];previousTaskId?:string};
@@ -212,4 +214,70 @@ export async function finishAgUi(db:PoolClient,id:string,status:"complete"|"fail
    {type:"RUN_ERROR",message:"本轮未完成。请查看该运行的已保存记录。",code:typeof payload.code==="string"&&/^[a-z\d_.:-]{1,100}$/iu.test(payload.code)?payload.code:"run_failed"});
  }
  await db.query("UPDATE runtime_agui_runs SET terminal=true,message_open=false,public_step=NULL WHERE id=$1",[id]);
+}
+
+
+function discoveryDisplayText(value:string){
+ return value.replace(/\s+/gu," ").replace(/〔(\d+)〕/gu,"［$1］");
+}
+
+/** These are saved catalogue/search materials. An excerpt here does not establish
+ * that a source page or its original files were read. */
+export function workspaceDiscoveryReply(operationId:string,result:WorkspaceDiscoveryResult,reused=false){
+ const publicResult=readWorkspaceDiscoveryResult(modelSafeValue(result));
+ if(!publicResult)throw Error("发现操作缺少有效的原始结果批次。");
+ assertPublicAnswerSafe(JSON.stringify(publicResult));
+ const references:AnswerReference[]=[],webSources:WebHit[]=[],indexByUrl=new Map<string,number>();
+ const items=publicResult.items.map((item,index)=>{
+  let citation="";
+  if(item.url){
+   let referenceIndex=indexByUrl.get(item.url);
+   if(referenceIndex===undefined){
+    const referenceType=item.kind==="paper"?"paper":"data";
+    references.push({kind:"web",title:item.title,url:item.url,referenceType});
+    webSources.push({title:item.title,url:item.url,snippet:item.excerpt??"",referenceType,
+     ...(item.excerpt?{stage:"search-snippet"}:{})});
+    referenceIndex=references.length;
+    indexByUrl.set(item.url,referenceIndex);
+   }
+   citation="〔"+referenceIndex+"〕";
+  }
+  const line=(index+1)+". "+discoveryDisplayText(item.title)+"（"+discoveryDisplayText(item.source)+"）"+citation;
+  return item.excerpt?line+"\n   "+discoveryDisplayText(item.excerpt):line;
+ });
+ const summary=reused?"以下为你选定的原批次资料。":"本轮已保存发现资料。";
+ const limitation=publicResult.limitation??(publicResult.complete?"仅报告发现操作保存的资料。本轮未额外读取来源。":"发现操作仅返回部分资料，未覆盖的内容不能据此判断。");
+ const empty=publicResult.complete?"该批次没有返回符合条件的资料。":"该批次暂未返回资料。";
+ const message=[summary,items.length?items.join("\n\n"):empty,discoveryDisplayText(limitation)].join("\n\n");
+ return {message,workspaceDiscovery:{operationId,...publicResult},
+  answerNotes:{references,webSources,sources:[],limitation,followUp:"",reviewed:publicResult.items.length,elapsedMs:0,executor:"已保存的发现资料"}};
+}
+
+/** Project the standalone operation's business ending into its original native
+ * run in the same transaction. Standalone operations without a run never enter
+ * this path. The stored handoff protects other native Chat modes. */
+export async function projectWorkspaceDiscoveryRun(db:PoolClient,runId:string,status:"complete"|"failed"|"cancelled",result?:WorkspaceDiscoveryResult){
+ const {rows:[binding]}=await db.query<{operation_id:string;result:unknown}>(`
+  SELECT b.operation_id,o.result->'result' AS result FROM runtime_chat_messages m
+  JOIN runtime_agui_runs a ON a.id=m.id
+  JOIN runtime_operation_runs b ON b.run_id=m.id AND b.turn_id=a.turn_id
+  JOIN runtime_operations o ON o.operation_id=b.operation_id AND o.body->>'conversationId'=a.thread_id::text
+  JOIN runtime_tasks t ON t.id=b.operation_id AND t.task_type='operation'
+  WHERE m.id=$1 AND m.status='handed_off' AND NOT a.terminal
+    AND m.handoff->>'kind'='workspace-discovery' AND m.handoff->>'operationId'=b.operation_id::text
+    AND t.status=$2 AND m.body::jsonb->>'conversationId'=a.thread_id::text AND m.body::jsonb->>'turnId'=a.turn_id::text
+  FOR UPDATE OF m`,[runId,status]);
+ if(!binding)return false;
+ const saved=readWorkspaceDiscoveryResult(binding.result);
+ if(status==="complete"&&!saved||result&&!isDeepStrictEqual(saved,readWorkspaceDiscoveryResult(result)))
+  throw Error("发现操作保存的原始结果批次不一致。");
+ const reply=saved?{result:workspaceDiscoveryReply(binding.operation_id,saved)}:undefined;
+ const terminal:Payload=status==="complete"?{...reply}:
+  status==="cancelled"?{...reply,error:"发现操作已取消。",code:"cancelled"}:
+  {...reply,error:"发现操作未完成。",code:"workspace_discovery_failed"};
+ const now=Date.now();
+ await db.query("UPDATE runtime_chat_messages SET status=$2,terminal=$3,updated=$4 WHERE id=$1",[runId,status,terminal,now]);
+ await finishAgUi(db,runId,status,terminal);
+ await db.query("INSERT INTO runtime_chat_events(id,at,payload) VALUES ($1,$2,$3)",[runId,now,terminal]);
+ return true;
 }
