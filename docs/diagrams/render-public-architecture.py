@@ -92,8 +92,6 @@ svg.append(
     f'href="data:image/png;base64,{logo}"/>'
 )
 text(235, 76, "逻辑架构", 46, weight=720)
-rect(1486, 35, 256, 47, "#e5efe9", None, 12)
-text(1614, 66, "在运基线 · v0.2.0-rc.10", 20, "#30584b", 650, "middle")
 rule(58, 1742, 107)
 for x, heading in [(64, "用户交互"), (410, "运行时"), (1002, "业务服务"), (1486, "来源与存储")]:
     text(x, 151, heading, 20, MUTED, 650)
